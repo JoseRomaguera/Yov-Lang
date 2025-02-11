@@ -1,0 +1,56 @@
+
+[ ] Create public repo
+
+
+# WHY?
+
+- Less dependencies than a compiled language
+- Reliable execution between systems, no dependencies other than yov.exe
+- Analyze code before execution (does not ocur to general purpuse interpreters)
+- Optional user assertion mode to don't messing files and folders while creating a script
+- Powerfull intrinsics
+- No memory management needed
+- Syntactic sugar for batch files:
+	- ? :)
+- Smallest dependency: Yov.exe weights less than 100kb
+- No setup for executing yav files
+
+
+# MILESTON FOR 1.0
+
+- Foreach: Array
+- Float
+- Modulo operator
+- Signs: v = -v
+- Allow expresions inside string literals
+- Allow special characters inside string literals: \", \{, \}, \\
+- Structs
+- Improve error messages
+	- En reports, sportar {line}
+- Foreach: Files
+- Functions
+- Include other files
+- Every Yov call have a Int return
+- Intrinsics
+	- Common File System
+	- Common String utils
+	- Common Path utils
+	- Execute other Yav scripts
+- Globals
+	- OS-System with info
+		- OSType: Windows, Linux, MacOS
+		- CPUArch: 32 - 64 bits
+	- Context
+		- User Assertion Mode: None, Console, MessageBox
+		- Current Dir
+		- Args
+		- Environment variables
+- What about user permisions??
+- Garbage Collector
+- Write documentation
+- Add "help" argument
+
+# IDEAS
+
+- "Any" variable type
+- Robust error defines and management

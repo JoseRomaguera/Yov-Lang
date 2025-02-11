@@ -1,0 +1,125 @@
+
+param_dev := false;
+param_optimize := true;
+param_profile := arg_flag("profile");
+
+mode := arg_string("mode", "dist");
+
+if (mode == "dev") {
+    param_dev = true;
+    param_optimize = false;
+}
+else if (mode == "dist") {
+}
+else if (mode == "manual") {
+    param_dev = ask_yesno("dev");
+    param_optimize = ask_yesno("optimize");
+    param_profile = ask_yesno("profile");
+}
+else {
+    println("Unknown mode '{mode}'");
+    exit();
+}
+
+app_name := "yov";
+
+//-----------------------
+
+root := context_script_dir / "..";
+set_cd(root);
+
+create_folder("build");
+set_cd("build");
+
+msvc: String = "cl ";
+
+// Sources
+msvc += "{root}code/main.cpp ";
+
+// Defines
+{
+    defines: String[];
+    if (param_dev) defines += "DEV";
+    
+    for (i := 0; i < defines.count; i += 1) {
+		def := defines[i];
+        msvc += "/D{def}=1 ";
+	}
+    
+    // for (def : defines) msvc += "/D{def}=1 ";
+}
+
+// Libs
+{
+    libs: String[];
+    libs += "kernel32.lib";
+    libs += "user32.lib";
+    
+    for (i := 0; i < libs.count; i += 1) {
+        lib := libs[i];
+        msvc += "{lib} ";
+	}
+    
+    // for (def : defines) msvc += "/D{def}=1 ";
+}
+
+cflags: String[];
+lflags: String[];
+
+// Flags
+{
+    cflags += "std:c17";
+    cflags += "nologo";
+    
+    cflags += { "W2", "we4305", "we4244", "wd4146" };
+    
+    cflags += { "GR-", "Os" };
+    if (param_optimize) cflags += "O2";
+    else cflags += "Zi";
+    cflags += "Oi-";
+    
+    if (param_optimize) {
+        cflags += "EHs-c-";
+        cflags += "GS-";
+        lflags += "NODEFAULTLIB";
+        lflags += "DEBUG:NONE";
+    }
+    
+    lflags += "MERGE:.rdata=.";
+    lflags += "MERGE:.pdata=.";
+    lflags += "MERGE:text=.";
+    lflags += "SECTION:.,ER";
+    lflags += "SUBSYSTEM:CONSOLE";
+    lflags += "ENTRY:main";
+    lflags += "incremental:no";
+    lflags += "out:{app_name}.exe";
+    lflags += "PDB:{app_name}.pdb";
+}
+
+// for (flag : cflags) msvc += flag + " ";
+for (i := 0; i < cflags.count; i += 1) {
+    flag := cflags[i];
+    msvc += "/{flag} ";
+}
+
+msvc += "/I code/ /link ";
+
+// for (flag : lflags) msvc += flag + " ";
+
+for (i := 0; i < lflags.count; i += 1) {
+    flag := lflags[i];
+    msvc += "/{flag} ";
+}
+
+result: Int = call(msvc);
+
+print("\n");
+
+if (result != 0) {
+	print("Can't compile!!\n");
+    exit();
+}
+
+copy_file(root / "test/{app_name}.exe", "{app_name}.exe");
+
+print("Build finished!!\n");

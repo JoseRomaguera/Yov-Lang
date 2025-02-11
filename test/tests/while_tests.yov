@@ -1,0 +1,17 @@
+
+
+Int i = 0
+while (i < 10)
+{
+	print("Lets goo: {i}\n")
+
+	if (i == 2) {
+		Int j = 69
+		print("{j}\n")
+	}
+	else print("B\n")
+
+	print("{j}\n")
+
+	i = i + 1
+}

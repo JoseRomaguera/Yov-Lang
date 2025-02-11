@@ -1,0 +1,44 @@
+version(1);
+
+project_name = "BatchScript";
+
+patterns = {
+"*.c",
+"*.cpp",
+"*.h",
+"*.bat",
+"*.yov",
+"*.sh",
+"*.4coder",
+"*.hlsl",
+"*.glsl",
+"*.txt",
+"*.shader",
+};
+blacklist_patterns = {
+".*",
+};
+
+load_paths = {
+ { 
+	{ 
+		{".", .relative = true, .recursive = false, },
+		{"misc", .relative = true, .recursive = true, },
+		{"code/", .relative = true, .recursive = true, },
+	}, .os = "win" 
+ },
+};
+
+command_list = {
+ { .name = "build_dev",
+   .out = "*compilation*", .footer_panel = true, .save_dirty_files = false, .cursor_at_end = false,
+   .cmd = {{"yov.exe misc\build.yov / mode=dev", .os = "win"}},
+ },
+ { .name = "build_dist",
+   .out = "*compilation*", .footer_panel = true, .save_dirty_files = false, .cursor_at_end = false,
+   .cmd = {{"yov.exe misc\build.yov / mode=dist", .os = "win"}},
+ },
+};
+
+fkey_command[1] = "build_dev";
+fkey_command[2] = "build_dist";

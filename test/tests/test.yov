@@ -1,0 +1,58 @@
+// Comment
+
+var: Int[];
+var = { 3, 3 };
+
+println("{var}");
+
+var[1] = var[0] + 3;
+sum: Int = var[0 + 1] -23;
+
+if (var[1] > 2) {
+	println("{var}, {sum}");
+}
+
+texts: String[] = { "A", "B", "C" } + { "D", "E" };
+
+texts = texts + { "D", "E" };
+texts += { ("Jose" + "(jose)") + "?" };
+texts += "si";
+
+len := texts.count;
+len += 1;
+len -= 1;
+
+for (i := 0; i < texts.count; i = i + 1) {
+    text: String = texts[i];
+    if (i == 0) print("Texts[{len}] = ");
+    print("{text}");
+    if (i < texts.count - 1) print(", ");
+}
+print("\n");
+
+for (i := 0; i < context_args.count; i += 1) {
+    arg := context_args[i];
+    println("Arg[{i}] = {arg}")
+}
+
+arg0_int: Int = arg_int("arg0", 69);
+arg0_bool: Bool = arg_bool("arg0", true);
+arg0_str: String = arg_string("arg0", "si");
+arg0_exists: Bool = arg_exists("arg0");
+arg0_flag: Bool = arg_flag("arg0");
+
+println("Value int: {arg0_int}");
+println("Value bool: {arg0_bool}");
+println("Value string: {arg0_str}");
+println("Exists: {arg0_exists}");
+println("Flag: {arg0_flag}");
+
+println("Lets goo biches!");
+
+
+/*func :: (x: Int, y: Int, z: Int) -> void {
+}
+
+test :: struct {
+}
+*/

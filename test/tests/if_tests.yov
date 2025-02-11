@@ -1,0 +1,27 @@
+
+
+Bool res = ask_yesno("Si o no??")
+
+print("Ahi vamos\n")
+
+if (res) {
+	print("Has seleccionado si\n")
+}
+else {
+	print("Has seleccionado no\n")
+}
+
+if (res) print("a\n") else {
+	print("?\n")
+}
+
+if (res) {
+	print("a\n")
+}
+else if (5 < 10) {
+	print("xd\n")
+}
+else print("au\n")
+
+print("Hemos terminado\n")
+
