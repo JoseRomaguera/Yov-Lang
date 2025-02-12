@@ -50,11 +50,16 @@ static_assert(sizeof(f64) == 8);
 #define _JOIN(x, y) x##y
 #define JOIN(x, y) _JOIN(x, y)
 
-#define assert(x) do { if ((x) == 0) assertion_failed(#x); } while (0)
 #define inline_fn inline
 #define internal_fn static
 #define array_count(x) (sizeof(x) / sizeof(x[0]))
 #define foreach(it, count) for (u32 (it) = 0; (it) < (count); (it)++)
+
+#if DEV
+#define assert(x) do { if ((x) == 0) assertion_failed(#x); } while (0)
+#else
+#define assert(x) do {} while (0)
+#endif
 
 template <typename F>
 struct _defer {
@@ -80,6 +85,10 @@ void memory_zero(void* dst, u64 size);
 #define OS_WINDOWS 1
 #endif
 
+#define STR(x) string_make(x)
+
+struct Arena;
+
 struct RawBuffer {
     void* data;
     u64 size;
@@ -98,6 +107,38 @@ struct String {
         assert(index < size);
         return ((u8*)data)[index];
     }
+};
+
+template<typename T>
+struct Array {
+    T* data;
+    u32 count;
+    
+    inline T& operator[](u32 index) {
+        assert(index < count);
+        return data[index];
+    }
+};
+
+struct LLNode {
+    LLNode* next;
+    LLNode* prev;
+};
+
+template<typename T>
+struct LinkedList {
+    Arena* arena;
+    LLNode* root;
+    LLNode* tail;
+    u32 count;
+};
+
+struct StringBuilder {
+    LinkedList<String> ll;
+    Arena* arena;
+    char* buffer;
+    u64 buffer_size;
+    u64 buffer_pos;
 };
 
 //- ARENA
@@ -140,12 +181,6 @@ inline_fn T* arena_push_struct(Arena* arena, u32 count = 1)
 
 //- OS 
 
-struct OS {
-    u32 page_size;
-};
-
-extern OS os;
-
 void os_initialize();
 void os_shutdown();
 
@@ -156,6 +191,9 @@ enum Severity {
 };
 
 void os_print(Severity severity, String text);
+
+u64 os_get_page_size();
+u32 os_pages_from_bytes(u64 bytes);
 
 void* os_allocate_heap(u64 size);
 void  os_free_heap(void* address);
@@ -175,96 +213,128 @@ String os_get_working_path(Arena* arena);
 b32 os_path_is_absolute(String path);
 b32 os_path_is_directory(String path);
 
-#include "utils.h"
-
 Array<String> os_get_args(Arena* arena);
 
 void os_thread_sleep(u64 millis);
 void os_console_wait();
 
+//- MATH 
+
+u64 u64_divide_high(u64 n0, u64 n1);
+
+//- C STRING 
+
+u32 cstring_size(const char* str);
+u32 cstring_set(char* dst, const char* src, u32 src_size, u32 buff_size);
+u32 cstring_copy(char* dst, const char* src, u32 buff_size);
+u32 cstring_append(char* dst, const char* src, u32 buff_size);
+void cstring_from_u64(char* dst, u64 value, u32 base = 10);
+void cstring_from_i64(char* dst, i64 value, u32 base = 10);
+void cstring_from_f64(char* dst, f64 value, u32 decimals);
+
+//- STRING 
+
+String string_make(const char* cstr, u64 size);
+String string_make(const char* cstr);
+String string_make(String str);
+String string_make(RawBuffer buffer);
+String string_copy(Arena* arena, String src);
+String string_substring(String str, u64 offset, u64 size);
+b32 string_equals(String s0, String s1);
+b32 u32_from_string(u32* dst, String str);
+b32 u32_from_char(u32* dst, char c);
+b32 i64_from_string(String str, i64* out);
+b32 i32_from_string(String str, i32* out);
+String string_join(Arena* arena, LinkedList<String> ll);
+Array<String> string_split(Arena* arena, String str, String separator);
+String string_replace(Arena* arena, String str, String old_str, String new_str);
+String string_format_with_args(Arena* arena, String string, va_list args);
+String string_format_ex(Arena* arena, String string, ...);
+
+#define string_format(arena, str, ...) string_format_ex(arena, STR(str), __VA_ARGS__)
+
 //- PATH 
 
-inline_fn Array<String> path_subdivide(Arena* arena, String path)
-{
-    SCRATCH(arena);
-    PooledArray<String> list = pooled_array_make<String>(scratch.arena, 32);
-    
-    u64 last_element = 0;
-    u64 cursor = 0;
-    while (cursor < path.size)
-    {
-        if (path[cursor] == '/') {
-            String element = string_substring(path, last_element, cursor - last_element);
-            if (element.size > 0) array_add(&list, element);
-            last_element = cursor + 1;
-        }
-        
-        cursor++;
-    }
-    
-    String element = string_substring(path, last_element, cursor - last_element);
-    if (element.size > 0) array_add(&list, element);
-    
-    return array_from_pooled_array(arena, list);
-}
+Array<String> path_subdivide(Arena* arena, String path);
+String path_resolve(Arena* arena, String path);
+String path_append(Arena* arena, String str0, String str1);
+String path_get_last_element(String path);
 
-inline_fn String path_resolve(Arena* arena, String path)
-{
-    SCRATCH(arena);
-    String res = path;
-    res = string_replace(scratch.arena, res, STR("\\"), STR("/"));
-    
-    Array<String> elements = path_subdivide(scratch.arena, res);
-    
-    {
-        i32 remove_prev_element_count = 0;
-        
-        for (i32 i = (i32)elements.count - 1; i >= 0; --i) {
-            if (string_equals(elements[i], STR(".."))) {
-                array_erase(&elements, i);
-                remove_prev_element_count++;
-            }
-            else if (string_equals(elements[i], STR(".")) || remove_prev_element_count) {
-                array_erase(&elements, i);
-                if (remove_prev_element_count) remove_prev_element_count--;
-            }
-        }
-    }
-    
-    StringBuilder builder = string_builder_make(scratch.arena);
-    
-    foreach(i, elements.count) {
-        String element = elements[i];
-        append(&builder, element);
-        if (i < elements.count - 1) append_char(&builder, '/');
-    }
-    
-    res = string_from_builder(scratch.arena, &builder);
-    if (os_path_is_directory(res)) res = string_format(scratch.arena, "%S/", res);
-    
-    return string_copy(arena, res);
-}
+//- STRING BUILDER 
 
-inline_fn String path_append(Arena* arena, String str0, String str1)
-{
-    if (os_path_is_absolute(str1)) return string_copy(arena, str0);
-    if (str0.size == 0) return string_copy(arena, str1);
-    if (str1.size == 0) return string_copy(arena, str0);
-    
-    if (str0[str0.size - 1] != '/') return string_format(arena, "%S/%S", str0, str1);
-    return string_format(arena, "%S%S", str0, str1);
-}
+StringBuilder string_builder_make(Arena* arena);
+void append(StringBuilder* builder, String str);
+void append(StringBuilder* builder, const char* cstr);
+void append_i64(StringBuilder* builder, i64 v, u32 base = 10);
+void append_i32(StringBuilder* builder, i32 v, u32 base = 10);
+void append_u64(StringBuilder* builder, u64 v, u32 base = 10);
+void append_u32(StringBuilder* builder, u32 v, u32 base = 10);
+void append_f64(StringBuilder* builder, f64 v, u32 decimals);
+void append_char(StringBuilder* builder, char c);
+String string_from_builder(Arena* arena, StringBuilder* builder);
 
-inline_fn String path_get_last_element(String path)
+//- POOLED ARRAY 
+
+struct PooledArrayBlock
 {
-    // TODO(Jose): Optimize
-    SCRATCH();
-    Array<String> array = path_subdivide(scratch.arena, path);
-    if (array.count == 0) return {};
-    return array[array.count - 1];
-}
+    PooledArrayBlock* next;
+    u32 capacity;
+    u32 count;
+};
+
+struct PooledArrayR
+{
+    Arena* arena;
+    PooledArrayBlock* root;
+    PooledArrayBlock* tail;
+    PooledArrayBlock* current;
+    u64 stride;
+    
+    u32 default_block_capacity;
+    u32 count;
+};
+
+PooledArrayR pooled_array_make(Arena* arena, u64 stride, u32 block_capacity);
+void array_reset(PooledArrayR* array);
+void* array_add(PooledArrayR* array);
+void array_erase(PooledArrayR* array, u32 index);
+void array_pop(PooledArrayR* array);
+u32 array_calculate_index(PooledArrayR* array, void* ptr);
+
+//- MISC 
+
+enum BinaryOperator {
+    BinaryOperator_Unknown,
+    BinaryOperator_None,
+    
+    BinaryOperator_Addition,
+    BinaryOperator_Substraction,
+    BinaryOperator_Multiplication,
+    BinaryOperator_Division,
+    
+    BinaryOperator_Equals,
+    BinaryOperator_NotEquals,
+    BinaryOperator_LessThan,
+    BinaryOperator_LessEqualsThan,
+    BinaryOperator_GreaterThan,
+    BinaryOperator_GreaterEqualsThan,
+};
+
+String string_from_binary_operator(BinaryOperator op);
+
+enum KeywordType {
+    KeywordType_None,
+    KeywordType_If,
+    KeywordType_Else,
+    KeywordType_While,
+    KeywordType_For,
+};
+
+String string_from_keyword(KeywordType keyword);
 
 //- PROGRAM CONTEXT 
+
+#include "templates.h"
 
 void print_ex(Severity severity, String str, ...);
 #define print(severity, str, ...) print_ex(severity, STR(str), __VA_ARGS__)
@@ -293,14 +363,9 @@ struct ProgramArg {
     String value;
 };
 
-struct ProgramSettings {
-};
-
-struct ProgramContext {
+struct Yov {
     Arena* static_arena;
     Arena* temp_arena;
-    
-    ProgramSettings settings;
     
     String script_name;
     String script_dir;
@@ -314,12 +379,12 @@ struct ProgramContext {
     i32 error_count;
 };
 
-ProgramContext* program_context_initialize(Arena* arena, ProgramSettings settings, String script_path);
-void program_context_shutdown(ProgramContext* ctx);
+Yov* yov_initialize(Arena* arena, String script_path);
+void yov_shutdown(Yov* ctx);
 
-b32 generate_program_args(ProgramContext* ctx, Array<String> raw_args);
+b32 generate_program_args(Yov* ctx, Array<String> raw_args);
 
-void report_ex(ProgramContext* ctx, Severity severity, CodeLocation code, String text, ...);
+void report_ex(Yov* ctx, Severity severity, CodeLocation code, String text, ...);
 
 #define report_info(ctx, code, text, ...) report_ex(ctx, Severity_Info, code, STR(text), __VA_ARGS__);
 #define report_warning(ctx, code, text, ...) report_ex(ctx, Severity_Warning, code, STR(text), __VA_ARGS__);
@@ -327,39 +392,6 @@ void report_ex(ProgramContext* ctx, Severity severity, CodeLocation code, String
 
 void print_report(Report report);
 void print_reports(Array<Report> reports);
-
-//- MISC
-
-enum BinaryOperator {
-    BinaryOperator_Unknown,
-    BinaryOperator_None,
-    
-    BinaryOperator_Addition,
-    BinaryOperator_Substraction,
-    BinaryOperator_Multiplication,
-    BinaryOperator_Division,
-    
-    BinaryOperator_Equals,
-    BinaryOperator_NotEquals,
-    BinaryOperator_LessThan,
-    BinaryOperator_LessEqualsThan,
-    BinaryOperator_GreaterThan,
-    BinaryOperator_GreaterEqualsThan,
-};
-
-inline_fn String string_from_binary_operator(BinaryOperator op) {
-    if (op == BinaryOperator_Addition) return STR("+");
-    if (op == BinaryOperator_Substraction) return STR("-");
-    if (op == BinaryOperator_Multiplication) return STR("*");
-    if (op == BinaryOperator_Division) return STR("/");
-    if (op == BinaryOperator_Equals) return STR("==");
-    if (op == BinaryOperator_NotEquals) return STR("!=");
-    if (op == BinaryOperator_LessThan) return STR("<");
-    if (op == BinaryOperator_LessEqualsThan) return STR("<=");
-    if (op == BinaryOperator_GreaterThan) return STR(">");
-    if (op == BinaryOperator_GreaterEqualsThan) return STR(">=");
-    return STR("?");
-}
 
 //- LEXER
 
@@ -391,20 +423,9 @@ enum TokenKind {
     TokenKind_BoolLiteral,
 };
 
-enum KeywordType {
-    KeywordType_None,
-    KeywordType_If,
-    KeywordType_Else,
-    KeywordType_While,
-    KeywordType_For,
-};
-
-String string_from_keyword(KeywordType keyword);
-
 struct Token {
     TokenKind kind;
     String value;
-    
     CodeLocation code;
     
     union {
@@ -414,7 +435,7 @@ struct Token {
 };
 
 struct Lexer {
-    ProgramContext* ctx;
+    Yov* ctx;
     
     PooledArray<Token> tokens;
     String text;
@@ -426,7 +447,7 @@ struct Lexer {
     b8 discard_tokens;
 };
 
-Array<Token> generate_tokens(ProgramContext* ctx, String text, b32 discard_tokens);
+Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens);
 
 //- AST 
 
@@ -439,7 +460,6 @@ enum OpKind {
     OpKind_ForStatement,
     OpKind_VariableAssignment,
     OpKind_VariableDefinition,
-    
     OpKind_FunctionCall,
     OpKind_ArrayExpresion,
     OpKind_ArrayElementValue,
@@ -543,7 +563,7 @@ struct OpNode_MemberValue : OpNode {
 };
 
 struct Parser {
-    ProgramContext* ctx;
+    Yov* ctx;
     Array<Token> tokens;
     u32 token_index;
     PooledArray<OpNode*> ops;
@@ -553,9 +573,9 @@ Array<Token> extract_sentence(Parser* parser, TokenKind separator, b32 require_s
 void skip_tokens_before_op(Parser* parser);
 OpNode* process_op(Parser* parser);
 
-OpNode* generate_ast_from_block(ProgramContext* ctx, Array<Token> tokens);
-OpNode* generate_ast_from_sentence(ProgramContext* ctx, Array<Token> tokens);
-OpNode* generate_ast(ProgramContext* ctx, Array<Token> tokens);
+OpNode* generate_ast_from_block(Yov* ctx, Array<Token> tokens);
+OpNode* generate_ast_from_sentence(Yov* ctx, Array<Token> tokens);
+OpNode* generate_ast(Yov* ctx, Array<Token> tokens);
 
 OpNode* process_expresion(Parser* parser, Array<Token> tokens);
 
@@ -617,10 +637,10 @@ struct InterpreterSettings {
     // TODO(Jose): b8 ignore_errors; // Ignore errors on execution and keep running
 };
 
-void interpret(ProgramContext* ctx, OpNode* block, InterpreterSettings settings);
+void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings);
 
 struct Interpreter {
-    ProgramContext* ctx;
+    Yov* ctx;
     InterpreterSettings settings;
     
     Array<VariableType> vtype_table;

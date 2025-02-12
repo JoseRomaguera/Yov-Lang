@@ -754,7 +754,7 @@ OpNode* process_op(Parser* parser)
     return NULL;
 }
 
-OpNode* generate_ast_from_block(ProgramContext* ctx, Array<Token> tokens)
+OpNode* generate_ast_from_block(Yov* ctx, Array<Token> tokens)
 {
     Parser* parser = arena_push_struct<Parser>(ctx->temp_arena);
     parser->ctx = ctx;
@@ -775,7 +775,7 @@ OpNode* generate_ast_from_block(ProgramContext* ctx, Array<Token> tokens)
     return block_node;
 }
 
-OpNode* generate_ast_from_sentence(ProgramContext* ctx, Array<Token> tokens)
+OpNode* generate_ast_from_sentence(Yov* ctx, Array<Token> tokens)
 {
     Parser* parser = arena_push_struct<Parser>(ctx->temp_arena);
     parser->ctx = ctx;
@@ -786,6 +786,6 @@ OpNode* generate_ast_from_sentence(ProgramContext* ctx, Array<Token> tokens)
     return node;
 }
 
-OpNode* generate_ast(ProgramContext* ctx, Array<Token> tokens) {
+OpNode* generate_ast(Yov* ctx, Array<Token> tokens) {
     return generate_ast_from_block(ctx, tokens);
 }

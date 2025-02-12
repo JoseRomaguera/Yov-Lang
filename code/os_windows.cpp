@@ -12,6 +12,7 @@
 #include <shellapi.h>
 
 struct Windows {
+    u32 page_size;
     HANDLE console_handle;
 } windows;
 
@@ -46,7 +47,7 @@ void os_initialize()
 {
     SYSTEM_INFO system_info;
     GetSystemInfo(&system_info);
-    os.page_size = system_info.dwAllocationGranularity;
+    windows.page_size = system_info.dwAllocationGranularity;
     
     windows.console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
 }
@@ -69,6 +70,14 @@ void os_print(Severity severity, String text)
     OutputDebugStringA(text0.data);
 }
 
+u64 os_get_page_size() {
+    return windows.page_size;
+}
+
+u32 os_pages_from_bytes(u64 bytes) {
+    return (u32)u64_divide_high(bytes, windows.page_size);
+}
+
 void* os_allocate_heap(u64 size) {
     return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
 }
@@ -79,16 +88,17 @@ void os_free_heap(void* address) {
 
 void* os_reserve_virtual_memory(u32 pages, b32 commit)
 {
-    u64 bytes = (u64)pages * os.page_size;
+    u64 bytes = (u64)pages * os_get_page_size();
     u32 flags = MEM_RESERVE;
     if (commit) flags |= MEM_COMMIT;
     return VirtualAlloc(NULL, bytes, flags, PAGE_READWRITE);
 }
 void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count)
 {
-    u64 byte_offset = (u64)page_offset * os.page_size;
+    u64 page_size = os_get_page_size();
+    u64 byte_offset = (u64)page_offset * page_size;
     u8* ptr = (u8*)address + byte_offset;
-    u64 bytes = (u64)page_count * os.page_size;
+    u64 bytes = (u64)page_count * page_size;
     VirtualAlloc(ptr, bytes, MEM_COMMIT, PAGE_READWRITE);
 }
 void os_release_virtual_memory(void* address)

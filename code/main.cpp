@@ -1,7 +1,5 @@
 #include "inc.h"
 
-OS os;
-
 inline_fn void log_token(Token token)
 {
     if (token.kind == TokenKind_Separator) print_info(STR("-> Separator"));
@@ -213,8 +211,7 @@ void main()
     
     Array<String> script_args = array_subarray(args, script_args_start_index, args.count - script_args_start_index);
     
-    ProgramSettings program_settings{};
-    ProgramContext* ctx = program_context_initialize(static_arena, program_settings, args[0]);
+    Yov* ctx = yov_initialize(static_arena, args[0]);
     
     if (generate_program_args(ctx, script_args) && !error_in_interpreter_args) {
         
@@ -245,14 +242,14 @@ void main()
                     print_separator();
                     settings.execute = true;
                     interpret(ctx, ast, settings);
-                    print_separator();
-                    print_info("Execution finished\n");
                 }
             }
             
 #if DEV
             if (1)
             {
+                print_separator();
+                
                 u32 static_memory = (u32)ctx->static_arena->memory_position;
                 u32 temp_memory = (u32)ctx->temp_arena->memory_position;
                 u32 total_memory = static_memory + temp_memory;
@@ -276,7 +273,7 @@ void main()
         }
     }
     
-    program_context_shutdown(ctx);
+    yov_shutdown(ctx);
     
 #if DEV
     os_console_wait();

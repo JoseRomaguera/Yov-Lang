@@ -746,7 +746,7 @@ internal_fn void define_functions(Interpreter* inter) {
     inter->functions = get_intrinsic_functions(inter->ctx->static_arena, inter);
 }
 
-void interpret(ProgramContext* ctx, OpNode* block, InterpreterSettings settings)
+void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings)
 {
     Interpreter* inter = arena_push_struct<Interpreter>(ctx->static_arena);
     inter->ctx = ctx;
@@ -983,7 +983,7 @@ void pop_scope(Interpreter* inter)
     }
     inter->scope--;
     
-    for (auto it = pooled_array_create_iterator_tail(&inter->objects); it.valid; --it) {
+    for (auto it = pooled_array_make_iterator_tail(&inter->objects); it.valid; --it) {
         Object* obj = it.value;
         if (obj->scope > inter->scope) {
             undefine_object(inter, obj);
@@ -998,7 +998,7 @@ Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes)
     Object* match = NULL;
     i32 match_scope = -1;
     
-    for (auto it = pooled_array_create_iterator(&inter->objects); it.valid; ++it) {
+    for (auto it = pooled_array_make_iterator(&inter->objects); it.valid; ++it) {
         Object* obj = it.value;
         if (string_equals(obj->identifier, identifier)) {
             if (!parent_scopes && obj->scope != inter->scope) continue;
@@ -1019,7 +1019,7 @@ Object* define_object(Interpreter* inter, String identifier, Variable* var)
     
     Object* obj = NULL;
     
-    for (auto it = pooled_array_create_iterator(&inter->objects); it.valid; ++it) {
+    for (auto it = pooled_array_make_iterator(&inter->objects); it.valid; ++it) {
         if (it.value->identifier.size == 0) obj = it.value;
     }
     

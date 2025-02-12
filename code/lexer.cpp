@@ -25,16 +25,6 @@ inline_fn b32 codepoint_is_text(u32 codepoint) {
     return false;
 }
 
-String string_from_keyword(KeywordType keyword)
-{
-    if (keyword == KeywordType_If) return STR("if");
-    if (keyword == KeywordType_Else) return STR("else");
-    if (keyword == KeywordType_While) return STR("while");
-    if (keyword == KeywordType_For) return STR("for");
-    assert(0);
-    return STR("?");
-}
-
 inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
 {
     assert(size > 0);
@@ -260,7 +250,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
     return extract_token(lexer, TokenKind_Unknown, 1);
 }
 
-Array<Token> generate_tokens(ProgramContext* ctx, String text, b32 discard_tokens)
+Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens)
 {
     Lexer* lexer = arena_push_struct<Lexer>(ctx->temp_arena);
     lexer->ctx = ctx;
