@@ -140,6 +140,38 @@ b32 os_copy_file(String dst_path, String src_path, b32 override)
     return CopyFile(src_path0.data, dst_path0.data, fail_if_exists) != 0;
 }
 
+inline_fn b32 create_path(String path)
+{
+    SCRATCH();
+    
+    Array<String> splits = string_split(scratch.arena, path, STR("/"));
+    Array<String> folders = array_make(splits.data, splits.count - 1);
+    
+    String last_folder = STR("");
+    
+    foreach(i, folders.count)
+    {
+        String folder = string_format(scratch.arena, "%S%S/", last_folder, folders[i]);
+        last_folder = folder;
+        
+        if (folder.size <= 3 && folder[1] == ':') continue;
+        
+        String folder0 = string_copy(scratch.arena, folder);
+        if (!CreateDirectory(folder0.data, NULL) && ERROR_ALREADY_EXISTS != GetLastError())
+            return FALSE;
+    }
+    
+    return TRUE;
+}
+
+b32 os_folder_create(String path, b32 recursive)
+{
+    SCRATCH();
+    String path0 = string_copy(scratch.arena, path);
+	if (recursive) create_path(path0);
+    return (b32)CreateDirectory(path0.data, NULL);
+}
+
 b32 os_ask_yesno(String title, String content)
 {
     SCRATCH();

@@ -205,6 +205,8 @@ void os_release_virtual_memory(void* address);
 b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result);
 b32 os_copy_file(String dst_path, String src_path, b32 override);
 
+b32 os_folder_create(String path, b32 recursive);
+
 b32 os_ask_yesno(String title, String content);
 i32 os_call(String working_dir, String command);
 

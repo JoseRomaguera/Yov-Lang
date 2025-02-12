@@ -285,11 +285,11 @@ void main()
 }
 
 #include "common.cpp"
-#include "os_windows.cpp"
 #include "lexer.cpp"
 #include "parser.cpp"
 #include "interpreter.cpp"
 #include "intrinsics.cpp"
+#include "os_windows.cpp"
 
 void* memcpy(void* dst, const void* src, size_t size) {
     memory_copy(dst, src, (u64)size);

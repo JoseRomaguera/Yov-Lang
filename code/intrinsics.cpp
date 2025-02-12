@@ -16,7 +16,15 @@ internal_fn Variable* intrinsic__println(Interpreter* inter, OpNode* node, Array
 
 internal_fn Variable* intrinsic__call(Interpreter* inter, OpNode* node, Array<Variable*> vars)
 {
-    i32 result = os_call(get_string(inter->cd_obj->var), get_string(vars[0]));
+    SCRATCH();
+    
+    i32 result = -1;
+    String command_line = get_string(vars[0]);
+    
+    if (user_assertion(inter, string_format(scratch.arena, "Call:\n%S", command_line))) {
+        result = os_call(get_string(inter->cd_obj->var), command_line);
+    }
+    
     return var_alloc_int(inter, result);
 }
 
@@ -168,9 +176,17 @@ internal_fn Variable* intrinsic__set_cd(Interpreter* inter, OpNode* node, Array<
 
 internal_fn Variable* intrinsic__create_folder(Interpreter* inter, OpNode* node, Array<Variable*> vars)
 {
-    String content = get_string(vars[0]);
-    // TODO(Jose): 
-    return inter->void_var;
+    SCRATCH();
+    
+    String path = get_string(vars[0]);
+    b32 recursive = get_bool(vars[1]);
+    b32 result = false;
+    
+    if (user_assertion(inter, string_format(scratch.arena, "Create folder:\n%S", path))) {
+        result = os_folder_create(path, recursive);
+    }
+    
+    return var_alloc_bool(inter, (b8)result);
 }
 
 internal_fn Variable* intrinsic__copy_file(Interpreter* inter, OpNode* node, Array<Variable*> vars)
@@ -231,7 +247,7 @@ Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* int
     
     define_instrinsic("ask_yesno", intrinsic__ask_yesno, VType_Bool, VType_String);
     define_instrinsic("set_cd", intrinsic__set_cd, VType_Void, VType_String);
-    define_instrinsic("create_folder", intrinsic__create_folder, VType_Void, VType_String);
+    define_instrinsic("create_folder", intrinsic__create_folder, VType_Bool, VType_String, VType_Bool);
     define_instrinsic("copy_file", intrinsic__copy_file, VType_Void, VType_String, VType_String);
     define_instrinsic("path_resolve", intrinsic__path_resolve, VType_String, VType_String);
     
