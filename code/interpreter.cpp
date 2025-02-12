@@ -557,6 +557,58 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
     pop_scope(inter);
 }
 
+void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
+{
+    SCRATCH();
+    auto node = (OpNode_ForeachArrayStatement*)node0;
+    
+    push_scope(inter);
+    
+    Variable* array = interpret_expresion(inter, node->expresion);
+    if (is_unknown(array)) return;
+    
+    VariableType array_type = vtype_get(inter, array->vtype);
+    
+    if (array_type.kind != VariableKind_Array) {
+        report_error(inter->ctx, node->code, "For each statement expects an array");
+        return;
+    }
+    
+    Object* element = define_object(inter, node->element_name, var_alloc_generic(inter, array_type.array_of));
+    
+    Object* index = NULL;
+    if (node->index_name.size > 0) index = define_object(inter, node->index_name, var_alloc_int(inter, 0));
+    
+    for (i64 i = 0; i < array->count; ++i)
+    {
+        if (inter->settings.execute)
+        {
+            Variable* value = var_alloc_from_array(inter, array, i);
+            obj_assign(inter, element, value);
+            
+            if (index != NULL) {
+                obj_assign(inter, index, var_alloc_int(inter, i));
+            }
+            
+            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_var(scratch.arena, inter, value));
+            
+            push_scope(inter);
+            interpret_op(inter, node->content);
+            pop_scope(inter);
+        }
+        else
+        {
+            push_scope(inter);
+            interpret_op(inter, node->content);
+            pop_scope(inter);
+            
+            break;
+        }
+    }
+    
+    pop_scope(inter);
+}
+
 Variable* interpret_function_call(Interpreter* inter, OpNode* node0)
 {
     SCRATCH();
@@ -636,6 +688,7 @@ void interpret_op(Interpreter* inter, OpNode* node)
     else if (node->kind == OpKind_IfStatement) interpret_if_statement(inter, node);
     else if (node->kind == OpKind_WhileStatement) interpret_while_statement(inter, node);
     else if (node->kind == OpKind_ForStatement) interpret_for_statement(inter, node);
+    else if (node->kind == OpKind_ForeachArrayStatement) interpret_foreach_array_statement(inter, node);
     else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node);
     else {
         report_error(inter->ctx, node->code, STR("Unknown operation: {line}"));

@@ -458,6 +458,7 @@ enum OpKind {
     OpKind_IfStatement,
     OpKind_WhileStatement,
     OpKind_ForStatement,
+    OpKind_ForeachArrayStatement,
     OpKind_VariableAssignment,
     OpKind_VariableDefinition,
     OpKind_FunctionCall,
@@ -497,6 +498,13 @@ struct OpNode_ForStatement : OpNode {
     OpNode* initialize_sentence;
     OpNode* condition_expresion;
     OpNode* update_sentence;
+    OpNode* content;
+};
+
+struct OpNode_ForeachArrayStatement : OpNode {
+    String element_name;
+    String index_name;
+    OpNode* expresion;
     OpNode* content;
 };
 

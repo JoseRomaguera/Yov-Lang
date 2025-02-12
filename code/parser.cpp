@@ -123,6 +123,7 @@ inline_fn u32 get_node_size(OpKind kind) {
     if (kind == OpKind_IfStatement) return sizeof(OpNode_IfStatement);
     if (kind == OpKind_WhileStatement) return sizeof(OpNode_WhileStatement);
     if (kind == OpKind_ForStatement) return sizeof(OpNode_ForStatement);
+    if (kind == OpKind_ForeachArrayStatement) return sizeof(OpNode_ForeachArrayStatement);
     if (kind == OpKind_VariableAssignment) return sizeof(OpNode_Assignment);
     if (kind == OpKind_VariableDefinition) return sizeof(OpNode_VariableDefinition);
     if (kind == OpKind_FunctionCall) return sizeof(OpNode_FunctionCall);
@@ -535,22 +536,70 @@ inline_fn OpNode* process_for_statement_op(Parser* parser)
         }
     }
     
-    if (separator_count != 2) {
-        report_error(parser->ctx, starting_token.code, STR("For-statement expects 3 expresions"));
+    // Foreach Array Statement
+    if (separator_count == 0 && expresions.count >= 3)
+    {
+        Token element_token = expresions[0];
+        
+        if (element_token.kind != TokenKind_Identifier) {
+            report_error(parser->ctx, starting_token.code, "Expecting a for each identifier");
+            return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        }
+        
+        i32 colon_index = -1;
+        foreach(i, expresions.count) {
+            if (expresions[i].kind == TokenKind_Colon) {
+                colon_index = i;
+                break;
+            }
+        }
+        
+        if (colon_index < 0) {
+            report_error(parser->ctx, starting_token.code, "Expecting colon in for each");
+            return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        }
+        
+        String index_name = {};
+        
+        if (colon_index > 1)
+        {
+            if (colon_index == 3 && expresions[1].kind == TokenKind_Comma && expresions[2].kind == TokenKind_Identifier) {
+                index_name = expresions[2].value;
+            }
+            else {
+                report_error(parser->ctx, starting_token.code, "Expecting a comma separated identifier for the index of the for each");
+                return alloc_node(parser, OpKind_Unknown, starting_token.code);
+            }
+        }
+        
+        Array<Token> expresion_tokens = array_subarray(expresions, colon_index + 1, expresions.count - (colon_index + 1));
+        
+        auto node = (OpNode_ForeachArrayStatement*)alloc_node(parser, OpKind_ForeachArrayStatement, starting_token.code);
+        node->element_name = element_token.value;
+        node->index_name = index_name;
+        node->expresion = process_expresion(parser, expresion_tokens);
+        node->content = process_op(parser);
+        return node;
+    }
+    // For Statement
+    else if (separator_count == 2)
+    {
+        Array<Token> initialize_sentence_tokens = array_subarray(expresions, 0, separator_indices[0]);
+        Array<Token> condition_expresion_tokens = array_subarray(expresions, separator_indices[0] + 1, separator_indices[1] - (separator_indices[0] + 1));
+        Array<Token> update_sentence_tokens = array_subarray(expresions, separator_indices[1] + 1, expresions.count - (separator_indices[1] + 1));
+        
+        auto node = (OpNode_ForStatement*)alloc_node(parser, OpKind_ForStatement, starting_token.code);
+        node->initialize_sentence = generate_ast_from_sentence(parser->ctx, initialize_sentence_tokens);
+        node->condition_expresion = process_expresion(parser, condition_expresion_tokens);
+        node->update_sentence = generate_ast_from_sentence(parser->ctx, update_sentence_tokens);
+        node->content = process_op(parser);
+        return node;
+    }
+    else
+    {
+        report_error(parser->ctx, starting_token.code, STR("Unknown for statement format"));
         return alloc_node(parser, OpKind_Unknown, starting_token.code);
     }
-    
-    Array<Token> initialize_sentence_tokens = array_subarray(expresions, 0, separator_indices[0]);
-    Array<Token> condition_expresion_tokens = array_subarray(expresions, separator_indices[0] + 1, separator_indices[1] - (separator_indices[0] + 1));
-    Array<Token> update_sentence_tokens = array_subarray(expresions, separator_indices[1] + 1, expresions.count - (separator_indices[1] + 1));
-    
-    auto node = (OpNode_ForStatement*)alloc_node(parser, OpKind_ForStatement, starting_token.code);
-    node->initialize_sentence = generate_ast_from_sentence(parser->ctx, initialize_sentence_tokens);
-    node->condition_expresion = process_expresion(parser, condition_expresion_tokens);
-    node->update_sentence = generate_ast_from_sentence(parser->ctx, update_sentence_tokens);
-    node->content = process_op(parser);
-    
-    return node;
 }
 
 inline_fn OpNode* process_variable_assignment_op(Parser* parser)

@@ -77,11 +77,11 @@ lflags:  String[];
 // Call msvc
 
 msvc: String = "cl {root}code/main.cpp ";
-for (i := 0; i < defines.count; i += 1) { def := defines[i]; msvc += "/D{def}=1 "; }
-for (i := 0; i < libs.count; i += 1) { lib := libs[i]; msvc += "{lib} "; }
-for (i := 0; i < cflags.count; i += 1) { flag := cflags[i]; msvc += "/{flag} "; }
+for (def : defines) msvc += "/D{def}=1 ";
+for (lib : libs)    msvc += "{lib} ";
+for (flag : cflags) msvc += "/{flag} ";
 msvc += "/I code/ /link ";
-for (i := 0; i < lflags.count; i += 1) { flag := lflags[i]; msvc += "/{flag} "; }
+for (flag : lflags) msvc += "/{flag} ";
 
 result: Int = call(msvc);
 
