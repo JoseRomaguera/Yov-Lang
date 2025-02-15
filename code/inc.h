@@ -520,6 +520,7 @@ struct OpNode_VariableDefinition : OpNode {
     String type;
     String identifier;
     OpNode* assignment;
+    Array<OpNode*> array_dimensions;
     b8 is_array;
 };
 
@@ -594,11 +595,12 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens);
 #define VType_Unknown -1
 #define VType_Void 0
 #define VType_Int 1
-#define VType_IntArray 2
-#define VType_Bool 3
-#define VType_BoolArray 4
-#define VType_String 5
-#define VType_StringArray 6
+#define VType_Bool 2
+#define VType_String 3
+
+#define VType_IntArray vtype_from_array_dimension(inter, VType_Int, 1)
+#define VType_BoolArray vtype_from_array_dimension(inter, VType_Bool, 1)
+#define VType_StringArray vtype_from_array_dimension(inter, VType_String, 1)
 
 enum VariableKind {
     VariableKind_Unknown,
@@ -616,20 +618,49 @@ struct VariableType {
     i32 array_of;
 };
 
-struct Variable {
-    i32 vtype;
+// Int: {Object(Memory)}
+// IntArray: {Object} [Memory, Memory]
+// Int: {Object}
+
+struct ObjectMemory_Int {
+    i64 value;
+};
+struct ObjectMemory_Bool {
+    b32 value;
+};
+struct ObjectMemory_String {
+    char* data;
+    u64 size;
+};
+struct ObjectMemory_Array {
     void* data;
-    u32 count;
+    i64 count;
+};
+
+struct ObjectMemory {
+    union {
+        ObjectMemory_Int integer;
+        ObjectMemory_Bool boolean;
+        ObjectMemory_String string;
+        ObjectMemory_Array array;
+    };
 };
 
 struct Object {
     String identifier;
-    Variable* var;
+    i32 vtype;
     i32 scope;
+    
+    union {
+        ObjectMemory_Int integer;
+        ObjectMemory_Bool boolean;
+        ObjectMemory_String string;
+        ObjectMemory_Array array;
+    };
 };
 
 struct Interpreter;
-typedef Variable* IntrinsicFunction(Interpreter* inter, OpNode* node, Array<Variable*> vars);
+typedef Object* IntrinsicFunction(Interpreter* inter, OpNode* node, Array<Object*> objs);
 
 struct FunctionDefinition {
     String identifier;
@@ -655,8 +686,8 @@ struct Interpreter {
     
     Array<VariableType> vtype_table;
     Array<FunctionDefinition> functions;
-    Variable* nil_var;
-    Variable* void_var;
+    Object* nil_obj;
+    Object* void_obj;
     
     PooledArray<Object> objects;
     i32 scope;
@@ -665,36 +696,47 @@ struct Interpreter {
 };
 
 VariableType vtype_get(Interpreter* inter, i32 vtype);
+i32 vtype_from_name(Interpreter* inter, String name);
+i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension);
 i32 vtype_from_array_element(Interpreter* inter, i32 vtype);
+i32 vtype_from_array_base(Interpreter* inter, i32 vtype);
+u32 vtype_get_stride(i32 vtype);
+i32 encode_vtype(u32 index, u32 dimensions);
+void decode_vtype(i32 vtype, u32* _index, u32* _dimensions);
 
-Variable* var_alloc_generic(Interpreter* inter, i32 vtype);
+Object* obj_alloc_temp(Interpreter* inter, i32 vtype);
 
-Variable* var_alloc_primitive(Interpreter* inter, i32 vtype);
-Variable* var_alloc_array(Interpreter* inter, i32 vtype, u32 length);
-Variable* var_copy(Interpreter* inter, const Variable* src);
+Object* obj_alloc_temp_int(Interpreter* inter, i64 value);
+Object* obj_alloc_temp_bool(Interpreter* inter, b32 value);
+Object* obj_alloc_temp_string(Interpreter* inter, String value);
+Object* obj_alloc_temp_array(Interpreter* inter, i32 element_vtype, i64 count);
+Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions);
 
-Variable* var_alloc_int(Interpreter* inter, i64 v);
-Variable* var_alloc_bool(Interpreter* inter, b8 v);
-Variable* var_alloc_string(Interpreter* inter, String v);
+ObjectMemory* obj_get_data(Object* obj);
+ObjectMemory obj_copy_data(Interpreter* inter, Object* obj);
+ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype);
 
-Variable* var_alloc_from_array(Interpreter* inter, Variable* array, i64 index);
-void var_assign_array_element(Interpreter* inter, Variable* array, i64 index, Variable* src);
+void obj_copy_element_from_element(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src_array, i64 src_index);
+b32 obj_copy_element_from_object(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src);
+void obj_copy_from_element(Interpreter* inter, Object* dst, Object* src_array, i64 src_index);
+b32 obj_copy(Interpreter* inter, Object* dst, Object* src);
+void obj_set_int(Object* dst, i64 value);
+void obj_set_bool(Object* dst, b32 value);
+void obj_set_string(Interpreter* inter, Object* dst, String value);
 
-b32 var_assignment_is_valid(const Variable* t0, const Variable* t1);
-b32 var_assignment_is_valid(const Variable* t0, i32 vtype);
-String string_from_var(Arena* arena, Interpreter* inter, Variable* var);
-String string_from_vtype(Interpreter* inter, i32 vtype);
-
-b32 obj_assign(Interpreter* inter, Object* obj, const Variable* src);
+//b32 var_assignment_is_valid(const ObjectMemory t0, const ObjectMemory t1);
+//b32 var_assignment_is_valid(const ObjectMemory t0, i32 vtype);
+String string_from_obj(Arena* arena, Interpreter* inter, Object* obj);
+String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype);
 
 i32 push_scope(Interpreter* inter);
 void pop_scope(Interpreter* inter);
 Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes);
-Object* define_object(Interpreter* inter, String identifier, Variable* var);
+Object* define_object(Interpreter* inter, String identifier, i32 vtype);
 void undefine_object(Interpreter* inter, Object* obj);
 FunctionDefinition* find_function(Interpreter* inter, String identifier);
 
-Variable* interpret_function_call(Interpreter* inter, OpNode* node);
+Object* interpret_function_call(Interpreter* inter, OpNode* node);
 void interpret_op(Interpreter* inter, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
@@ -702,47 +744,60 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
 b32 user_assertion(Interpreter* inter, String message);
 b32 interpretion_failed(Interpreter* inter);
 
-inline_fn b32 is_valid(const Variable* var) {
-    if (var == NULL) return false;
-    return var->vtype > 0;
+inline_fn b32 is_valid(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype > 0;
 }
-inline_fn b32 is_unknown(const Variable* var) {
-    if (var == NULL) return true;
-    return var->vtype < 0;
-}
-
-inline_fn b32 is_int(const Variable* var) {
-    if (var == NULL) return false;
-    return var->vtype == VType_Int;
-}
-inline_fn b32 is_bool(const Variable* var) {
-    if (var == NULL) return false;
-    return var->vtype == VType_Bool;
-}
-inline_fn b32 is_string(const Variable* var) {
-    if (var == NULL) return false;
-    return var->vtype == VType_String;
+inline_fn b32 is_unknown(const Object* obj) {
+    if (obj == NULL) return true;
+    return obj->vtype < 0;
 }
 
-inline_fn i64& get_int(Variable* var) {
-    assert(is_int(var));
-    i64* v = (i64*)var->data;
-    return *v;
+inline_fn b32 is_void(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_Void;
 }
-inline_fn b8& get_bool(Variable* var) {
-    assert(is_bool(var));
-    b8* v = (b8*)var->data;
-    return *v;
+inline_fn b32 is_int(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_Int;
 }
-inline_fn String& get_string(Variable* var) {
-    assert(is_string(var));
-    String* v = (String*)var->data;
-    return *v;
+inline_fn b32 is_bool(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_Bool;
+}
+inline_fn b32 is_string(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_String;
+}
+inline_fn b32 is_array(i32 vtype) {
+    u32 dims;
+    decode_vtype(vtype, NULL, &dims);
+    return dims > 0;
+}
+inline_fn b32 is_array(Object* obj) {
+    if (obj == NULL) return false;
+    return is_array(obj->vtype);
+}
+
+inline_fn i64 get_int(Object* obj) {
+    assert(is_int(obj));
+    return obj->integer.value;
+}
+inline_fn b32 get_bool(Object* obj) {
+    assert(is_bool(obj));
+    return obj->boolean.value;
+}
+inline_fn String get_string(Object* obj) {
+    assert(is_string(obj));
+    String str;
+    str.data = obj->string.data;
+    str.size = obj->string.size;
+    return str;
 }
 
 template<typename T>
-inline_fn T& get_array_element(Variable* var) {
+inline_fn T& get_array_element(Object* obj) {
     
-    String* v = (String*)var->data;
+    String* v = (String*)obj->data;
     return *v;
 }

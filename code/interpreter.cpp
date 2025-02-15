@@ -1,6 +1,6 @@
 #include "inc.h"
 
-internal_fn Variable* solve_binary_operation(Interpreter* inter, Variable* left, Variable* right, BinaryOperator op, CodeLocation code)
+internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Object* right, BinaryOperator op, CodeLocation code)
 {
     SCRATCH();
     
@@ -8,23 +8,23 @@ internal_fn Variable* solve_binary_operation(Interpreter* inter, Variable* left,
     VariableType right_type = vtype_get(inter, right->vtype);
     
     if (is_int(left) && is_int(right)) {
-        if (op == BinaryOperator_Addition) return var_alloc_int(inter, get_int(left) + get_int(right));
-        if (op == BinaryOperator_Substraction) return var_alloc_int(inter, get_int(left) - get_int(right));
-        if (op == BinaryOperator_Multiplication) return var_alloc_int(inter, get_int(left) * get_int(right));
-        if (op == BinaryOperator_Division) return var_alloc_int(inter, get_int(left) / get_int(right));
-        if (op == BinaryOperator_Equals) return var_alloc_bool(inter, get_int(left) == get_int(right));
-        if (op == BinaryOperator_NotEquals) return var_alloc_bool(inter, get_int(left) != get_int(right));
-        if (op == BinaryOperator_LessThan) return var_alloc_bool(inter, get_int(left) < get_int(right));
-        if (op == BinaryOperator_LessEqualsThan) return var_alloc_bool(inter, get_int(left) <= get_int(right));
-        if (op == BinaryOperator_GreaterThan) return var_alloc_bool(inter, get_int(left) > get_int(right));
-        if (op == BinaryOperator_GreaterEqualsThan) return var_alloc_bool(inter, get_int(left) >= get_int(right));
+        if (op == BinaryOperator_Addition) return obj_alloc_temp_int(inter, get_int(left) + get_int(right));
+        if (op == BinaryOperator_Substraction) return obj_alloc_temp_int(inter, get_int(left) - get_int(right));
+        if (op == BinaryOperator_Multiplication) return obj_alloc_temp_int(inter, get_int(left) * get_int(right));
+        if (op == BinaryOperator_Division) return obj_alloc_temp_int(inter, get_int(left) / get_int(right));
+        if (op == BinaryOperator_Equals) return obj_alloc_temp_bool(inter, get_int(left) == get_int(right));
+        if (op == BinaryOperator_NotEquals) return obj_alloc_temp_bool(inter, get_int(left) != get_int(right));
+        if (op == BinaryOperator_LessThan) return obj_alloc_temp_bool(inter, get_int(left) < get_int(right));
+        if (op == BinaryOperator_LessEqualsThan) return obj_alloc_temp_bool(inter, get_int(left) <= get_int(right));
+        if (op == BinaryOperator_GreaterThan) return obj_alloc_temp_bool(inter, get_int(left) > get_int(right));
+        if (op == BinaryOperator_GreaterEqualsThan) return obj_alloc_temp_bool(inter, get_int(left) >= get_int(right));
     }
     
     if (is_string(left) && is_string(right))
     {
         if (op == BinaryOperator_Addition) {
             String str = string_format(scratch.arena, "%S%S", get_string(left), get_string(right));
-            return var_alloc_string(inter, str);
+            return obj_alloc_temp_string(inter, str);
         }
         else if (op == BinaryOperator_Division)
         {
@@ -36,13 +36,13 @@ internal_fn Variable* solve_binary_operation(Interpreter* inter, Variable* left,
             String str = path_append(scratch.arena, get_string(left), get_string(right));
             str = path_resolve(scratch.arena, str);
             
-            return var_alloc_string(inter, str);
+            return obj_alloc_temp_string(inter, str);
         }
         else if (op == BinaryOperator_Equals) {
-            return var_alloc_bool(inter, (b8)string_equals(get_string(left), get_string(right)));
+            return obj_alloc_temp_bool(inter, (b8)string_equals(get_string(left), get_string(right)));
         }
         else if (op == BinaryOperator_NotEquals) {
-            return var_alloc_bool(inter, !(b8)string_equals(get_string(left), get_string(right)));
+            return obj_alloc_temp_bool(inter, !(b8)string_equals(get_string(left), get_string(right)));
         }
     }
     
@@ -50,15 +50,16 @@ internal_fn Variable* solve_binary_operation(Interpreter* inter, Variable* left,
     {
         VariableType array_of = vtype_get(inter, left_type.array_of);
         
+        i64 left_count = left->array.count;
+        i64 right_count = right->array.count;
+        
         if (op == BinaryOperator_Addition) {
-            Variable* array = var_alloc_array(inter, left->vtype, left->count + right->count);
-            for (i64 i = 0; i < left->count; ++i) {
-                Variable* var = var_alloc_from_array(inter, left, i);
-                var_assign_array_element(inter, array, i, var);
+            Object* array = obj_alloc_temp_array(inter, array_of.vtype, left_count + right_count);
+            for (i64 i = 0; i < left_count; ++i) {
+                obj_copy_element_from_element(inter, array, i, left, i);
             }
-            for (i64 i = 0; i < right->count; ++i) {
-                Variable* var = var_alloc_from_array(inter, right, i);
-                var_assign_array_element(inter, array, left->count + i, var);
+            for (i64 i = 0; i < right_count; ++i) {
+                obj_copy_element_from_element(inter, array, left_count + i, right, i);
             }
             return array;
         }
@@ -71,78 +72,77 @@ internal_fn Variable* solve_binary_operation(Interpreter* inter, Variable* left,
         
         if (array_type.array_of != element_type.vtype) {
             report_error(inter->ctx, code, "Type missmatch, can't append a '%S' into '%S'", element_type.name, array_type.name);
-            return inter->nil_var;
+            return inter->nil_obj;
         }
         
-        Variable* array_src = (left_type.kind == VariableKind_Array) ? left : right;
-        Variable* element = (left_type.kind == VariableKind_Array) ? right : left;
+        Object* array_src = (left_type.kind == VariableKind_Array) ? left : right;
+        Object* element = (left_type.kind == VariableKind_Array) ? right : left;
         
-        Variable* array = var_alloc_array(inter, left->vtype, array_src->count + 1);
+        Object* array = obj_alloc_temp_array(inter, element_type.vtype, array_src->array.count + 1);
         
         i64 array_offset = (left_type.kind == VariableKind_Array) ? 0 : 1;
         
-        for (i64 i = 0; i < array_src->count; ++i) {
-            Variable* var = var_alloc_from_array(inter, array_src, i);
-            var_assign_array_element(inter, array, i + array_offset, var);
+        for (i64 i = 0; i < array_src->array.count; ++i) {
+            obj_copy_element_from_element(inter, array, i + array_offset, array_src, i);
         }
         
-        i64 element_offset = (left_type.kind == VariableKind_Array) ? array_src->count : 0;
-        var_assign_array_element(inter, array, element_offset, element);
+        i64 element_offset = (left_type.kind == VariableKind_Array) ? array_src->array.count : 0;
+        obj_copy_element_from_object(inter, array, element_offset, element);
         
         return array;
     }
     
-    return inter->nil_var;
+    return inter->nil_obj;
 }
 
-Variable* interpret_expresion(Interpreter* inter, OpNode* node)
+Object* interpret_expresion(Interpreter* inter, OpNode* node)
 {
     SCRATCH();
     
-    if (node->kind == OpKind_None) return inter->void_var;
+    if (node->kind == OpKind_None) return inter->void_obj;
     
     if (node->kind == OpKind_Binary)
     {
         auto node0 = (OpNode_Binary*)node;
-        Variable* left = interpret_expresion(inter, node0->left);
-        Variable* right = interpret_expresion(inter, node0->right);
+        Object* left = interpret_expresion(inter, node0->left);
+        Object* right = interpret_expresion(inter, node0->right);
         BinaryOperator op = node0->op;
         
-        Variable* result = solve_binary_operation(inter, left, right, op, node->code);
+        Object* result = solve_binary_operation(inter, left, right, op, node->code);
         
         if (is_valid(result))
         {
             if (inter->settings.execute && inter->settings.print_execution) {
-                String left_string = string_from_var(scratch.arena, inter, left);
-                String right_string = string_from_var(scratch.arena, inter, right);
-                String result_string = string_from_var(scratch.arena, inter, result);
+                String left_string = string_from_obj(scratch.arena, inter, left);
+                String right_string = string_from_obj(scratch.arena, inter, right);
+                String result_string = string_from_obj(scratch.arena, inter, result);
                 report_info(inter->ctx, node->code, STR("%S %S %S = %S"), left_string, string_from_binary_operator(op), right_string, result_string);
             }
             return result;
         }
         else
         {
-            report_error(inter->ctx, node->code, STR("Invalid arithmetic operation '%S %S %S'"), string_from_var(scratch.arena, inter, left), string_from_binary_operator(op), string_from_var(scratch.arena, inter, right));
-            return inter->nil_var;
+            report_error(inter->ctx, node->code, STR("Invalid arithmetic operation '%S %S %S'"), string_from_obj(scratch.arena, inter, left), string_from_binary_operator(op), string_from_obj(scratch.arena, inter, right));
+            return inter->nil_obj;
         }
     }
     
-    if (node->kind == OpKind_IntLiteral) return var_alloc_int(inter, ((OpNode_Literal*)node)->int_literal);
+    if (node->kind == OpKind_IntLiteral) return obj_alloc_temp_int(inter, ((OpNode_Literal*)node)->int_literal);
     if (node->kind == OpKind_StringLiteral) {
         auto node0 = (OpNode_Literal*)node;
-        return var_alloc_string(inter, solve_string_literal(scratch.arena, inter, node0->string_literal, node0->code));
+        return obj_alloc_temp_string(inter, solve_string_literal(scratch.arena, inter, node0->string_literal, node0->code));
     }
-    if (node->kind == OpKind_BoolLiteral) return var_alloc_bool(inter, ((OpNode_Literal*)node)->bool_literal);
+    if (node->kind == OpKind_BoolLiteral) return obj_alloc_temp_bool(inter, ((OpNode_Literal*)node)->bool_literal);
     if (node->kind == OpKind_IdentifierValue) {
         auto node0 = (OpNode_IdentifierValue*)node;
         Object* obj = find_object(inter, node0->identifier, true);
         
         if (obj == NULL) {
             report_error(inter->ctx, node->code, STR("Identifier '%S' not found"), node0->identifier);
-            return inter->nil_var;
+            return inter->nil_obj;
         }
         
-        return obj->var;
+        return obj;
     }
     
     if (node->kind == OpKind_MemberValue) {
@@ -152,34 +152,34 @@ Variable* interpret_expresion(Interpreter* inter, OpNode* node)
         
         if (obj == NULL) {
             report_error(inter->ctx, node->code, STR("Identifier '%S' not found"), identifier);
-            return inter->nil_var;
+            return inter->nil_obj;
         }
         
         String member = node0->member;
         
         if (member.size == 0) {
             report_error(inter->ctx, node->code, "Member is not specified");
-            return inter->nil_var;
+            return inter->nil_obj;
         }
         
-        VariableType obj_type = vtype_get(inter, obj->var->vtype);
+        VariableType obj_type = vtype_get(inter, obj->vtype);
         
         if (obj_type.kind == VariableKind_Array)
         {
             if (string_equals(member, STR("count"))) {
-                return var_alloc_int(inter, obj->var->count);
+                return obj_alloc_temp_int(inter, obj->array.count);
             }
             else {
                 report_error(inter->ctx, node->code, "Unknown member '%S' for array", member);
-                return inter->nil_var;
+                return inter->nil_obj;
             }
         }
         else {
             report_error(inter->ctx, node->code, "Object '%S' doesn't have members", identifier);
-            return inter->nil_var;
+            return inter->nil_obj;
         }
         
-        return obj->var;
+        return obj;
     }
     
     if (node->kind == OpKind_FunctionCall) {
@@ -189,31 +189,29 @@ Variable* interpret_expresion(Interpreter* inter, OpNode* node)
     if (node->kind == OpKind_ArrayExpresion)
     {
         auto node0 = (OpNode_ArrayExpresion*)node;
-        Array<Variable*> vars = array_make<Variable*>(scratch.arena, node0->nodes.count);
+        Array<Object*> objects = array_make<Object*>(scratch.arena, node0->nodes.count);
         
-        foreach(i, vars.count) {
-            vars[i] = interpret_expresion(inter, node0->nodes[i]);
+        foreach(i, objects.count) {
+            objects[i] = interpret_expresion(inter, node0->nodes[i]);
         }
         
-        if (vars.count == 0) {
-            return inter->void_var;
+        if (objects.count == 0) {
+            return inter->void_obj;
         }
         
-        i32 vtype = vars[0]->vtype;
+        i32 vtype = objects[0]->vtype;
         
         // Assert same vtype
-        for (i32 i = 1; i < vars.count; ++i) {
-            if (vars[i]->vtype != vtype) {
-                report_error(inter->ctx, node->code, STR("Type missmatch in array expresion, expecting '%S' but found '%S'"), string_from_vtype(inter, vtype), string_from_vtype(inter, vars[i]->vtype));
-                return inter->nil_var;
+        for (i32 i = 1; i < objects.count; ++i) {
+            if (objects[i]->vtype != vtype) {
+                report_error(inter->ctx, node->code, "Type missmatch in array expresion, expecting '%S' but found '%S'", string_from_vtype(scratch.arena, inter, vtype), string_from_vtype(scratch.arena, inter, objects[i]->vtype));
+                return inter->nil_obj;
             }
         }
         
-        i32 array_vtype = vtype_from_array_element(inter, vtype);
-        
-        Variable* array = var_alloc_array(inter, array_vtype, vars.count);
-        foreach(i, vars.count) {
-            var_assign_array_element(inter, array, i, vars[i]);
+        Object* array = obj_alloc_temp_array(inter, vtype, objects.count);
+        foreach(i, objects.count) {
+            obj_copy_element_from_object(inter, array, i, objects[i]);
         }
         
         return array;
@@ -222,43 +220,46 @@ Variable* interpret_expresion(Interpreter* inter, OpNode* node)
     if (node->kind == OpKind_ArrayElementValue)
     {
         auto node0 = (OpNode_ArrayElementValue*)node;
-        Variable* indexing_var = interpret_expresion(inter, node0->expresion);
+        Object* indexing_obj = interpret_expresion(inter, node0->expresion);
         Object* array = find_object(inter, node0->identifier, true);
         
         if (array == NULL) {
             report_error(inter->ctx, node->code, "Identifier '%S' not found", node0->identifier);
-            return inter->nil_var;
+            return inter->nil_obj;
         }
         
-        if (!is_int(indexing_var)) {
+        if (!is_int(indexing_obj)) {
             report_error(inter->ctx, node->code, "Invalid indexing, expecting an Int expresion");
-            return inter->nil_var;
+            return inter->nil_obj;
         }
         
-        VariableType array_vtype = vtype_get(inter, array->var->vtype);
+        VariableType array_vtype = vtype_get(inter, array->vtype);
         
         if (array_vtype.kind != VariableKind_Array) {
             report_error(inter->ctx, node->code, "Indexing is only allowed for arrays");
-            return inter->nil_var;
+            return inter->nil_obj;
         }
+        
+        Object* obj = obj_alloc_temp(inter, array_vtype.array_of);
         
         if (inter->settings.execute)
         {
-            i64 index = get_int(indexing_var);
-            if (index < 0 || index >= array->var->count) {
+            i64 index = get_int(indexing_obj);
+            if (index < 0 || index >= array->array.count) {
                 report_error(inter->ctx, node->code, "Index out of bounds");
-                return inter->nil_var;
+                return inter->nil_obj;
             }
             
-            return var_alloc_from_array(inter, array->var, index);
+            obj_copy_from_element(inter, obj, array, index);
+            return obj;
         }
         else {
-            return var_alloc_generic(inter, array_vtype.array_of);
+            return obj;
         }
     }
     
     report_error(inter->ctx, node->code, STR("Unknown expersion"));
-    return inter->nil_var;
+    return inter->nil_obj;
 }
 
 void interpret_assignment(Interpreter* inter, Object* obj, OpNode* assignment, BinaryOperator binary_operator, b32 assert_assignment)
@@ -276,18 +277,18 @@ void interpret_assignment(Interpreter* inter, Object* obj, OpNode* assignment, B
         return;
     }
     
-    Variable* assignment_result = interpret_expresion(inter, assignment);
+    Object* assignment_result = interpret_expresion(inter, assignment);
     
     if (binary_operator != BinaryOperator_None) {
-        assignment_result = solve_binary_operation(inter, obj->var, assignment_result, binary_operator, assignment->code);
+        assignment_result = solve_binary_operation(inter, obj, assignment_result, binary_operator, assignment->code);
     }
     
-    if (!obj_assign(inter, obj, assignment_result)) {
-        report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(inter, assignment_result->vtype), string_from_vtype(inter, obj->var->vtype));
+    if (!obj_copy(inter, obj, assignment_result)) {
+        report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, obj->vtype));
         return;
     }
     
-    if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_var(scratch.arena, inter, obj->var));
+    if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
 }
 
 void interpret_indexed_assignment(Interpreter* inter, Object* array, i64 index, OpNode* assignment, b32 assert_assignment)
@@ -295,7 +296,7 @@ void interpret_indexed_assignment(Interpreter* inter, Object* array, i64 index, 
     SCRATCH();
     assert(inter->settings.execute);
     
-    VariableType array_type = vtype_get(inter, array->var->vtype);
+    VariableType array_type = vtype_get(inter, array->vtype);
     
     if (array_type.kind != VariableKind_Array) {
         assert(0);
@@ -311,16 +312,14 @@ void interpret_indexed_assignment(Interpreter* inter, Object* array, i64 index, 
         return;
     }
     
-    Variable* assignment_result = interpret_expresion(inter, assignment);
+    Object* assignment_result = interpret_expresion(inter, assignment);
     
-    if (!var_assignment_is_valid(assignment_result, array_type.array_of)) {
-        report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(inter, assignment_result->vtype), string_from_vtype(inter, array->var->vtype));
+    if (!obj_copy_element_from_object(inter, array, index, assignment_result)) {
+        report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, array->vtype));
         return;
     }
     
-    var_assign_array_element(inter, array->var, index, assignment_result);
-    
-    if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S[%l] = %S"), array->identifier, index, string_from_var(scratch.arena, inter, array->var));
+    if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S[%l] = %S"), array->identifier, index, string_from_obj(scratch.arena, inter, array));
 }
 
 void interpret_variable_definition(Interpreter* inter, OpNode* node0)
@@ -336,7 +335,7 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
     }
     
     OpNode* assignment = node->assignment;
-    Variable* assignment_result = interpret_expresion(inter, assignment);
+    Object* assignment_result = interpret_expresion(inter, assignment);
     
     if (is_unknown(assignment_result)) return;
     
@@ -346,19 +345,15 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
         
         if (type_name.size > 0)
         {
-            b32 is_array = node->is_array;
-            if (is_array) type_name = string_format(scratch.arena, "%S[]", type_name);
-            
-            vtype = -1;
-            foreach(i, inter->vtype_table.count) {
-                if (string_equals(inter->vtype_table[i].name, type_name)) {
-                    vtype = i;
-                }
-            }
+            vtype = vtype_from_name(inter, type_name);
             
             if (vtype <= 0) {
                 report_error(inter->ctx, node->code, STR("Undefined type '%S'"), type_name);
                 return;
+            }
+            
+            if (node->is_array) {
+                vtype = vtype_from_array_dimension(inter, vtype, node->array_dimensions.count);
             }
         }
         else
@@ -372,20 +367,47 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
         }
     }
     
-    Variable* var = var_alloc_generic(inter, vtype);
-    obj = define_object(inter, identifier, var);
-    
-    if (inter->settings.execute)
+    if (node->is_array)
     {
-        if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("%S %S"), string_from_vtype(inter, vtype), obj->identifier);
+        Array<i64> dimensions = array_make<i64>(scratch.arena, node->array_dimensions.count);
         
-        if (is_valid(assignment_result)) {
-            if (!obj_assign(inter, obj, assignment_result)) {
-                report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(inter, assignment_result->vtype), string_from_vtype(inter, obj->var->vtype));
+        b8 initialize_array = false;
+        
+        foreach(i, dimensions.count) {
+            Object* dim = interpret_expresion(inter, node->array_dimensions[i]);
+            if (!is_void(dim) && !is_int(dim)) {
+                report_error(inter->ctx, node->code, "Expecting an integer for the dimensions of the array");
+                return;
+            }
+            dimensions[i] = is_int(dim) ? get_int(dim) : 0;
+            if (dimensions[i] < 0) {
+                report_error(inter->ctx, node->code, "Expecting a positive integer for the dimensions of the array");
                 return;
             }
             
-            if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_var(scratch.arena, inter, obj->var));
+            if (dimensions[i] > 0) initialize_array = true;
+        }
+        
+        
+        if (initialize_array) {
+            assert(is_void(assignment_result));
+            assignment_result = obj_alloc_temp_array_multidimensional(inter, vtype_from_array_base(inter, vtype), dimensions);
+        }
+    }
+    
+    obj = define_object(inter, identifier, vtype);
+    
+    if (inter->settings.execute)
+    {
+        if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("%S %S"), string_from_vtype(scratch.arena, inter, vtype), obj->identifier);
+        
+        if (is_valid(assignment_result)) {
+            if (!obj_copy(inter, obj, assignment_result)) {
+                report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, obj->vtype));
+                return;
+            }
+            
+            if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
         }
     }
 }
@@ -408,6 +430,8 @@ void interpret_variable_assignment(Interpreter* inter, OpNode* node0)
 
 void interpret_array_element_assignment(Interpreter* inter, OpNode* node0)
 {
+    SCRATCH();
+    
     auto node = (OpNode_ArrayElementAssignment*)node0;
     
     Object* array = find_object(inter, node->identifier, true);
@@ -416,24 +440,24 @@ void interpret_array_element_assignment(Interpreter* inter, OpNode* node0)
         return;
     }
     
-    Variable* indexing_var = interpret_expresion(inter, node->indexing_expresion);
+    Object* indexing_obj = interpret_expresion(inter, node->indexing_expresion);
     
-    if (!is_int(indexing_var)) {
+    if (!is_int(indexing_obj)) {
         report_error(inter->ctx, node->code, "Invalid indexing, expecting an Int expresion");
         return;
     }
     
-    VariableType array_vtype = vtype_get(inter, array->var->vtype);
+    VariableType array_vtype = vtype_get(inter, array->vtype);
     
     if (array_vtype.kind != VariableKind_Array) {
-        report_error(inter->ctx, node->code, STR("Can't make indexed assignment to a '%S'"), string_from_vtype(inter, array->var->vtype));
+        report_error(inter->ctx, node->code, "Can't make indexed assignment to a '%S'", string_from_vtype(scratch.arena, inter, array->vtype));
         return;
     }
     
     if (inter->settings.execute)
     {
-        i64 index = get_int(indexing_var);
-        if (index < 0 || index >= array->var->count) {
+        i64 index = get_int(indexing_obj);
+        if (index < 0 || index >= array->array.count) {
             report_error(inter->ctx, node->code, "Index out of bounds");
             return;
         }
@@ -452,7 +476,7 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_IfStatement*)node0;
     
-    Variable* expresion_result = interpret_expresion(inter, node->expresion);
+    Object* expresion_result = interpret_expresion(inter, node->expresion);
     
     if (!is_bool(expresion_result)) {
         report_error(inter->ctx, node->code, STR("If statement expects a Bool"));
@@ -460,7 +484,7 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
     }
     
     if (inter->settings.execute) {
-        if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("if (%S)"), string_from_var(scratch.arena, inter, expresion_result));
+        if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("if (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
         b32 result = get_bool(expresion_result);
         
         push_scope(inter);
@@ -487,7 +511,7 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
     
     while (1)
     {
-        Variable* expresion_result = interpret_expresion(inter, node->expresion);
+        Object* expresion_result = interpret_expresion(inter, node->expresion);
         
         if (!is_bool(expresion_result)) {
             report_error(inter->ctx, node->code, STR("While statement expects a Bool"));
@@ -496,7 +520,7 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
         
         if (inter->settings.execute)
         {
-            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("while (%S)"), string_from_var(scratch.arena, inter, expresion_result));
+            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("while (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
             
             if (!get_bool(expresion_result)) break;
             
@@ -525,7 +549,7 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
     
     while (1)
     {
-        Variable* expresion_result = interpret_expresion(inter, node->condition_expresion);
+        Object* expresion_result = interpret_expresion(inter, node->condition_expresion);
         
         if (!is_bool(expresion_result)) {
             report_error(inter->ctx, node->code, STR("For-statement expects a Bool"));
@@ -534,7 +558,7 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
         
         if (inter->settings.execute)
         {
-            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("for (%S)"), string_from_var(scratch.arena, inter, expresion_result));
+            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("for (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
             
             if (!get_bool(expresion_result)) break;
             
@@ -564,7 +588,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     
     push_scope(inter);
     
-    Variable* array = interpret_expresion(inter, node->expresion);
+    Object* array = interpret_expresion(inter, node->expresion);
     if (is_unknown(array)) return;
     
     VariableType array_type = vtype_get(inter, array->vtype);
@@ -574,27 +598,28 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
         return;
     }
     
-    Object* element = define_object(inter, node->element_name, var_alloc_generic(inter, array_type.array_of));
+    Object* element = define_object(inter, node->element_name, array_type.array_of);
     
     Object* index = NULL;
-    if (node->index_name.size > 0) index = define_object(inter, node->index_name, var_alloc_int(inter, 0));
+    if (node->index_name.size > 0) index = define_object(inter, node->index_name, VType_Int);
     
-    for (i64 i = 0; i < array->count; ++i)
+    for (i64 i = 0; i < array->array.count; ++i)
     {
         if (inter->settings.execute)
         {
-            Variable* value = var_alloc_from_array(inter, array, i);
-            obj_assign(inter, element, value);
+            obj_copy_from_element(inter, element, array, i);
             
             if (index != NULL) {
-                obj_assign(inter, index, var_alloc_int(inter, i));
+                obj_set_int(index, i);
             }
             
-            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_var(scratch.arena, inter, value));
+            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_obj(scratch.arena, inter, element));
             
             push_scope(inter);
             interpret_op(inter, node->content);
             pop_scope(inter);
+            
+            obj_copy_element_from_object(inter, array, i, element);
         }
         else
         {
@@ -609,7 +634,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     pop_scope(inter);
 }
 
-Variable* interpret_function_call(Interpreter* inter, OpNode* node0)
+Object* interpret_function_call(Interpreter* inter, OpNode* node0)
 {
     SCRATCH();
     auto node = (OpNode_FunctionCall*)node0;
@@ -618,38 +643,38 @@ Variable* interpret_function_call(Interpreter* inter, OpNode* node0)
     
     if (fn == NULL) {
         report_error(inter->ctx, node->code, STR("Undefined function '%S'"), node->identifier);
-        return inter->nil_var;
+        return inter->nil_obj;
     }
     
     if (fn->parameter_vtypes.count != node->parameters.count)
     {
         report_error(inter->ctx, node->code, STR("Function '%S' is expecting %u parameters"), node->identifier, fn->parameter_vtypes.count);
-        return inter->nil_var;
+        return inter->nil_obj;
     }
     
-    Array<Variable*> vars = array_make<Variable*>(scratch.arena, fn->parameter_vtypes.count);
-    foreach(i, vars.count) {
-        vars[i] = interpret_expresion(inter, node->parameters[i]);
+    Array<Object*> objects = array_make<Object*>(scratch.arena, fn->parameter_vtypes.count);
+    foreach(i, objects.count) {
+        objects[i] = interpret_expresion(inter, node->parameters[i]);
         
-        if (!var_assignment_is_valid(vars[i], fn->parameter_vtypes[i])) {
-            report_error(inter->ctx, node->code, STR("Function '%S' is expecting '%S' as a parameter %u"), node->identifier, string_from_vtype(inter, fn->parameter_vtypes[i]), i + 1);
-            return inter->nil_var;
+        if (objects[i]->vtype != fn->parameter_vtypes[i]) {
+            report_error(inter->ctx, node->code, "Function '%S' is expecting '%S' as a parameter %u", node->identifier, string_from_vtype(scratch.arena, inter, fn->parameter_vtypes[i]), i + 1);
+            return inter->nil_obj;
         }
     }
     
     if (!inter->settings.execute) {
-        return var_alloc_generic(inter, fn->return_vtype);
+        return obj_alloc_temp(inter, fn->return_vtype);
     }
     
-    Variable* return_var = fn->intrinsic_fn(inter, node, vars);
+    Object* return_obj = fn->intrinsic_fn(inter, node, objects);
     
     if (inter->settings.print_execution) {
-        String return_string = string_from_var(scratch.arena, inter, return_var);
+        String return_string = string_from_obj(scratch.arena, inter, return_obj);
         String parameters = STR("TODO");
         report_info(inter->ctx, node->code, STR("%S(%S) => %S"), node->identifier, parameters, return_string);
     }
     
-    return return_var;
+    return return_obj;
 }
 
 internal_fn void interpret_block(Interpreter* inter, OpNode* block0)
@@ -723,12 +748,6 @@ internal_fn void define_vtype_table(Interpreter* inter)
         t.vtype = list.count;
         assert(VType_Int == t.vtype);
         array_add(&list, t);
-        
-        t.name = STR("Int[]");
-        t.kind = VariableKind_Array;
-        t.array_of = VType_Int;
-        t.vtype = list.count;
-        array_add(&list, t);
     }
     
     // Bool
@@ -739,12 +758,6 @@ internal_fn void define_vtype_table(Interpreter* inter)
         t.size = sizeof(b8);
         t.vtype = list.count;
         assert(VType_Bool == t.vtype);
-        array_add(&list, t);
-        
-        t.name = STR("Bool[]");
-        t.kind = VariableKind_Array;
-        t.array_of = VType_Bool;
-        t.vtype = list.count;
         array_add(&list, t);
     }
     
@@ -757,40 +770,47 @@ internal_fn void define_vtype_table(Interpreter* inter)
         t.vtype = list.count;
         assert(VType_String == t.vtype);
         array_add(&list, t);
-        
-        t.name = STR("String[]");
-        t.kind = VariableKind_Array;
-        t.array_of = VType_String;
-        t.vtype = list.count;
-        array_add(&list, t);
     }
     
     inter->vtype_table = array_from_pooled_array(inter->ctx->static_arena, list);
+    
+    foreach(i, inter->vtype_table.count) {
+        VariableType t = inter->vtype_table[i];
+        assert(t.kind != VariableKind_Array);
+    }
 }
 
 internal_fn void define_globals(Interpreter* inter)
 {
-    define_object(inter, STR("context_script_dir"), var_alloc_string(inter, inter->ctx->script_dir));
-    define_object(inter, STR("context_caller_dir"), var_alloc_string(inter, inter->ctx->caller_dir));
-    inter->cd_obj = define_object(inter, STR("cd"), var_alloc_string(inter, inter->ctx->script_dir));
+    Object* obj;
+    
+    obj = define_object(inter, STR("context_script_dir"), VType_String);
+    obj_set_string(inter, obj, inter->ctx->script_dir);
+    
+    obj = define_object(inter, STR("context_caller_dir"), VType_String);
+    obj_set_string(inter, obj, inter->ctx->caller_dir);
+    
+    inter->cd_obj = define_object(inter, STR("cd"), VType_String);
+    obj_set_string(inter, inter->cd_obj, inter->ctx->script_dir);
     
     // Args
     {
         Array<ProgramArg> args = inter->ctx->args;
-        Variable* array = var_alloc_array(inter, VType_StringArray, args.count);
+        Object* array = obj_alloc_temp_array(inter, VType_String, args.count);
         foreach(i, args.count) {
-            Variable* var = var_alloc_string(inter, args[i].name);
-            var_assign_array_element(inter, array, i, var);
+            Object* element = obj_alloc_temp_string(inter, args[i].name);
+            obj_copy_element_from_object(inter, array, i, element);
         }
         
-        Object* obj = define_object(inter, STR("context_args"), array);
+        obj = define_object(inter, STR("context_args"), VType_StringArray);
+        obj_copy(inter, obj, array);
     }
     
-    inter->void_var = arena_push_struct<Variable>(inter->ctx->static_arena);
-    inter->void_var->vtype = VType_Void;
+    inter->void_obj = arena_push_struct<Object>(inter->ctx->static_arena);
+    inter->void_obj->vtype = VType_Void;
     
-    inter->nil_var = arena_push_struct<Variable>(inter->ctx->static_arena);
-    inter->nil_var->vtype = VType_Unknown;
+    inter->nil_obj = arena_push_struct<Object>(inter->ctx->static_arena);
+    inter->nil_obj->vtype = VType_Unknown;
 }
 
 Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* inter);
@@ -818,173 +838,344 @@ void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings)
 
 VariableType vtype_get(Interpreter* inter, i32 vtype)
 {
-    if (vtype < 0 || vtype >= inter->vtype_table.count) {
+    u32 index, dim;
+    decode_vtype(vtype, &index, &dim);
+    
+    if (vtype < 0 || index >= inter->vtype_table.count) {
         VariableType t{};
         t.name = STR("Unknown");
         t.kind = VariableKind_Unknown;
         return t;
     }
-    return inter->vtype_table[vtype];
+    
+    VariableType t = inter->vtype_table[index];
+    
+    if (dim > 0) {
+        t.vtype = vtype;
+        t.kind = VariableKind_Array;
+        t.array_of = vtype_from_array_element(inter, vtype);
+    }
+    
+    return t;
 }
 
-i32 vtype_from_array_element(Interpreter* inter, i32 vtype)
+i32 vtype_from_name(Interpreter* inter, String name)
 {
     foreach(i, inter->vtype_table.count) {
-        if (inter->vtype_table[i].array_of == vtype) return i;
+        if (string_equals(inter->vtype_table[i].name, name)) {
+            return i;
+        }
     }
     return -1;
 }
 
-Variable* var_alloc_generic(Interpreter* inter, i32 vtype)
+i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension)
 {
-    VariableType type = vtype_get(inter, vtype);
-    if (type.kind == VariableKind_Primitive) return var_alloc_primitive(inter, vtype);
-    if (type.kind == VariableKind_Array) return var_alloc_array(inter, vtype, 0);
-    return inter->nil_var;
+    if (vtype < 0 || vtype >= inter->vtype_table.count) return -1;
+    
+    u32 index, dim;
+    decode_vtype(vtype, &index, &dim);
+    return encode_vtype(index, dim + dimension);
 }
 
-Variable* var_alloc_primitive(Interpreter* inter, i32 vtype)
+i32 vtype_from_array_element(Interpreter* inter, i32 vtype)
 {
-    VariableType type = vtype_get(inter, vtype);
-    if (type.kind != VariableKind_Primitive) {
-        assert(0);
-        return inter->nil_var;
+    u32 index, dim;
+    decode_vtype(vtype, &index, &dim);
+    
+    if (dim == 0) return -1;
+    return encode_vtype(index, dim - 1);
+}
+
+i32 vtype_from_array_base(Interpreter* inter, i32 vtype)
+{
+    if (vtype < 0) return -1;
+    
+    u32 index, dim;
+    decode_vtype(vtype, &index, &dim);
+    
+    return index;
+}
+
+u32 vtype_get_stride(i32 vtype) {
+    if (vtype == VType_Int) return sizeof(ObjectMemory_Int);
+    if (vtype == VType_Bool) return sizeof(ObjectMemory_Bool);
+    if (vtype == VType_String) return sizeof(ObjectMemory_String);
+    
+    u32 dims;
+    decode_vtype(vtype, NULL, &dims);
+    if (dims > 0) return sizeof(ObjectMemory_Array);
+    
+    assert(0);
+    return 0;
+}
+
+i32 encode_vtype(u32 index, u32 dimensions) {
+    u32 vtype = index;
+    vtype |= dimensions << 24;
+    return vtype;
+}
+
+void decode_vtype(i32 vtype, u32* _index, u32* _dimensions) {
+    if (vtype < 0) {
+        if (_index != NULL) *_index = u32_max;
+        if (_dimensions != NULL) *_dimensions = 0;
     }
-    
-    Variable* var = arena_push_struct<Variable>(inter->ctx->static_arena);
-    var->vtype = vtype;
-    var->data = arena_push(inter->ctx->static_arena, type.size);
-    
-    return var;
-}
-
-Variable* var_alloc_array(Interpreter* inter, i32 vtype, u32 length)
-{
-    VariableType type = vtype_get(inter, vtype);
-    if (type.kind != VariableKind_Array) {
-        assert(0);
-        return inter->nil_var;
+    else {
+        if (_index != NULL) *_index = vtype & 0x00FFFFFF;
+        if (_dimensions != NULL) *_dimensions = vtype >> 24;
     }
-    
-    Variable* var = arena_push_struct<Variable>(inter->ctx->static_arena);
-    var->vtype = vtype;
-    var->count = length;
-    var->data = arena_push(inter->ctx->static_arena, type.size * var->count);
-    
-    return var;
 }
 
-Variable* var_copy(Interpreter* inter, const Variable* src)
+internal_fn ObjectMemory_String alloc_string_memory(Interpreter* inter, String value)
 {
-    // TODO(Jose): // TODO(Jose): // TODO(Jose): 
-    // TODO(Jose): Variable* dst = var_alloc(inter, src->vtype);
-    // TODO(Jose): VariableType type = vtype_get(inter, src->vtype);
-    // TODO(Jose): memory_copy(dst->data, src->data, type.size);
-    // TODO(Jose): Copy String and Array external memory
-    // TODO(Jose): return dst;
-    return (Variable*)src;// TODO(Jose): 
+    ObjectMemory_String dst;
+    dst.size = value.size;
+    dst.data = (char*)arena_push(inter->ctx->static_arena, value.size);
+    memory_copy(dst.data, value.data, value.size);
+    return dst;
 }
 
-Variable* var_alloc_int(Interpreter* inter, i64 v) {
-    Variable* var = var_alloc_primitive(inter, VType_Int);
-    get_int(var) = v;
-    return var;
-}
-Variable* var_alloc_bool(Interpreter* inter, b8 v) {
-    Variable* var = var_alloc_primitive(inter, VType_Bool);
-    get_bool(var) = v;
-    return var;
-}
-Variable* var_alloc_string(Interpreter* inter, String v) {
-    // TODO(Jose): Care about memory used by strings!!
-    Variable* var = var_alloc_primitive(inter, VType_String);
-    get_string(var) = string_copy(inter->ctx->static_arena, v);
-    return var;
-}
-
-Variable* var_alloc_from_array(Interpreter* inter, Variable* array, i64 index)
+internal_fn ObjectMemory_Array alloc_array_memory(Interpreter* inter, i64 count, i32 stride)
 {
-    if (index < 0 || index >= array->count) {
-        assert(0);
-        return inter->nil_var;
-    }
+    ObjectMemory_Array dst;
+    dst.count = count;
+    dst.data = arena_push(inter->ctx->static_arena, count * stride);
+    return dst;
+}
+
+Object* obj_alloc_temp(Interpreter* inter, i32 vtype)
+{
+    Object* obj = arena_push_struct<Object>(inter->ctx->static_arena);
+    obj->identifier = STR("TEMP");
+    obj->vtype = vtype;
+    obj->scope = inter->scope;
+    return obj;
+}
+
+Object* obj_alloc_temp_int(Interpreter* inter, i64 value)
+{
+    Object* obj = obj_alloc_temp(inter, VType_Int);
+    obj->integer.value = value;
+    return obj;
+}
+
+Object* obj_alloc_temp_bool(Interpreter* inter, b32 value)
+{
+    Object* obj = obj_alloc_temp(inter, VType_Bool);
+    obj->boolean.value = value;
+    return obj;
+}
+
+Object* obj_alloc_temp_string(Interpreter* inter, String value)
+{
+    Object* obj = obj_alloc_temp(inter, VType_String);
+    obj_set_string(inter, obj, value);
+    return obj;
+}
+
+Object* obj_alloc_temp_array(Interpreter* inter, i32 element_vtype, i64 count)
+{
+    i32 vtype = vtype_from_array_dimension(inter, element_vtype, 1);
+    Object* obj = obj_alloc_temp(inter, vtype);
     
-    VariableType array_type = vtype_get(inter, array->vtype);
-    if (array_type.kind != VariableKind_Array) {
-        assert(0);
-        return inter->nil_var;
-    }
+    u32 stride = vtype_get_stride(element_vtype);
+    obj->array = alloc_array_memory(inter, count, stride);
+    return obj;
+}
+
+ObjectMemory_Array alloc_multidimensional_array_memory(Interpreter* inter, i32 element_vtype, Array<i64> dimensions)
+{
+    i32 vtype = vtype_from_array_dimension(inter, element_vtype, dimensions.count);
+    i32 array_of = vtype_from_array_element(inter, vtype);
     
-    VariableType type = vtype_get(inter, array_type.array_of);
+    i64 count = dimensions[dimensions.count - 1];
+    u32 stride = vtype_get_stride(array_of);
+    ObjectMemory_Array mem = alloc_array_memory(inter, count, stride);
     
-    if (type.kind == VariableKind_Primitive)
+    if (dimensions.count > 1)
     {
-        Variable* var = var_alloc_primitive(inter, array_type.array_of);
+        ObjectMemory_Array* elements = (ObjectMemory_Array*)mem.data;
+        for (i64 i = 0; i < count; ++i) {
+            ObjectMemory_Array* element = elements + i;
+            *element = alloc_multidimensional_array_memory(inter, element_vtype, array_subarray(dimensions, 0, dimensions.count - 1));
+        }
+    }
+    
+    return mem;
+}
+
+
+Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions)
+{
+    i32 vtype = vtype_from_array_dimension(inter, element_vtype, dimensions.count);
+    Object* obj = obj_alloc_temp(inter, vtype);
+    
+    i32 array_of = vtype_from_array_element(inter, vtype);
+    obj->array = alloc_multidimensional_array_memory(inter, element_vtype, dimensions);
+    return obj;
+}
+
+ObjectMemory* obj_get_data(Object* obj) {
+    return (ObjectMemory*)&obj->integer;
+}
+
+ObjectMemory obj_copy_data(Interpreter* inter, Object* obj)
+{
+    return obj_copy_data(inter, *obj_get_data(obj), obj->vtype);
+}
+ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype)
+{
+    if (vtype == VType_Int || vtype == VType_Bool) return src;
+    
+    if (vtype == VType_String) {
+        String str;
+        str.data = src.string.data;
+        str.size = src.string.size;
         
-        // TODO(Jose): Safer
-        // TODO(Jose): Care about memory used by strings!!
-        u64 offset = array_type.size * index;
-        memory_copy(var->data, (u8*)array->data + offset, array_type.size);
-        return var;
+        ObjectMemory res{};
+        res.string = alloc_string_memory(inter, str);
+        return res;
+    }
+    
+    if (is_array(vtype))
+    {
+        VariableType array_vtype = vtype_get(inter, vtype);
+        u32 stride = vtype_get_stride(array_vtype.array_of);
+        ObjectMemory_Array dst = alloc_array_memory(inter, src.array.count, stride);
+        foreach(i, src.array.count) {
+            ObjectMemory* dst_ptr = (ObjectMemory*)((u8*)dst.data + stride * i);
+            ObjectMemory* src_ptr = (ObjectMemory*)((u8*)src.array.data + stride * i);
+            ObjectMemory src = obj_copy_data(inter, *src_ptr, array_vtype.array_of);
+            memory_copy(dst_ptr, &src, stride);
+        }
+        
+        ObjectMemory res{};
+        res.array = dst;
+        return res;
     }
     
     assert(0);
-    return inter->nil_var;
+    return {};
 }
 
-void var_assign_array_element(Interpreter* inter, Variable* array, i64 index, Variable* src)
+void obj_copy_element_from_element(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src_array, i64 src_index)
 {
-    if (index < 0 || index >= array->count) {
+    if (!is_array(dst_array) || !is_array(src_array)) {
         assert(0);
         return;
     }
     
-    VariableType array_type = vtype_get(inter, array->vtype);
-    if (array_type.kind != VariableKind_Array) {
+    if (dst_array->vtype != src_array->vtype) {
         assert(0);
         return;
     }
     
-    if (src->vtype != array_type.array_of) {
-        assert(0);
-        return;
-    }
+    VariableType array_type = vtype_get(inter, dst_array->vtype);
+    u32 stride = vtype_get_stride(array_type.array_of);
     
-    VariableType type = vtype_get(inter, array_type.array_of);
+    // TODO(Jose): FREE MEMORY HERE
     
-    if (type.kind == VariableKind_Primitive) {
-        void* dst = (u8*)array->data + index * type.size;
-        memory_copy(dst, src->data, type.size);
-    }
-    else {
-        assert(0);
-        return;
-    }
+    void* dst_data = (u8*)dst_array->array.data + stride * dst_index;
+    ObjectMemory* src_data = (ObjectMemory*)((u8*)src_array->array.data + stride * src_index);
+    ObjectMemory res = obj_copy_data(inter, *src_data, array_type.array_of);
+    memory_copy(dst_data, &res, stride);
 }
 
-b32 var_assignment_is_valid(const Variable* t0, const Variable* t1)
+b32 obj_copy_element_from_object(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src)
 {
-    if (!is_valid(t0)) return false;
-    if (!is_valid(t1)) return false;
-    return var_assignment_is_valid(t0, t1->vtype);
+    if (!is_array(dst_array)) {
+        assert(0);
+        return false;
+    }
+    
+    VariableType array_type = vtype_get(inter, dst_array->vtype);
+    
+    if (array_type.array_of != src->vtype) {
+        assert(0);
+        return false;
+    }
+    
+    u32 stride = vtype_get_stride(array_type.array_of);
+    
+    // TODO(Jose): FREE MEMORY HERE
+    
+    void* dst_data = (u8*)dst_array->array.data + stride * dst_index;
+    ObjectMemory res = obj_copy_data(inter, src);
+    memory_copy(dst_data, &res, stride);
+    return true;
 }
 
-b32 var_assignment_is_valid(const Variable* t0, i32 vtype)
+void obj_copy_from_element(Interpreter* inter, Object* dst, Object* src_array, i64 src_index)
 {
-    return t0->vtype == vtype;
+    if (!is_array(src_array)) {
+        assert(0);
+        return;
+    }
+    
+    VariableType array_type = vtype_get(inter, src_array->vtype);
+    
+    if (array_type.array_of != dst->vtype) {
+        assert(0);
+        return;
+    }
+    
+    u32 stride = vtype_get_stride(array_type.array_of);
+    
+    // TODO(Jose): FREE MEMORY HERE
+    
+    ObjectMemory* element_data = (ObjectMemory*)((u8*)src_array->array.data + stride * src_index);
+    ObjectMemory* dst_memory = obj_get_data(dst);
+    *dst_memory = obj_copy_data(inter, *element_data, array_type.array_of);
 }
 
-String string_from_var(Arena* arena, Interpreter* inter, Variable* var)
+b32 obj_copy(Interpreter* inter, Object* dst, Object* src)
+{
+    if (dst->vtype != src->vtype) return false;
+    
+    ObjectMemory* dst_memory = obj_get_data(dst);
+    *dst_memory = obj_copy_data(inter, src);
+    
+    return true;
+}
+
+void obj_set_int(Object* dst, i64 value)
+{
+    if (dst->vtype != VType_Int) {
+        assert(0);
+        return;
+    }
+    dst->integer.value = value;
+}
+
+void obj_set_bool(Object* dst, b32 value)
+{
+    if (dst->vtype != VType_Bool) {
+        assert(0);
+        return;
+    }
+    dst->boolean.value = value;
+}
+
+void obj_set_string(Interpreter* inter, Object* dst, String value)
+{
+    // TODO(Jose): FREE MEMORY HERE
+    
+    dst->string = alloc_string_memory(inter, value);
+}
+
+
+String string_from_obj(Arena* arena, Interpreter* inter, Object* obj)
 {
     SCRATCH(arena);
     
-    if (is_string(var)) return get_string(var);
-    if (is_int(var)) { return string_format(arena, "%l", get_int(var)); }
-    if (is_bool(var)) { return STR(get_bool(var) ? "true" : "false"); }
-    if (var->vtype == VType_Void) { return STR("void"); }
-    if (var->vtype == VType_Unknown) { return STR("unknown"); }
+    if (is_string(obj)) return get_string(obj);
+    if (is_int(obj)) { return string_format(arena, "%l", get_int(obj)); }
+    if (is_bool(obj)) { return STR(get_bool(obj) ? "true" : "false"); }
+    if (obj->vtype == VType_Void) { return STR("void"); }
+    if (obj->vtype == VType_Unknown) { return STR("unknown"); }
     
-    VariableType type = vtype_get(inter, var->vtype);
+    VariableType type = vtype_get(inter, obj->vtype);
     
     if (type.kind == VariableKind_Array)
     {
@@ -992,11 +1183,11 @@ String string_from_var(Arena* arena, Interpreter* inter, Variable* var)
         
         append(&builder, STR("{ "));
         
-        // TODO(Jose): Use scratch arena for allocating vars
-        foreach(i, var->count) {
-            Variable* element = var_alloc_from_array(inter, var, i);
-            append(&builder, string_from_var(scratch.arena, inter, element));
-            if (i < var->count - 1) append(&builder, ", ");
+        Object* element = obj_alloc_temp(inter, type.array_of);
+        foreach(i, obj->array.count) {
+            obj_copy_from_element(inter, element, obj, i);
+            append(&builder, string_from_obj(scratch.arena, inter, element));
+            if (i < obj->array.count - 1) append(&builder, ", ");
         }
         
         append(&builder, STR(" }"));
@@ -1008,20 +1199,29 @@ String string_from_var(Arena* arena, Interpreter* inter, Variable* var)
     return STR("?");
 }
 
-String string_from_vtype(Interpreter* inter, i32 vtype) {
+String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype)
+{
     String name = vtype_get(inter, vtype).name;
     assert(name.size);
+    
+    u32 dims;
+    decode_vtype(vtype, NULL, &dims);
+    
+    if (dims > 0)
+    {
+        String array_name;
+        array_name.size = name.size + dims * 2;
+        array_name.data = (char*)arena_push(arena, array_name.size + 1);
+        foreach(i, name.size) array_name[i] = name[i];
+        foreach(i, dims) {
+            u64 index = name.size + i * 2;
+            array_name[index + 0] = '[';
+            array_name[index + 1] = ']';
+        }
+        name = array_name;
+    }
+    
     return name;
-}
-
-b32 obj_assign(Interpreter* inter, Object* obj, const Variable* src)
-{
-    if (!var_assignment_is_valid(obj->var, src)) return false;
-    
-    assert(obj->var->vtype == src->vtype);
-    obj->var = var_copy(inter, src);
-    
-    return true;
 }
 
 i32 push_scope(Interpreter* inter) {
@@ -1065,7 +1265,7 @@ Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes)
     return match;
 }
 
-Object* define_object(Interpreter* inter, String identifier, Variable* var)
+Object* define_object(Interpreter* inter, String identifier, i32 vtype)
 {
     assert(find_object(inter, identifier, false) == NULL);
     assert(identifier.size);
@@ -1078,13 +1278,15 @@ Object* define_object(Interpreter* inter, String identifier, Variable* var)
     
     if (obj == NULL) obj = array_add(&inter->objects);
     obj->identifier = identifier;
-    obj->var = var;
+    obj->vtype = vtype;
     obj->scope = inter->scope;
+    
     return obj;
 }
 
 void undefine_object(Interpreter* inter, Object* obj) {
-    obj->identifier = {};
+    // TODO(Jose): FREE MEMORY HERE
+    *obj = {};
 }
 
 FunctionDefinition* find_function(Interpreter* inter, String identifier)
@@ -1134,7 +1336,7 @@ String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLo
                     report_error(inter->ctx, code, STR("Undefined object '%S'"), identifier);
                 }
                 else {
-                    append(&builder, string_from_var(scratch.arena, inter, obj->var));
+                    append(&builder, string_from_obj(scratch.arena, inter, obj));
                 }
                 
                 last_variable_index = cursor;
@@ -1154,7 +1356,7 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path)
     SCRATCH(arena);
     
     Object* cd_obj = inter->cd_obj;
-    if (!os_path_is_absolute(path)) path = path_resolve(scratch.arena, path_append(scratch.arena, get_string(cd_obj->var), path));
+    if (!os_path_is_absolute(path)) path = path_resolve(scratch.arena, path_append(scratch.arena, get_string(cd_obj), path));
     return string_copy(arena, path);
 }
 

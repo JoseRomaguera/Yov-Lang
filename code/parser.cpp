@@ -53,7 +53,9 @@ Token peek_token(Parser* parser, i32 offset = 0)
     i32 index = (i32)parser->token_index + offset;
     if (index < 0 || index >= parser->tokens.count) {
         assert(0);
-        return {};
+        Token t{};
+        t.kind = TokenKind_NextSentence;
+        return t;
     }
     return parser->tokens[index];
 }
@@ -75,6 +77,17 @@ Token extract_token(Parser* parser)
         return {};
     }
     return parser->tokens[parser->token_index++];
+}
+
+Array<Token> extract_tokens(Parser* parser, u32 count)
+{
+    if (parser->token_index + count >= parser->tokens.count) {
+        assert(0);
+        return {};
+    }
+    Array<Token> tokens = array_subarray(parser->tokens, parser->token_index, count);
+    parser->token_index += count;
+    return tokens;
 }
 
 Array<Token> extract_sentence(Parser* parser, TokenKind separator, b32 require_separator)
@@ -220,14 +233,14 @@ inline_fn b32 check_couple(Array<Token> tokens, u32 open_index, u32 close_index,
 
 OpNode* process_expresion(Parser* parser, Array<Token> tokens)
 {
+    if (tokens.count == 0) return alloc_node(parser, OpKind_None, {});
+    
     // Remove parentheses around
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
     {
         b32 couple = check_couple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
         if (couple) tokens = array_subarray(tokens, 1, tokens.count - 2);
     }
-    
-    if (tokens.count == 0) return alloc_node(parser, OpKind_None, tokens[0].code);
     
     // Array
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenBrace && tokens[tokens.count - 1].kind == TokenKind_CloseBrace)
@@ -678,6 +691,7 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
     
     String type_identifier = STR("");
     b32 type_is_array = false;
+    Array<OpNode*> array_dimensions{};
     
     Token type_or_assignment_token = peek_token(parser);
     
@@ -688,17 +702,57 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
         
         skip_tokens(parser, 1);
         Token open_bracket = peek_token(parser, 0);
-        Token close_bracket = peek_token(parser, 1);
         
         if (open_bracket.kind == TokenKind_OpenBracket)
         {
-            if (close_bracket.kind != TokenKind_CloseBracket) {
+            type_is_array = true;
+            
+            u32 index = 0;
+            i32 depth = 0;
+            u32 dimensions = 0;
+            while (1) {
+                Token t = peek_token(parser, index);
+                if (t.kind == TokenKind_OpenBracket) {
+                    depth++;
+                    dimensions++;
+                }
+                else if (t.kind == TokenKind_CloseBracket) depth--;
+                else if (t.kind == TokenKind_NextSentence) break;
+                else if (t.kind == TokenKind_Assignment) break;
+                index++;
+            }
+            
+            if (depth > 0) {
                 report_error(parser->ctx, starting_token.code, "Missing closing bracket");
                 return alloc_node(parser, OpKind_Unknown, starting_token.code);
             }
+            if (depth < 0) {
+                report_error(parser->ctx, starting_token.code, "Missing open bracket");
+                return alloc_node(parser, OpKind_Unknown, starting_token.code);
+            }
             
-            type_is_array = true;
-            skip_tokens(parser, 2);
+            Array<Token> array_tokens = extract_tokens(parser, index);
+            
+            // Check array dimensions
+            {
+                array_dimensions = array_make<OpNode*>(parser->ctx->static_arena, dimensions);
+                
+                u32 dimension = 0;
+                u32 last_dimension_index = 0;
+                
+                foreach(i, array_tokens.count) {
+                    Token t = array_tokens[i];
+                    if (t.kind == TokenKind_CloseBracket)
+                    {
+                        Array<Token> dimension_tokens = array_subarray(array_tokens, last_dimension_index + 1, i - (last_dimension_index + 1));
+                        array_dimensions[dimension] = process_expresion(parser, dimension_tokens);
+                        
+                        last_dimension_index = i + 1;
+                        dimension++;
+                        continue;
+                    }
+                }
+            }
         }
     }
     else {
@@ -719,6 +773,13 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
         
         Array<Token> assignment_tokens = extract_sentence(parser, TokenKind_NextSentence, false);
         assignment_node = process_expresion(parser, assignment_tokens);
+        
+        foreach(i, array_dimensions.count) {
+            if (array_dimensions[i]->kind != OpKind_None) {
+                report_error(parser->ctx, starting_token.code, "Redundant array dimensions definition before assignment");
+                return alloc_node(parser, OpKind_Unknown, starting_token.code);
+            }
+        }
     }
     else {
         assignment_node = alloc_node(parser, OpKind_None, starting_token.code);
@@ -729,6 +790,7 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
     node->type = type_identifier;
     node->identifier = identifier_token.value;
     node->is_array = (b8)type_is_array;
+    node->array_dimensions = array_dimensions;
     
     return node;
 }

@@ -2,19 +2,19 @@
 
 //- CORE 
 
-internal_fn Variable* intrinsic__print(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__print(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     print_info("%S", get_string(vars[0]));
-    return inter->void_var;
+    return inter->void_obj;
 }
 
-internal_fn Variable* intrinsic__println(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__println(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     print_info("%S\n", get_string(vars[0]));
-    return inter->void_var;
+    return inter->void_obj;
 }
 
-internal_fn Variable* intrinsic__call(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__call(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     
@@ -22,16 +22,16 @@ internal_fn Variable* intrinsic__call(Interpreter* inter, OpNode* node, Array<Va
     String command_line = get_string(vars[0]);
     
     if (user_assertion(inter, string_format(scratch.arena, "Call:\n%S", command_line))) {
-        result = os_call(get_string(inter->cd_obj->var), command_line);
+        result = os_call(get_string(inter->cd_obj), command_line);
     }
     
-    return var_alloc_int(inter, result);
+    return obj_alloc_temp_int(inter, result);
 }
 
-internal_fn Variable* intrinsic__exit(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__exit(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     inter->ctx->error_count++;// TODO(Jose): Weird
-    return inter->void_var;
+    return inter->void_obj;
 }
 
 //- ARGS 
@@ -67,7 +67,7 @@ internal_fn b32 i64_from_arg(String arg, i64* v)
     return false;
 }
 
-internal_fn Variable* intrinsic__arg_int(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__arg_int(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -83,10 +83,10 @@ internal_fn Variable* intrinsic__arg_int(Interpreter* inter, OpNode* node, Array
         }
     }
     
-    return var_alloc_int(inter, value);
+    return obj_alloc_temp_int(inter, value);
 }
 
-internal_fn Variable* intrinsic__arg_bool(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__arg_bool(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -105,10 +105,10 @@ internal_fn Variable* intrinsic__arg_bool(Interpreter* inter, OpNode* node, Arra
         value = int_value != 0;
     }
     
-    return var_alloc_bool(inter, (b8)value);
+    return obj_alloc_temp_bool(inter, (b8)value);
 }
 
-internal_fn Variable* intrinsic__arg_string(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__arg_string(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -118,17 +118,17 @@ internal_fn Variable* intrinsic__arg_string(Interpreter* inter, OpNode* node, Ar
     if (arg == NULL) value = get_string(vars[1]);
     else value = arg->value;
     
-    return var_alloc_string(inter, value);
+    return obj_alloc_temp_string(inter, value);
 }
 
-internal_fn Variable* intrinsic__arg_exists(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__arg_exists(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
-    return var_alloc_bool(inter, arg != NULL);
+    return obj_alloc_temp_bool(inter, arg != NULL);
 }
 
-internal_fn Variable* intrinsic__arg_flag(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__arg_flag(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -142,20 +142,20 @@ internal_fn Variable* intrinsic__arg_flag(Interpreter* inter, OpNode* node, Arra
         else res = true;
     }
     
-    return var_alloc_bool(inter, (b8)res);
+    return obj_alloc_temp_bool(inter, (b8)res);
 }
 
 //- MISC 
 
-internal_fn Variable* intrinsic__ask_yesno(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__ask_yesno(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     String content = get_string(vars[0]);
     
     b32 result = os_ask_yesno(STR("Ask"), content);
-    return var_alloc_bool(inter, (b8)result);
+    return obj_alloc_temp_bool(inter, (b8)result);
 }
 
-internal_fn Variable* intrinsic__set_cd(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__set_cd(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     
@@ -163,18 +163,17 @@ internal_fn Variable* intrinsic__set_cd(Interpreter* inter, OpNode* node, Array<
     String path = get_string(vars[0]);
     
     if (os_path_is_absolute(path)) {
-        obj_assign(inter, obj, vars[0]);
-        return inter->void_var;
+        obj_copy(inter, obj, vars[0]);
+        return inter->void_obj;
     }
     
-    String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(obj->var), path));
-    Variable* new_cd = var_alloc_string(inter, res);
-    obj_assign(inter, obj, new_cd);
+    String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(obj), path));
+    obj_set_string(inter, obj, res);
     
-    return inter->void_var;
+    return inter->void_obj;
 }
 
-internal_fn Variable* intrinsic__create_folder(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__create_folder(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     
@@ -186,10 +185,10 @@ internal_fn Variable* intrinsic__create_folder(Interpreter* inter, OpNode* node,
         result = os_folder_create(path, recursive);
     }
     
-    return var_alloc_bool(inter, (b8)result);
+    return obj_alloc_temp_bool(inter, (b8)result);
 }
 
-internal_fn Variable* intrinsic__copy_file(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__copy_file(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     
@@ -200,14 +199,14 @@ internal_fn Variable* intrinsic__copy_file(Interpreter* inter, OpNode* node, Arr
         os_copy_file(dst, src, true);
     }
     
-    return inter->void_var;
+    return inter->void_obj;
 }
 
-internal_fn Variable* intrinsic__path_resolve(Interpreter* inter, OpNode* node, Array<Variable*> vars)
+internal_fn Object* intrinsic__path_resolve(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
     SCRATCH();
     String res = path_resolve(scratch.arena, get_string(vars[0]));
-    return var_alloc_string(inter, res);
+    return obj_alloc_temp_string(inter, res);
 }
 
 FunctionDefinition make_intrinsic_function(Arena* arena, String identifier, i32 return_vtype, Array<i32> parameters, IntrinsicFunction* intrinsic)
