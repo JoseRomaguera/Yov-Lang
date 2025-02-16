@@ -211,6 +211,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
     if (c0 == '-' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Substraction, 2);
     if (c0 == '*' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Multiplication, 2);
     if (c0 == '/' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Division, 2);
+    if (c0 == '%' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Modulo, 2);
     
     if (c0 == '=' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Equals, 2);
     if (c0 == '!' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_NotEquals, 2);
@@ -227,8 +228,9 @@ inline_fn Token extract_next_token(Lexer* lexer)
     
     if (c0 == '+') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Addition, 1);
     if (c0 == '-') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Substraction, 1);
-    if (c0 == '/') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Division, 1);
     if (c0 == '*') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Multiplication, 1);
+    if (c0 == '/') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Division, 1);
+    if (c0 == '%') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Modulo, 1);
     
     if (c0 == '!') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_LogicalNot, 1);
     

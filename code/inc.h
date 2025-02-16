@@ -313,6 +313,7 @@ enum BinaryOperator {
     BinaryOperator_Substraction,
     BinaryOperator_Multiplication,
     BinaryOperator_Division,
+    BinaryOperator_Modulo,
     
     BinaryOperator_LogicalNot,
     BinaryOperator_LogicalOr,

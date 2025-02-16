@@ -385,6 +385,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                     else if (token.binary_operator == BinaryOperator_Substraction) preference = addition_preference;
                     else if (token.binary_operator == BinaryOperator_Multiplication) preference = multiplication_preference;
                     else if (token.binary_operator == BinaryOperator_Division) preference = multiplication_preference;
+                    else if (token.binary_operator == BinaryOperator_Modulo) preference = multiplication_preference;
                     else if (token.binary_operator == BinaryOperator_LogicalNot) preference = logical_preference;
                     else if (token.binary_operator == BinaryOperator_LogicalOr) preference = logical_preference;
                     else if (token.binary_operator == BinaryOperator_LogicalAnd) preference = logical_preference;
