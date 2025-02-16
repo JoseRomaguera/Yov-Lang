@@ -177,9 +177,17 @@ inline_fn Token extract_next_token(Lexer* lexer)
     }
     
     if (c0 == '"') {
+        b32 ignore_next = false;
         u64 cursor = lexer->cursor + 1;
         while (cursor < lexer->text.size) {
             u32 codepoint = string_get_codepoint(lexer->text, &cursor);
+            
+            if (ignore_next) {
+                ignore_next = false;
+                continue;
+            }
+            
+            if (codepoint == '\\') ignore_next = true;
             if (codepoint == '"') break;
         }
         return extract_dynamic_token(lexer, TokenKind_StringLiteral, cursor - lexer->cursor);

@@ -278,12 +278,12 @@ void main()
                 print_info("Temp Memory: %u\n", temp_memory);
                 print_info("Total Memory: %u\n", total_memory);
                 
-                if (1) {
+                if (0) {
                     print_info(STR("\n// TOKENS\n"));
                     log_tokens(tokens);
                     print_info("\n\n");
                 }
-                if (1) {
+                if (0) {
                     print_info(STR("// AST\n"));
                     log_ast(ast, 0);
                     print_info("\n\n");

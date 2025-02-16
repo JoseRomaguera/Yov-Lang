@@ -1349,6 +1349,9 @@ String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLo
     
     String res = src;
     res = string_replace(scratch.arena, res, STR("\\n"), STR("\n"));
+    res = string_replace(scratch.arena, res, STR("\\t"), STR("\t"));
+    res = string_replace(scratch.arena, res, STR("\\\""), STR("\""));
+    res = string_replace(scratch.arena, res, STR("\\\\"), STR("\\"));
     
     // Variable replacement
     {
