@@ -846,6 +846,15 @@ internal_fn void define_globals(Interpreter* inter)
     inter->cd_obj = define_object(inter, STR("cd"), VType_String);
     obj_set_string(inter, inter->cd_obj, inter->ctx->script_dir);
     
+    obj = define_object(inter, STR("yov_major"), VType_Int);
+    obj_set_int(obj, YOV_MAJOR_VERSION);
+    obj = define_object(inter, STR("yov_minor"), VType_Int);
+    obj_set_int(obj, YOV_MINOR_VERSION);
+    obj = define_object(inter, STR("yov_revision"), VType_Int);
+    obj_set_int(obj, YOV_REVISION_VERSION);
+    obj = define_object(inter, STR("yov_version"), VType_String);
+    obj_set_string(inter, obj, YOV_VERSION);
+    
     // Args
     {
         Array<ProgramArg> args = inter->ctx->args;
@@ -887,6 +896,11 @@ void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings)
     interpret_block(inter, block);
     
     assert(inter->ctx->error_count != 0 || inter->scope == 0);
+}
+
+void interpreter_exit(Interpreter* inter)
+{
+    inter->ctx->error_count++;// TODO(Jose): Weird
 }
 
 VariableType vtype_get(Interpreter* inter, i32 vtype)

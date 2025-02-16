@@ -30,7 +30,55 @@ internal_fn Object* intrinsic__call(Interpreter* inter, OpNode* node, Array<Obje
 
 internal_fn Object* intrinsic__exit(Interpreter* inter, OpNode* node, Array<Object*> vars)
 {
-    inter->ctx->error_count++;// TODO(Jose): Weird
+    interpreter_exit(inter);
+    return inter->void_obj;
+}
+
+//- YOV 
+
+internal_fn Object* intrinsic__yov_require(Interpreter* inter, OpNode* node, Array<Object*> vars)
+{
+    i64 major = get_int(vars[0]);
+    i64 minor = get_int(vars[1]);
+    
+    b32 res = major == YOV_MAJOR_VERSION && minor == YOV_MINOR_VERSION;
+    
+    if (!res) {
+        report_error(inter->ctx, node->code, "Require version: Yov v%u.%u", major, minor);
+    }
+    
+    return inter->void_obj;
+}
+
+internal_fn Object* intrinsic__yov_require_min(Interpreter* inter, OpNode* node, Array<Object*> vars)
+{
+    i64 major = get_int(vars[0]);
+    i64 minor = get_int(vars[1]);
+    
+    b32 res = true;
+    if (major > YOV_MAJOR_VERSION) res = false;
+    else if (major == YOV_MAJOR_VERSION && minor > YOV_MINOR_VERSION) res = false;
+    
+    if (!res) {
+        report_error(inter->ctx, node->code, "Require minimum version: Yov v%u.%u", major, minor);
+    }
+    
+    return inter->void_obj;
+}
+
+internal_fn Object* intrinsic__yov_require_max(Interpreter* inter, OpNode* node, Array<Object*> vars)
+{
+    i64 major = get_int(vars[0]);
+    i64 minor = get_int(vars[1]);
+    
+    b32 res = false;
+    if (major > YOV_MAJOR_VERSION) res = true;
+    else if (major == YOV_MAJOR_VERSION && minor >= YOV_MINOR_VERSION) res = true;
+    
+    if (!res) {
+        report_error(inter->ctx, node->code, "Require maximum version: Yov v%u.%u", major, minor);
+    }
+    
     return inter->void_obj;
 }
 
@@ -237,6 +285,10 @@ Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* int
     define_instrinsic("println", intrinsic__println, VType_Void, VType_String);
     define_instrinsic("call", intrinsic__call, VType_Int, VType_String);
     define_instrinsic("exit", intrinsic__exit, VType_Void, VType_Void);
+    
+    define_instrinsic("yov_require", intrinsic__yov_require, VType_Void, VType_Int, VType_Int);
+    define_instrinsic("yov_require_min", intrinsic__yov_require_min, VType_Void, VType_Int, VType_Int);
+    define_instrinsic("yov_require_max", intrinsic__yov_require_max, VType_Void, VType_Int, VType_Int);
     
     define_instrinsic("arg_int", intrinsic__arg_int, VType_Int, VType_String, VType_Int);
     define_instrinsic("arg_bool", intrinsic__arg_bool, VType_Bool, VType_String, VType_Bool);

@@ -201,8 +201,13 @@ void main()
         return;
     }
     
-    if (args.count == 1 && string_equals(args[0], STR("-h"))) {
+    if (args.count == 1 && string_equals(args[0], STR("help"))) {
         print_info("TODO\n");
+        return;
+    }
+    
+    if (args.count == 1 && string_equals(args[0], STR("version"))) {
+        print_info(YOV_VERSION);
         return;
     }
     

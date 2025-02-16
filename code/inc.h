@@ -87,6 +87,14 @@ void memory_zero(void* dst, u64 size);
 
 #define STR(x) string_make(x)
 
+#define _MACRO_STR(x) #x
+#define MACRO_STR(x) _MACRO_STR(x) 
+
+#define YOV_MAJOR_VERSION 0
+#define YOV_MINOR_VERSION 0
+#define YOV_REVISION_VERSION 0
+#define YOV_VERSION STR("v"MACRO_STR(YOV_MAJOR_VERSION)"."MACRO_STR(YOV_MINOR_VERSION)"."MACRO_STR(YOV_REVISION_VERSION))
+
 struct Arena;
 
 struct RawBuffer {
@@ -699,6 +707,8 @@ struct Interpreter {
     
     Object* cd_obj;
 };
+
+void interpreter_exit(Interpreter* inter);
 
 VariableType vtype_get(Interpreter* inter, i32 vtype);
 i32 vtype_from_name(Interpreter* inter, String name);
