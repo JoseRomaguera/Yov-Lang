@@ -11,8 +11,15 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         if (op == BinaryOperator_Addition) return obj_alloc_temp_int(inter, get_int(left) + get_int(right));
         if (op == BinaryOperator_Substraction) return obj_alloc_temp_int(inter, get_int(left) - get_int(right));
         if (op == BinaryOperator_Multiplication) return obj_alloc_temp_int(inter, get_int(left) * get_int(right));
-        if (op == BinaryOperator_Division) return obj_alloc_temp_int(inter, get_int(left) / get_int(right));
-        if (op == BinaryOperator_Modulo) return obj_alloc_temp_int(inter, get_int(left) % get_int(right));
+        if (op == BinaryOperator_Division || op == BinaryOperator_Modulo) {
+            i64 divisor = get_int(right);
+            if (divisor == 0) {
+                report_error(inter->ctx, code, "Divided by zero");
+                return obj_alloc_temp_int(inter, i64_max);
+            }
+            if (op == BinaryOperator_Modulo) return obj_alloc_temp_int(inter, get_int(left) % divisor);
+            return obj_alloc_temp_int(inter, get_int(left) / divisor);
+        }
         if (op == BinaryOperator_Equals) return obj_alloc_temp_bool(inter, get_int(left) == get_int(right));
         if (op == BinaryOperator_NotEquals) return obj_alloc_temp_bool(inter, get_int(left) != get_int(right));
         if (op == BinaryOperator_LessThan) return obj_alloc_temp_bool(inter, get_int(left) < get_int(right));
