@@ -317,25 +317,30 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
         }
     }
     
-    if (tokens.count >= 3)
+    // Binary operations & Signs
+    if (tokens.count >= 2)
     {
         // NOTE(Jose): This might seem counterintuitive, but we need to create nodes for lower priority operations first, since expresions at the bottom of the tree are resolved first
         
         i32 min_preference = i32_max;
         i32 preferent_operator_index = -1;
         
-        const i32 boolean_preference = 1;
-        const i32 addition_preference = 2;
-        const i32 multiplication_preference = 3;
-        const i32 function_call_preference = 4;
-        const i32 depth_mult = 5;
+        const i32 logical_preference = 1;
+        const i32 boolean_preference = 2;
+        const i32 addition_preference = 3;
+        const i32 multiplication_preference = 4;
+        const i32 function_call_preference = 5;
+        const i32 sign_preference = 6;
+        const i32 depth_mult = 7;
         
         i32 parenthesis_depth = 0;
         i32 braces_depth = 0;
+        b32 preference_is_sign = false;
         
         for (i32 i = tokens.count - 1; i >= 0; --i)
         {
             Token token = tokens[i];
+            Token left_token = (i == 0) ? Token{} : tokens[i - 1];
             
             if (token.kind == TokenKind_CloseParenthesis) {
                 parenthesis_depth++;
@@ -363,20 +368,35 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                 continue;
             }
             
+            b32 is_sign = false;
+            
             i32 preference = i32_max;
-            if (token.kind == TokenKind_BinaryOperator) {
-                if (token.binary_operator == BinaryOperator_Addition) preference = addition_preference;
-                else if (token.binary_operator == BinaryOperator_Substraction) preference = addition_preference;
-                else if (token.binary_operator == BinaryOperator_Multiplication) preference = multiplication_preference;
-                else if (token.binary_operator == BinaryOperator_Division) preference = multiplication_preference;
-                else if (token.binary_operator == BinaryOperator_Equals) preference = boolean_preference;
-                else if (token.binary_operator == BinaryOperator_NotEquals) preference = boolean_preference;
-                else if (token.binary_operator == BinaryOperator_LessThan) preference = boolean_preference;
-                else if (token.binary_operator == BinaryOperator_LessEqualsThan) preference = boolean_preference;
-                else if (token.binary_operator == BinaryOperator_GreaterThan) preference = boolean_preference;
-                else if (token.binary_operator == BinaryOperator_GreaterEqualsThan) preference = boolean_preference;
+            if (token.kind == TokenKind_BinaryOperator)
+            {
+                if (left_token.kind == TokenKind_BinaryOperator) is_sign = true;
+                if (left_token.kind == TokenKind_OpenParenthesis) is_sign = true;
+                if (left_token.kind == TokenKind_Unknown) is_sign = true;
+                
+                if (is_sign) {
+                    preference = sign_preference;
+                }
                 else {
-                    assert(0);
+                    if (token.binary_operator == BinaryOperator_Addition) preference = addition_preference;
+                    else if (token.binary_operator == BinaryOperator_Substraction) preference = addition_preference;
+                    else if (token.binary_operator == BinaryOperator_Multiplication) preference = multiplication_preference;
+                    else if (token.binary_operator == BinaryOperator_Division) preference = multiplication_preference;
+                    else if (token.binary_operator == BinaryOperator_LogicalNot) preference = logical_preference;
+                    else if (token.binary_operator == BinaryOperator_LogicalOr) preference = logical_preference;
+                    else if (token.binary_operator == BinaryOperator_LogicalAnd) preference = logical_preference;
+                    else if (token.binary_operator == BinaryOperator_Equals) preference = boolean_preference;
+                    else if (token.binary_operator == BinaryOperator_NotEquals) preference = boolean_preference;
+                    else if (token.binary_operator == BinaryOperator_LessThan) preference = boolean_preference;
+                    else if (token.binary_operator == BinaryOperator_LessEqualsThan) preference = boolean_preference;
+                    else if (token.binary_operator == BinaryOperator_GreaterThan) preference = boolean_preference;
+                    else if (token.binary_operator == BinaryOperator_GreaterEqualsThan) preference = boolean_preference;
+                    else {
+                        assert(0);
+                    }
                 }
             }
             
@@ -388,6 +408,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
             if (preference < min_preference) {
                 min_preference = preference;
                 preferent_operator_index = i;
+                preference_is_sign = is_sign;
             }
         }
         
@@ -426,9 +447,15 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                         return node;
                     }
                 }
-                else
+                else if (preference_is_sign)
                 {
-                    report_error(parser->ctx, op_token.code, STR("TODO: Sign expresion"));
+                    assert(preferent_operator_index == 0);
+                    BinaryOperator op = tokens[preferent_operator_index].binary_operator;
+                    
+                    auto node = (OpNode_Sign*)alloc_node(parser, OpKind_Sign, tokens[preferent_operator_index].code);
+                    node->op = op;
+                    node->expresion = process_expresion(parser, array_subarray(tokens, 1, tokens.count - 1));
+                    return node;
                 }
             }
         }

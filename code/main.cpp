@@ -71,6 +71,7 @@ void log_ast(OpNode* node, i32 depth)
     if (node->kind == OpKind_IfStatement) print_info("if-statement");
     if (node->kind == OpKind_WhileStatement) print_info("while-statement");
     if (node->kind == OpKind_ForStatement) print_info("for-statement");
+    if (node->kind == OpKind_ForeachArrayStatement) print_info("foreach-statement");
     if (node->kind == OpKind_VariableAssignment) print_info("variable assignment");
     if (node->kind == OpKind_FunctionCall) print_info("function call");
     if (node->kind == OpKind_VariableDefinition) {
@@ -81,7 +82,10 @@ void log_ast(OpNode* node, i32 depth)
         auto node0 = (OpNode_Binary*)node;
         print_info("binary %S", string_from_binary_operator(node0->op));
     }
-    if (node->kind == OpKind_Sign) print_info("sign");
+    if (node->kind == OpKind_Sign) {
+        auto node0 = (OpNode_Sign*)node;
+        print_info("sign %S", string_from_binary_operator(node0->op));
+    }
     if (node->kind == OpKind_IntLiteral) {
         auto node0 = (OpNode_Literal*)node;
         print_info("int literal: %u", node0->int_literal);
@@ -131,6 +135,18 @@ void log_ast(OpNode* node, i32 depth)
         log_ast(node0->expresion, depth + 1);
         log_ast(node0->content, depth + 1);
     }
+    else if (node->kind == OpKind_ForStatement) {
+        auto node0 = (OpNode_ForStatement*)node;
+        log_ast(node0->initialize_sentence, depth + 1);
+        log_ast(node0->condition_expresion, depth + 1);
+        log_ast(node0->update_sentence, depth + 1);
+        log_ast(node0->content, depth + 1);
+    }
+    else if (node->kind == OpKind_ForeachArrayStatement) {
+        auto node0 = (OpNode_ForeachArrayStatement*)node;
+        log_ast(node0->expresion, depth + 1);
+        log_ast(node0->content, depth + 1);
+    }
     else if (node->kind == OpKind_VariableAssignment) {
         auto node0 = (OpNode_Assignment*)node;
         log_ast(node0->value, depth + 1);
@@ -164,6 +180,10 @@ void log_ast(OpNode* node, i32 depth)
         auto node0 = (OpNode_Binary*)node;
         log_ast(node0->left, depth + 1);
         log_ast(node0->right, depth + 1);
+    }
+    else if (node->kind == OpKind_Sign) {
+        auto node0 = (OpNode_Sign*)node;
+        log_ast(node0->expresion, depth + 1);
     }
 }
 
@@ -258,12 +278,12 @@ void main()
                 print_info("Temp Memory: %u\n", temp_memory);
                 print_info("Total Memory: %u\n", total_memory);
                 
-                if (0) {
+                if (1) {
                     print_info(STR("\n// TOKENS\n"));
                     log_tokens(tokens);
                     print_info("\n\n");
                 }
-                if (0) {
+                if (1) {
                     print_info(STR("// AST\n"));
                     log_ast(ast, 0);
                     print_info("\n\n");

@@ -1008,6 +1008,9 @@ String string_from_binary_operator(BinaryOperator op) {
     if (op == BinaryOperator_Substraction) return STR("-");
     if (op == BinaryOperator_Multiplication) return STR("*");
     if (op == BinaryOperator_Division) return STR("/");
+    if (op == BinaryOperator_LogicalNot) return STR("!");
+    if (op == BinaryOperator_LogicalOr) return STR("||");
+    if (op == BinaryOperator_LogicalAnd) return STR("&&");
     if (op == BinaryOperator_Equals) return STR("==");
     if (op == BinaryOperator_NotEquals) return STR("!=");
     if (op == BinaryOperator_LessThan) return STR("<");

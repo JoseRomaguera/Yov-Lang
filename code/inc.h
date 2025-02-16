@@ -314,6 +314,10 @@ enum BinaryOperator {
     BinaryOperator_Multiplication,
     BinaryOperator_Division,
     
+    BinaryOperator_LogicalNot,
+    BinaryOperator_LogicalOr,
+    BinaryOperator_LogicalAnd,
+    
     BinaryOperator_Equals,
     BinaryOperator_NotEquals,
     BinaryOperator_LessThan,
@@ -552,8 +556,8 @@ struct OpNode_Binary : OpNode {
 };
 
 struct OpNode_Sign : OpNode {
-    b8 negative;
-    OpNode* value;
+    OpNode* expresion;
+    BinaryOperator op;
 };
 
 struct OpNode_Literal : OpNode {

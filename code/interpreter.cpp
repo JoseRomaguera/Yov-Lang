@@ -20,6 +20,11 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         if (op == BinaryOperator_GreaterEqualsThan) return obj_alloc_temp_bool(inter, get_int(left) >= get_int(right));
     }
     
+    if (is_bool(left) && is_bool(right)) {
+        if (op == BinaryOperator_LogicalOr) return obj_alloc_temp_bool(inter, get_bool(left) || get_bool(right));
+        if (op == BinaryOperator_LogicalAnd) return obj_alloc_temp_bool(inter, get_bool(left) && get_bool(right));
+    }
+    
     if (is_string(left) && is_string(right))
     {
         if (op == BinaryOperator_Addition) {
@@ -95,6 +100,22 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
     return inter->nil_obj;
 }
 
+internal_fn Object* solve_signed_operation(Interpreter* inter, Object* expresion, BinaryOperator op, CodeLocation code)
+{
+    SCRATCH();
+    
+    if (is_int(expresion)) {
+        if (op == BinaryOperator_Addition) return expresion;
+        if (op == BinaryOperator_Substraction) return obj_alloc_temp_int(inter, -get_int(expresion));
+    }
+    
+    if (is_bool(expresion)) {
+        if (op == BinaryOperator_LogicalNot) return obj_alloc_temp_bool(inter, !get_bool(expresion));
+    }
+    
+    return inter->nil_obj;
+}
+
 Object* interpret_expresion(Interpreter* inter, OpNode* node)
 {
     SCRATCH();
@@ -123,6 +144,30 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         else
         {
             report_error(inter->ctx, node->code, STR("Invalid arithmetic operation '%S %S %S'"), string_from_obj(scratch.arena, inter, left), string_from_binary_operator(op), string_from_obj(scratch.arena, inter, right));
+            return inter->nil_obj;
+        }
+    }
+    
+    if (node->kind == OpKind_Sign)
+    {
+        auto node0 = (OpNode_Sign*)node;
+        Object* expresion = interpret_expresion(inter, node0->expresion);
+        BinaryOperator op = node0->op;
+        
+        Object* result = solve_signed_operation(inter, expresion, op, node0->code);
+        
+        if (is_valid(result)) {
+            
+            if (inter->settings.execute && inter->settings.print_execution) {
+                String expresion_string = string_from_obj(scratch.arena, inter, expresion);
+                String result_string = string_from_obj(scratch.arena, inter, result);
+                report_info(inter->ctx, node->code, STR("%S %S = %S"), string_from_binary_operator(op), expresion_string, result_string);
+            }
+            
+            return result;
+        }
+        else {
+            report_error(inter->ctx, node->code, STR("Invalid signed operation '%S %S'"), string_from_binary_operator(op), string_from_obj(scratch.arena, inter, expresion));
             return inter->nil_obj;
         }
     }
