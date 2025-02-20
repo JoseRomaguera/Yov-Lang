@@ -258,3 +258,88 @@ inline_fn Array<T> array_from_ll(Arena* arena, LinkedList<T> src) {
     }
     return dst;
 }
+
+//- SORTING 
+
+typedef i32 SortCompareFn(const void*, const void*);
+
+template<typename T>
+internal_fn void _insertion_sort(Array<T> array, SortCompareFn* compare_fn, u32 begin, u32 end)
+{
+	for (u32 i = begin + 1; i < end; ++i) {
+        
+		i32 j = i - 1;
+        
+		while (1) {
+            
+			if (compare_fn(&array[i], &array[j]) >= 0) {
+                ++j;
+                break;
+            }
+            
+            --j;
+            
+            if (j == begin - 1) {
+                j = begin;
+                break;
+            }
+		}
+        
+		if (j != i) {
+			for (u32 w = j; w < i; ++w) {
+                SWAP(array[i], array[w]);
+			}
+		}
+	}
+}
+
+template<typename T>
+internal_fn void _quick_sort(Array<T> array, SortCompareFn* compare_fn, u32 left_limit, u32 right_limit)
+{
+	i32 left = left_limit;
+    
+	i32 right = right_limit;
+	u32 pivote = right;
+	--right;
+    
+	while (1) {
+		while (compare_fn(&array[left], &array[pivote]) < 0 && left < right) ++left;
+		while (compare_fn(&array[pivote], &array[right]) < 0 && right > left) --right;
+        
+		if (left < right) {
+            SWAP(array[left], array[right]);
+			++left;
+			--right;
+		}
+		else break;
+	}
+    
+	if (left < right) ++left;
+    
+	if (compare_fn(&array[left], &array[pivote]) > 0) {
+        SWAP(array[left], array[right_limit]);
+	}
+    
+	if (left_limit != left) {
+        
+		if (left - left_limit <= 100) _insertion_sort(array, compare_fn, left_limit, left + 1);
+		else _quick_sort(array, compare_fn, left_limit, left);
+	}
+	if (left + 1 != right_limit) {
+		if (right_limit - (left + 1) <= 100) _insertion_sort(array, compare_fn, left + 1, right_limit + 1);
+		else _quick_sort(array, compare_fn, left + 1, right_limit);
+	}
+}
+
+template<typename T>
+inline_fn void array_sort(Array<T> array, SortCompareFn* fn)
+{
+	if (array.count == 0) return;
+    
+	if (array.count > 64) {
+		_quick_sort(array, fn, 0, array.count - 1);
+	}
+	else {
+		_insertion_sort(array, fn, 0, array.count);
+	}
+}

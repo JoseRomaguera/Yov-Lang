@@ -14,7 +14,7 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         if (op == BinaryOperator_Division || op == BinaryOperator_Modulo) {
             i64 divisor = get_int(right);
             if (divisor == 0) {
-                report_error(inter->ctx, code, "Divided by zero");
+                report_zero_division(code);
                 return obj_alloc_temp_int(inter, i64_max);
             }
             if (op == BinaryOperator_Modulo) return obj_alloc_temp_int(inter, get_int(left) % divisor);
@@ -42,7 +42,7 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         else if (op == BinaryOperator_Division)
         {
             if (os_path_is_absolute(get_string(right))) {
-                report_error(inter->ctx, code, STR("Right path can't be absolute"));
+                report_right_path_cant_be_absolute(code);
                 return left;
             }
             
@@ -84,7 +84,7 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         VariableType element_type = (left_type.kind == VariableKind_Array) ? right_type : left_type;
         
         if (array_type.array_of != element_type.vtype) {
-            report_error(inter->ctx, code, "Type missmatch, can't append a '%S' into '%S'", element_type.name, array_type.name);
+            report_type_missmatch_append(code, element_type.name, array_type.name);
             return inter->nil_obj;
         }
         
@@ -128,6 +128,7 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
 {
     SCRATCH();
     
+    if (node->kind == OpKind_Error) return inter->nil_obj;
     if (node->kind == OpKind_None) return inter->void_obj;
     
     if (node->kind == OpKind_Binary)
@@ -135,6 +136,9 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         auto node0 = (OpNode_Binary*)node;
         Object* left = interpret_expresion(inter, node0->left);
         Object* right = interpret_expresion(inter, node0->right);
+        
+        if (is_unknown(left) || is_unknown(right)) return inter->nil_obj;
+        
         BinaryOperator op = node0->op;
         
         Object* result = solve_binary_operation(inter, left, right, op, node->code);
@@ -145,13 +149,13 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
                 String left_string = string_from_obj(scratch.arena, inter, left);
                 String right_string = string_from_obj(scratch.arena, inter, right);
                 String result_string = string_from_obj(scratch.arena, inter, result);
-                report_info(inter->ctx, node->code, STR("%S %S %S = %S"), left_string, string_from_binary_operator(op), right_string, result_string);
+                log_trace(inter->ctx, node->code, "%S %S %S = %S", left_string, string_from_binary_operator(op), right_string, result_string);
             }
             return result;
         }
         else
         {
-            report_error(inter->ctx, node->code, STR("Invalid arithmetic operation '%S %S %S'"), string_from_obj(scratch.arena, inter, left), string_from_binary_operator(op), string_from_obj(scratch.arena, inter, right));
+            report_invalid_binary_op(node->code, string_from_obj(scratch.arena, inter, left), string_from_binary_operator(op), string_from_obj(scratch.arena, inter, right));
             return inter->nil_obj;
         }
     }
@@ -169,13 +173,13 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
             if (inter->settings.execute && inter->settings.print_execution) {
                 String expresion_string = string_from_obj(scratch.arena, inter, expresion);
                 String result_string = string_from_obj(scratch.arena, inter, result);
-                report_info(inter->ctx, node->code, STR("%S %S = %S"), string_from_binary_operator(op), expresion_string, result_string);
+                log_trace(inter->ctx, node->code, STR("%S %S = %S"), string_from_binary_operator(op), expresion_string, result_string);
             }
             
             return result;
         }
         else {
-            report_error(inter->ctx, node->code, STR("Invalid signed operation '%S %S'"), string_from_binary_operator(op), string_from_obj(scratch.arena, inter, expresion));
+            report_invalid_signed_op(node->code, string_from_binary_operator(op), string_from_obj(scratch.arena, inter, expresion));
             return inter->nil_obj;
         }
     }
@@ -191,7 +195,7 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         Object* obj = find_object(inter, node0->identifier, true);
         
         if (obj == NULL) {
-            report_error(inter->ctx, node->code, STR("Identifier '%S' not found"), node0->identifier);
+            report_object_not_found(node->code, node0->identifier);
             return inter->nil_obj;
         }
         
@@ -204,16 +208,12 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         Object* obj = find_object(inter, identifier, true);
         
         if (obj == NULL) {
-            report_error(inter->ctx, node->code, STR("Identifier '%S' not found"), identifier);
+            report_object_not_found(node->code, identifier);
             return inter->nil_obj;
         }
         
         String member = node0->member;
-        
-        if (member.size == 0) {
-            report_error(inter->ctx, node->code, "Member is not specified");
-            return inter->nil_obj;
-        }
+        assert(member.size);
         
         VariableType obj_type = vtype_get(inter, obj->vtype);
         
@@ -223,12 +223,12 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
                 return obj_alloc_temp_int(inter, obj->array.count);
             }
             else {
-                report_error(inter->ctx, node->code, "Unknown member '%S' for array", member);
+                report_member_not_found(node->code, member, string_from_vtype(scratch.arena, inter, obj->vtype));
                 return inter->nil_obj;
             }
         }
         else {
-            report_error(inter->ctx, node->code, "Object '%S' doesn't have members", identifier);
+            report_member_not_found(node->code, member, string_from_vtype(scratch.arena, inter, obj->vtype));
             return inter->nil_obj;
         }
         
@@ -257,7 +257,7 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         // Assert same vtype
         for (i32 i = 1; i < objects.count; ++i) {
             if (objects[i]->vtype != vtype) {
-                report_error(inter->ctx, node->code, "Type missmatch in array expresion, expecting '%S' but found '%S'", string_from_vtype(scratch.arena, inter, vtype), string_from_vtype(scratch.arena, inter, objects[i]->vtype));
+                report_type_missmatch_array_expr(node->code, string_from_vtype(scratch.arena, inter, vtype), string_from_vtype(scratch.arena, inter, objects[i]->vtype));
                 return inter->nil_obj;
             }
         }
@@ -277,19 +277,19 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         Object* array = find_object(inter, node0->identifier, true);
         
         if (array == NULL) {
-            report_error(inter->ctx, node->code, "Identifier '%S' not found", node0->identifier);
+            report_object_not_found(node->code, node0->identifier);
             return inter->nil_obj;
         }
         
         if (!is_int(indexing_obj)) {
-            report_error(inter->ctx, node->code, "Invalid indexing, expecting an Int expresion");
+            report_indexing_expects_an_int(node->code);
             return inter->nil_obj;
         }
         
         VariableType array_vtype = vtype_get(inter, array->vtype);
         
         if (array_vtype.kind != VariableKind_Array) {
-            report_error(inter->ctx, node->code, "Indexing is only allowed for arrays");
+            report_indexing_not_allowed(node->code, string_from_vtype(scratch.arena, inter, array->vtype));
             return inter->nil_obj;
         }
         
@@ -299,7 +299,7 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         {
             i64 index = get_int(indexing_obj);
             if (index < 0 || index >= array->array.count) {
-                report_error(inter->ctx, node->code, "Index out of bounds");
+                report_indexing_out_of_bounds(node->code);
                 return inter->nil_obj;
             }
             
@@ -311,37 +311,8 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
         }
     }
     
-    report_error(inter->ctx, node->code, STR("Unknown expersion"));
+    report_expr_semantic_unknown(node->code);
     return inter->nil_obj;
-}
-
-void interpret_assignment(Interpreter* inter, Object* obj, OpNode* assignment, BinaryOperator binary_operator, b32 assert_assignment)
-{
-    SCRATCH();
-    
-    assert(inter->settings.execute);
-    
-    b32 no_assignment = assignment->kind != OpKind_None && assignment->kind != OpKind_Unknown;
-    
-    if (!no_assignment) {
-        if (assert_assignment) {
-            report_error(inter->ctx, assignment->code, STR("Invalid assignment"));
-        }
-        return;
-    }
-    
-    Object* assignment_result = interpret_expresion(inter, assignment);
-    
-    if (binary_operator != BinaryOperator_None) {
-        assignment_result = solve_binary_operation(inter, obj, assignment_result, binary_operator, assignment->code);
-    }
-    
-    if (!obj_copy(inter, obj, assignment_result)) {
-        report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, obj->vtype));
-        return;
-    }
-    
-    if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
 }
 
 void interpret_indexed_assignment(Interpreter* inter, Object* array, i64 index, OpNode* assignment, b32 assert_assignment)
@@ -356,23 +327,21 @@ void interpret_indexed_assignment(Interpreter* inter, Object* array, i64 index, 
         return;
     }
     
-    b32 no_assignment = assignment->kind != OpKind_None && assignment->kind != OpKind_Unknown;
+    b32 no_assignment = assignment->kind != OpKind_None && assignment->kind != OpKind_Error;
     
     if (!no_assignment) {
-        if (assert_assignment) {
-            report_error(inter->ctx, assignment->code, STR("Invalid assignment"));
-        }
+        assert(0);
         return;
     }
     
     Object* assignment_result = interpret_expresion(inter, assignment);
     
     if (!obj_copy_element_from_object(inter, array, index, assignment_result)) {
-        report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, array->vtype));
+        report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, array->vtype));
         return;
     }
     
-    if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S[%l] = %S"), array->identifier, index, string_from_obj(scratch.arena, inter, array));
+    if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S[%l] = %S"), array->identifier, index, string_from_obj(scratch.arena, inter, array));
 }
 
 void interpret_variable_definition(Interpreter* inter, OpNode* node0)
@@ -383,7 +352,7 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
     String identifier = node->identifier;
     Object* obj = find_object(inter, identifier, false);
     if (obj != NULL) {
-        report_error(inter->ctx, node->code, STR("Duplicated identifier '%S'"), identifier);
+        report_object_duplicated(node->code, identifier);
         return;
     }
     
@@ -401,7 +370,7 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
             vtype = vtype_from_name(inter, type_name);
             
             if (vtype <= 0) {
-                report_error(inter->ctx, node->code, STR("Undefined type '%S'"), type_name);
+                report_type_undefined(node->code, type_name);
                 return;
             }
             
@@ -411,8 +380,8 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
         }
         else
         {
-            if (assignment_result->vtype == VType_Void) {
-                report_error(inter->ctx, node->code, "Implicit variable definition expects an assignment");
+            if (is_void(assignment_result)) {
+                assert(0);
                 return;
             }
             
@@ -428,13 +397,15 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
         
         foreach(i, dimensions.count) {
             Object* dim = interpret_expresion(inter, node->array_dimensions[i]);
+            if (is_unknown(dim)) return;
+            
             if (!is_void(dim) && !is_int(dim)) {
-                report_error(inter->ctx, node->code, "Expecting an integer for the dimensions of the array");
+                report_dimensions_expects_an_int(node->code);
                 return;
             }
             dimensions[i] = is_int(dim) ? get_int(dim) : 0;
             if (dimensions[i] < 0) {
-                report_error(inter->ctx, node->code, "Expecting a positive integer for the dimensions of the array");
+                report_dimensions_must_be_positive(node->code);
                 return;
             }
             
@@ -450,34 +421,58 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
     
     obj = define_object(inter, identifier, vtype);
     
+    if (is_valid(assignment_result) && assignment_result->vtype != vtype) {
+        report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, obj->vtype));
+    }
+    
     if (inter->settings.execute)
     {
-        if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("%S %S"), string_from_vtype(scratch.arena, inter, vtype), obj->identifier);
+        if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("%S %S"), string_from_vtype(scratch.arena, inter, vtype), obj->identifier);
         
         if (is_valid(assignment_result)) {
-            if (!obj_copy(inter, obj, assignment_result)) {
-                report_error(inter->ctx, assignment->code, STR("Type missmatch, can't assign '%S' to '%S'"), string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, obj->vtype));
-                return;
-            }
-            
-            if (inter->settings.print_execution) report_info(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
+            if (!obj_copy(inter, obj, assignment_result)) return;
+            if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
         }
     }
 }
 
 void interpret_variable_assignment(Interpreter* inter, OpNode* node0)
 {
+    SCRATCH();
     auto node = (OpNode_Assignment*)node0;
     
     Object* obj = find_object(inter, node->identifier, true);
     if (obj == NULL) {
-        report_error(inter->ctx, node->code, STR("Undefined identifier '%S'"), node->identifier);
+        report_object_not_found(node->code, node->identifier);
         return;
     }
     
-    if (inter->settings.execute) {
-        OpNode* assignment = node->value;
-        interpret_assignment(inter, obj, assignment, node->binary_operator, false);
+    OpNode* assignment = node->value;
+    BinaryOperator op = node->binary_operator;
+    
+    Object* assignment_obj = interpret_expresion(inter, assignment);
+    
+    if (is_unknown(assignment_obj)) return;
+    if (is_void(assignment_obj)) {
+        assert(0);
+        return;
+    }
+    
+    if (op != BinaryOperator_None) {
+        assignment_obj = solve_binary_operation(inter, obj, assignment_obj, op, assignment->code);
+    }
+    
+    if (assignment_obj->vtype != obj->vtype) {
+        report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, assignment_obj->vtype), string_from_vtype(scratch.arena, inter, obj->vtype));
+        return;
+    }
+    
+    if (is_unknown(assignment_obj)) return;
+    
+    if (inter->settings.execute)
+    {
+        if (!obj_copy(inter, obj, assignment_obj)) return;
+        if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
     }
 }
 
@@ -489,21 +484,21 @@ void interpret_array_element_assignment(Interpreter* inter, OpNode* node0)
     
     Object* array = find_object(inter, node->identifier, true);
     if (array == NULL) {
-        report_error(inter->ctx, node->code, STR("Undefined identifier '%S'"), node->identifier);
+        report_object_not_found(node->code, node->identifier);
         return;
     }
     
     Object* indexing_obj = interpret_expresion(inter, node->indexing_expresion);
     
     if (!is_int(indexing_obj)) {
-        report_error(inter->ctx, node->code, "Invalid indexing, expecting an Int expresion");
+        report_indexing_expects_an_int(node->code);
         return;
     }
     
     VariableType array_vtype = vtype_get(inter, array->vtype);
     
     if (array_vtype.kind != VariableKind_Array) {
-        report_error(inter->ctx, node->code, "Can't make indexed assignment to a '%S'", string_from_vtype(scratch.arena, inter, array->vtype));
+        report_indexing_not_allowed(node->code, string_from_vtype(scratch.arena, inter, array->vtype));
         return;
     }
     
@@ -511,7 +506,7 @@ void interpret_array_element_assignment(Interpreter* inter, OpNode* node0)
     {
         i64 index = get_int(indexing_obj);
         if (index < 0 || index >= array->array.count) {
-            report_error(inter->ctx, node->code, "Index out of bounds");
+            report_indexing_out_of_bounds(node->code);
             return;
         }
         
@@ -532,12 +527,12 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
     Object* expresion_result = interpret_expresion(inter, node->expresion);
     
     if (!is_bool(expresion_result)) {
-        report_error(inter->ctx, node->code, STR("If statement expects a Bool"));
+        report_expr_expects_bool(node->code, "If-Statement");
         return;
     }
     
     if (inter->settings.execute) {
-        if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("if (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
+        if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("if (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
         b32 result = get_bool(expresion_result);
         
         push_scope(inter);
@@ -567,13 +562,13 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
         Object* expresion_result = interpret_expresion(inter, node->expresion);
         
         if (!is_bool(expresion_result)) {
-            report_error(inter->ctx, node->code, STR("While statement expects a Bool"));
+            report_expr_expects_bool(node->code, "While-Statement");
             return;
         }
         
         if (inter->settings.execute)
         {
-            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("while (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
+            if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("while (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
             
             if (!get_bool(expresion_result)) break;
             
@@ -605,13 +600,13 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
         Object* expresion_result = interpret_expresion(inter, node->condition_expresion);
         
         if (!is_bool(expresion_result)) {
-            report_error(inter->ctx, node->code, STR("For-statement expects a Bool"));
+            report_expr_expects_bool(node->code, "For-Statement");
             return;
         }
         
         if (inter->settings.execute)
         {
-            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("for (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
+            if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("for (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
             
             if (!get_bool(expresion_result)) break;
             
@@ -647,7 +642,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     VariableType array_type = vtype_get(inter, array->vtype);
     
     if (array_type.kind != VariableKind_Array) {
-        report_error(inter->ctx, node->code, "For each statement expects an array");
+        report_for_expects_an_array(node->code);
         return;
     }
     
@@ -666,7 +661,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
                 obj_set_int(index, i);
             }
             
-            if (inter->settings.print_execution) report_info(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_obj(scratch.arena, inter, element));
+            if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_obj(scratch.arena, inter, element));
             
             push_scope(inter);
             interpret_op(inter, node->content);
@@ -695,13 +690,13 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0)
     FunctionDefinition* fn = find_function(inter, node->identifier);
     
     if (fn == NULL) {
-        report_error(inter->ctx, node->code, STR("Undefined function '%S'"), node->identifier);
+        report_function_not_found(node->code, node->identifier);
         return inter->nil_obj;
     }
     
     if (fn->parameter_vtypes.count != node->parameters.count)
     {
-        report_error(inter->ctx, node->code, STR("Function '%S' is expecting %u parameters"), node->identifier, fn->parameter_vtypes.count);
+        report_function_expecting_parameters(node->code, node->identifier, fn->parameter_vtypes.count);
         return inter->nil_obj;
     }
     
@@ -710,7 +705,7 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0)
         objects[i] = interpret_expresion(inter, node->parameters[i]);
         
         if (objects[i]->vtype != fn->parameter_vtypes[i]) {
-            report_error(inter->ctx, node->code, "Function '%S' is expecting '%S' as a parameter %u", node->identifier, string_from_vtype(scratch.arena, inter, fn->parameter_vtypes[i]), i + 1);
+            report_function_wrong_parameter_type(node->code, node->identifier, string_from_vtype(scratch.arena, inter, fn->parameter_vtypes[i]), i + 1);
             return inter->nil_obj;
         }
     }
@@ -724,7 +719,7 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0)
     if (inter->settings.print_execution) {
         String return_string = string_from_obj(scratch.arena, inter, return_obj);
         String parameters = STR("TODO");
-        report_info(inter->ctx, node->code, STR("%S(%S) => %S"), node->identifier, parameters, return_string);
+        log_trace(inter->ctx, node->code, STR("%S(%S) => %S"), node->identifier, parameters, return_string);
     }
     
     return return_obj;
@@ -768,8 +763,9 @@ void interpret_op(Interpreter* inter, OpNode* node)
     else if (node->kind == OpKind_ForStatement) interpret_for_statement(inter, node);
     else if (node->kind == OpKind_ForeachArrayStatement) interpret_foreach_array_statement(inter, node);
     else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node);
+    else if (node->kind == OpKind_Error) {}
     else {
-        report_error(inter->ctx, node->code, STR("Unknown operation: {line}"));
+        report_semantic_unknown_op(node->code);
     }
 }
 
@@ -1298,7 +1294,7 @@ i32 push_scope(Interpreter* inter) {
 void pop_scope(Interpreter* inter)
 {
     if (inter->scope <= 0) {
-        report_error(inter->ctx, {}, STR("The stack is broken..."));
+        report_stack_is_broken();
         return;
     }
     inter->scope--;
@@ -1403,7 +1399,7 @@ String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLo
                 String identifier = string_substring(res, start_identifier, cursor - start_identifier - 1);
                 Object* obj = find_object(inter, identifier, true);
                 if (obj == NULL) {
-                    report_error(inter->ctx, code, STR("Undefined object '%S'"), identifier);
+                    report_object_not_found(code, identifier);
                 }
                 else {
                     append(&builder, string_from_obj(scratch.arena, inter, obj));

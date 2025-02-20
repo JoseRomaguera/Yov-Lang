@@ -34,6 +34,7 @@ internal_fn OpKind op_kind_from_tokens(Array<Token> t)
     // Variable definition
     if (t.count >= 3 && t[0].kind == TokenKind_Identifier && t[1].kind == TokenKind_Colon && t[2].kind == TokenKind_Identifier) return OpKind_VariableDefinition;
     if (t.count >= 3 && t[0].kind == TokenKind_Identifier && t[1].kind == TokenKind_Colon && t[2].kind == TokenKind_Assignment) return OpKind_VariableDefinition;
+    if (t.count >= 3 && t[0].kind == TokenKind_Identifier && t[1].kind == TokenKind_Colon && t[2].kind == TokenKind_OpenBracket) return OpKind_VariableDefinition;
     
     // Array definition
     if (t.count >= 4) {
@@ -48,16 +49,40 @@ internal_fn OpKind op_kind_from_tokens(Array<Token> t)
     return OpKind_None;
 }
 
-Token peek_token(Parser* parser, i32 offset = 0)
+b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token)
+{
+    assert(open_index < tokens.count && close_index < tokens.count);
+    assert(tokens[open_index].kind == open_token && tokens[close_index].kind == close_token);
+    
+    if (close_index <= open_index) return false;
+    
+    i32 depth = 1;
+    for (u32 i = open_index + 1; i < close_index; ++i)
+    {
+        if (tokens[i].kind == open_token) {
+            depth++;
+        }
+        else if (tokens[i].kind == close_token) {
+            depth--;
+            if (depth <= 0) return false;
+        }
+    }
+    
+    return true;
+}
+
+Token peek_token(Parser* parser, i32 offset)
 {
     i32 index = (i32)parser->token_index + offset;
-    if (index < 0 || index >= parser->tokens.count) {
-        assert(0);
-        Token t{};
-        t.kind = TokenKind_NextSentence;
-        return t;
-    }
+    if (index < 0 || index >= parser->tokens.count) return {};
     return parser->tokens[index];
+}
+
+Array<Token> peek_tokens(Parser* parser, i32 offset, u32 count) {
+    i32 index = parser->token_index + offset;
+    if (index < 0 || index >= parser->tokens.count) return {};
+    count = MIN(count, parser->tokens.count - index - 1);
+    return array_subarray(parser->tokens, index, count);
 }
 
 void skip_tokens(Parser* parser, u32 count)
@@ -68,6 +93,15 @@ void skip_tokens(Parser* parser, u32 count)
         return;
     }
     parser->token_index += count;
+}
+
+void skip_tokens_before_op(Parser* parser)
+{
+    while (parser->token_index < parser->tokens.count) {
+        Token token = parser->tokens[parser->token_index];
+        if (token.kind != TokenKind_NextLine && token.kind != TokenKind_NextSentence) break;
+        parser->token_index++;
+    }
 }
 
 Token extract_token(Parser* parser)
@@ -90,19 +124,17 @@ Array<Token> extract_tokens(Parser* parser, u32 count)
     return tokens;
 }
 
-Array<Token> extract_sentence(Parser* parser, TokenKind separator, b32 require_separator)
+Array<Token> extract_tokens_until(Parser* parser, TokenKind separator, b32 require_separator)
 {
     u32 starting_index = parser->token_index;
     while (parser->token_index < parser->tokens.count) {
         if (parser->tokens[parser->token_index].kind == separator) break;
         parser->token_index++;
     }
-    u32 end_index = parser->token_index;
-    if (parser->token_index < parser->tokens.count) {
-        if (require_separator) end_index++;
+    if (require_separator && parser->token_index < parser->tokens.count) {
         parser->token_index++;
     }
-    return array_subarray(parser->tokens, starting_index, end_index - starting_index);
+    return array_subarray(parser->tokens, starting_index, parser->token_index - starting_index);
 }
 
 Array<Token> extract_sentence_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator)
@@ -127,31 +159,6 @@ Array<Token> extract_sentence_with_depth(Parser* parser, TokenKind open_token, T
     }
     
     return (depth == 0) ? array_subarray(parser->tokens, starting_index, end_index - starting_index) : Array<Token>{};
-}
-
-inline_fn u32 get_node_size(OpKind kind) {
-    if (kind == OpKind_None) return sizeof(OpNode);
-    if (kind == OpKind_Unknown) return sizeof(OpNode);
-    if (kind == OpKind_Block) return sizeof(OpNode_Block);
-    if (kind == OpKind_IfStatement) return sizeof(OpNode_IfStatement);
-    if (kind == OpKind_WhileStatement) return sizeof(OpNode_WhileStatement);
-    if (kind == OpKind_ForStatement) return sizeof(OpNode_ForStatement);
-    if (kind == OpKind_ForeachArrayStatement) return sizeof(OpNode_ForeachArrayStatement);
-    if (kind == OpKind_VariableAssignment) return sizeof(OpNode_Assignment);
-    if (kind == OpKind_VariableDefinition) return sizeof(OpNode_VariableDefinition);
-    if (kind == OpKind_FunctionCall) return sizeof(OpNode_FunctionCall);
-    if (kind == OpKind_ArrayExpresion) return sizeof(OpNode_ArrayExpresion);
-    if (kind == OpKind_ArrayElementValue) return sizeof(OpNode_ArrayElementValue);
-    if (kind == OpKind_ArrayElementAssignment) return sizeof(OpNode_ArrayElementAssignment);
-    if (kind == OpKind_Binary) return sizeof(OpNode_Binary);
-    if (kind == OpKind_Sign) return sizeof(OpNode_Sign);
-    if (kind == OpKind_IntLiteral) return sizeof(OpNode_Literal);
-    if (kind == OpKind_StringLiteral) return sizeof(OpNode_Literal);
-    if (kind == OpKind_BoolLiteral) return sizeof(OpNode_Literal);
-    if (kind == OpKind_IdentifierValue) return sizeof(OpNode_IdentifierValue);
-    if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
-    assert(0);
-    return sizeof(OpNode) + KB(4);
 }
 
 inline_fn OpNode* alloc_node(Parser* parser, OpKind kind, CodeLocation code)
@@ -192,14 +199,12 @@ inline_fn Array<OpNode*> process_parameters(Parser* parser, Array<Token> tokens)
     return nodes;
 }
 
-inline_fn OpNode* process_function_call_as_expresion(Parser* parser, Array<Token> tokens)
+OpNode* process_function_call(Parser* parser, Array<Token> tokens)
 {
     Token starting_token = tokens[0];
     
-    if (tokens.count < 3) {
-        report_error(parser->ctx, tokens[0].code, STR("Invalid format for a function call"));
-        return alloc_node(parser, OpKind_Unknown, tokens[0].code);
-    }
+    assert(tokens.count >= 3);
+    if (tokens.count < 3) return alloc_node(parser, OpKind_Error, tokens[0].code);
     
     Array<Token> parameters = array_subarray(tokens, 2, tokens.count - 3);
     
@@ -209,43 +214,30 @@ inline_fn OpNode* process_function_call_as_expresion(Parser* parser, Array<Token
     return node;
 }
 
-inline_fn b32 check_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token)
-{
-    assert(open_index < tokens.count && close_index < tokens.count);
-    assert(tokens[open_index].kind == open_token && tokens[close_index].kind == close_token);
-    
-    if (close_index <= open_index) return false;
-    
-    i32 depth = 1;
-    for (u32 i = open_index + 1; i < close_index; ++i)
-    {
-        if (tokens[i].kind == open_token) {
-            depth++;
-        }
-        else if (tokens[i].kind == close_token) {
-            depth--;
-            if (depth <= 0) return false;
-        }
-    }
-    
-    return true;
-}
-
 OpNode* process_expresion(Parser* parser, Array<Token> tokens)
 {
+    SCRATCH();
+    
     if (tokens.count == 0) return alloc_node(parser, OpKind_None, {});
+    
+    Token starting_token = tokens[0];
     
     // Remove parentheses around
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
     {
-        b32 couple = check_couple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        b32 couple = check_tokens_are_couple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
         if (couple) tokens = array_subarray(tokens, 1, tokens.count - 2);
+    }
+    
+    if (tokens.count == 0) {
+        report_expr_is_empty(starting_token.code);
+        return alloc_node(parser, OpKind_Error, {});
     }
     
     // Array
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenBrace && tokens[tokens.count - 1].kind == TokenKind_CloseBrace)
     {
-        b32 couple = check_couple(tokens, 0, tokens.count - 1, TokenKind_OpenBrace, TokenKind_CloseBrace);
+        b32 couple = check_tokens_are_couple(tokens, 0, tokens.count - 1, TokenKind_OpenBrace, TokenKind_CloseBrace);
         
         if (couple) {
             Array<Token> parameters = array_subarray(tokens, 1, tokens.count - 2);
@@ -259,19 +251,25 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
     
     // Function call
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis) {
-        b32 couple = check_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
-        if (couple) return process_function_call_as_expresion(parser, tokens);
+        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        if (couple) return process_function_call(parser, tokens);
     }
     
     // Array indexing
     if (tokens.count >= 3 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenBracket && tokens[tokens.count - 1].kind == TokenKind_CloseBracket) {
-        b32 couple = check_couple(tokens, 1, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
+        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
         if (couple) {
             Array<Token> indexing_expresion = array_subarray(tokens, 2, tokens.count - 3);
+            OpNode* expresion = process_expresion(parser, indexing_expresion);
+            
+            if (expresion->kind == OpKind_None) {
+                report_array_indexing_expects_expresion(tokens[0].code);
+                return alloc_node(parser, OpKind_Error, tokens[0].code);
+            }
             
             auto node = (OpNode_ArrayElementValue*)alloc_node(parser, OpKind_ArrayElementValue, tokens[0].code);
             node->identifier = tokens[0].value;
-            node->expresion = process_expresion(parser, indexing_expresion);
+            node->expresion = expresion;
             return node;
         }
     }
@@ -279,9 +277,16 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
     // Member access
     if (tokens.count == 3 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_Dot && tokens[2].kind == TokenKind_Identifier)
     {
+        String member_value = tokens[2].value;
+        
+        if (member_value.size == 0) {
+            report_expr_empty_member(tokens[0].code);
+            return alloc_node(parser, OpKind_Error, tokens[0].code);
+        }
+        
         auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
         node->identifier = tokens[0].value;
-        node->member = tokens[2].value;
+        node->member = member_value;
         return node;
     }
     
@@ -297,7 +302,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                 return node;
             }
             else {
-                report_error(parser->ctx, token.code, STR("Invalid format for an integer literal"));
+                assert(0);
             }
         }
         else if (token.kind == TokenKind_StringLiteral) {
@@ -349,8 +354,8 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
             if (token.kind == TokenKind_OpenParenthesis) {
                 parenthesis_depth--;
                 if (parenthesis_depth < 0) {
-                    report_error(parser->ctx, token.code, STR("Close parenthesis is missing"));
-                    return alloc_node(parser, OpKind_Unknown, token.code);
+                    report_common_missing_closing_parenthesis(token.code);
+                    return alloc_node(parser, OpKind_Error, token.code);
                 }
                 continue;
             }
@@ -362,8 +367,8 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
             if (token.kind == TokenKind_OpenBrace) {
                 braces_depth--;
                 if (braces_depth < 0) {
-                    report_error(parser->ctx, token.code, STR("Close breace is missing"));
-                    return alloc_node(parser, OpKind_Unknown, token.code);
+                    report_common_missing_closing_brace(token.code);
+                    return alloc_node(parser, OpKind_Error, token.code);
                 }
                 continue;
             }
@@ -375,7 +380,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
             {
                 if (left_token.kind == TokenKind_BinaryOperator) is_sign = true;
                 if (left_token.kind == TokenKind_OpenParenthesis) is_sign = true;
-                if (left_token.kind == TokenKind_Unknown) is_sign = true;
+                if (left_token.kind == TokenKind_None) is_sign = true;
                 
                 if (is_sign) {
                     preference = sign_preference;
@@ -414,27 +419,36 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
         }
         
         if (parenthesis_depth > 0) {
-            report_error(parser->ctx, tokens[0].code, STR("Open parenthesis is missing"));
-            return alloc_node(parser, OpKind_Unknown, tokens[0].code);
+            report_common_missing_opening_parenthesis(tokens[0].code);
+            return alloc_node(parser, OpKind_Error, tokens[0].code);
         }
         if (braces_depth > 0) {
-            report_error(parser->ctx, tokens[0].code, STR("Open brace is missing"));
-            return alloc_node(parser, OpKind_Unknown, tokens[0].code);
+            report_common_missing_opening_brace(tokens[0].code);
+            return alloc_node(parser, OpKind_Error, tokens[0].code);
         }
         
-        if (min_preference == i32_max) {
-            report_error(parser->ctx, tokens[0].code, STR("Unknown expresion"));
-        }
-        else
+        if (min_preference != i32_max)
         {
             Token op_token = tokens[preferent_operator_index];
             
             if (op_token.kind == TokenKind_BinaryOperator)
             {
-                if (preferent_operator_index > 0)
+                if (preference_is_sign)
                 {
-                    if (preferent_operator_index >= tokens.count - 1) {
-                        report_error(parser->ctx, op_token.code, STR("Invalid arithmetic expresion"));
+                    assert(preferent_operator_index == 0);
+                    BinaryOperator op = tokens[preferent_operator_index].binary_operator;
+                    
+                    auto node = (OpNode_Sign*)alloc_node(parser, OpKind_Sign, tokens[preferent_operator_index].code);
+                    node->op = op;
+                    node->expresion = process_expresion(parser, array_subarray(tokens, 1, tokens.count - 1));
+                    return node;
+                }
+                else
+                {
+                    if (preferent_operator_index <= 0 || preferent_operator_index >= tokens.count - 1) {
+                        String op_string = string_from_tokens(scratch.arena, tokens);
+                        report_expr_invalid_binary_operation(op_token.code, op_string);
+                        return alloc_node(parser, OpKind_Error, tokens[0].code);
                     }
                     else
                     {
@@ -448,43 +462,32 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                         return node;
                     }
                 }
-                else if (preference_is_sign)
-                {
-                    assert(preferent_operator_index == 0);
-                    BinaryOperator op = tokens[preferent_operator_index].binary_operator;
-                    
-                    auto node = (OpNode_Sign*)alloc_node(parser, OpKind_Sign, tokens[preferent_operator_index].code);
-                    node->op = op;
-                    node->expresion = process_expresion(parser, array_subarray(tokens, 1, tokens.count - 1));
-                    return node;
-                }
             }
         }
     }
     
-    report_error(parser->ctx, tokens[0].code, STR("Unknown expresion: {line}"));
-    return alloc_node(parser, OpKind_Unknown, tokens[0].code);
+    String expresion_string = string_from_tokens(scratch.arena, tokens);
+    report_expr_syntactic_unknown(tokens[0].code, expresion_string);
+    return alloc_node(parser, OpKind_Error, tokens[0].code);
 }
 
-inline_fn OpNode* process_if_statement_op(Parser* parser)
+inline_fn OpNode* extract_if_statement(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     
-    Array<Token> sentence = extract_sentence(parser, TokenKind_CloseParenthesis, true);
+    Array<Token> sentence = extract_tokens_until(parser, TokenKind_CloseParenthesis, true);
     
-    if (sentence.count < 4) {
-        report_error(parser->ctx, starting_token.code, STR("Invalid format for if-statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
-    }
+    assert(sentence.count >= 4);
+    if (sentence.count < 4) return alloc_node(parser, OpKind_Error, starting_token.code);
     
     if (sentence[1].kind != TokenKind_OpenParenthesis) {
-        report_error(parser->ctx, starting_token.code, STR("Expecting parenthesis for if-statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_expecting_parenthesis(starting_token.code, "if-statement");
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     if (sentence[sentence.count - 1].kind != TokenKind_CloseParenthesis) {
-        report_error(parser->ctx, starting_token.code, STR("Closing parenthesis not found for if-statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_missing_closing_parenthesis(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 3);
@@ -492,14 +495,14 @@ inline_fn OpNode* process_if_statement_op(Parser* parser)
     
     auto node = (OpNode_IfStatement*)alloc_node(parser, OpKind_IfStatement, starting_token.code);
     node->expresion = expresion_node;
-    node->success = process_op(parser);
+    node->success = extract_op(parser);
     
     skip_tokens_before_op(parser);
     if (parser->token_index < parser->tokens.count) {
         Token else_token = parser->tokens[parser->token_index];
         if (else_token.kind == TokenKind_Keyword && else_token.keyword == KeywordType_Else) {
             parser->token_index++; // Skip else
-            node->failure = process_op(parser);
+            node->failure = extract_op(parser);
         }
     }
     
@@ -509,25 +512,23 @@ inline_fn OpNode* process_if_statement_op(Parser* parser)
     return node;
 }
 
-inline_fn OpNode* process_while_statement_op(Parser* parser)
+inline_fn OpNode* extract_while_statement(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     
-    Array<Token> sentence = extract_sentence(parser, TokenKind_CloseParenthesis, true);
+    Array<Token> sentence = extract_tokens_until(parser, TokenKind_CloseParenthesis, true);
     
-    if (sentence.count < 4) {
-        report_error(parser->ctx, starting_token.code, STR("Invalid format for while statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
-    }
+    assert(sentence.count >= 4);
+    if (sentence.count < 4) return alloc_node(parser, OpKind_Error, starting_token.code);
     
     if (sentence[1].kind != TokenKind_OpenParenthesis) {
-        report_error(parser->ctx, starting_token.code, STR("Expecting parenthesis for while statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_expecting_parenthesis(starting_token.code, "while-statement");
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     if (sentence[sentence.count - 1].kind != TokenKind_CloseParenthesis) {
-        report_error(parser->ctx, starting_token.code, STR("Closing parenthesis not found for while statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_missing_closing_parenthesis(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 3);
@@ -535,30 +536,28 @@ inline_fn OpNode* process_while_statement_op(Parser* parser)
     
     auto node = (OpNode_WhileStatement*)alloc_node(parser, OpKind_WhileStatement, starting_token.code);
     node->expresion = expresion_node;
-    node->content = process_op(parser);
+    node->content = extract_op(parser);
     
     return node;
 }
 
-inline_fn OpNode* process_for_statement_op(Parser* parser)
+inline_fn OpNode* extract_for_statement(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     
-    Array<Token> sentence = extract_sentence(parser, TokenKind_CloseParenthesis, true);
+    Array<Token> sentence = extract_tokens_until(parser, TokenKind_CloseParenthesis, true);
     
-    if (sentence.count < 5) {
-        report_error(parser->ctx, starting_token.code, STR("Invalid format for for-statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
-    }
+    assert(sentence.count >= 5);
+    if (sentence.count < 5) return alloc_node(parser, OpKind_Error, starting_token.code);
     
     if (sentence[1].kind != TokenKind_OpenParenthesis) {
-        report_error(parser->ctx, starting_token.code, STR("Expecting parenthesis for for-statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_expecting_parenthesis(starting_token.code, "for-statement");
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     if (sentence[sentence.count - 1].kind != TokenKind_CloseParenthesis) {
-        report_error(parser->ctx, starting_token.code, STR("Closing parenthesis not found for for-statement"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_missing_closing_parenthesis(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     Array<Token> expresions = array_subarray(sentence, 2, sentence.count - 3);
@@ -583,8 +582,8 @@ inline_fn OpNode* process_for_statement_op(Parser* parser)
         Token element_token = expresions[0];
         
         if (element_token.kind != TokenKind_Identifier) {
-            report_error(parser->ctx, starting_token.code, "Expecting a for each identifier");
-            return alloc_node(parser, OpKind_Unknown, starting_token.code);
+            report_foreach_expecting_identifier(starting_token.code);
+            return alloc_node(parser, OpKind_Error, starting_token.code);
         }
         
         i32 colon_index = -1;
@@ -596,8 +595,8 @@ inline_fn OpNode* process_for_statement_op(Parser* parser)
         }
         
         if (colon_index < 0) {
-            report_error(parser->ctx, starting_token.code, "Expecting colon in for each");
-            return alloc_node(parser, OpKind_Unknown, starting_token.code);
+            report_foreach_expecting_colon(starting_token.code);
+            return alloc_node(parser, OpKind_Error, starting_token.code);
         }
         
         String index_name = {};
@@ -608,8 +607,8 @@ inline_fn OpNode* process_for_statement_op(Parser* parser)
                 index_name = expresions[2].value;
             }
             else {
-                report_error(parser->ctx, starting_token.code, "Expecting a comma separated identifier for the index of the for each");
-                return alloc_node(parser, OpKind_Unknown, starting_token.code);
+                report_foreach_expecting_comma_separated_identifiers(starting_token.code);
+                return alloc_node(parser, OpKind_Error, starting_token.code);
             }
         }
         
@@ -619,7 +618,7 @@ inline_fn OpNode* process_for_statement_op(Parser* parser)
         node->element_name = element_token.value;
         node->index_name = index_name;
         node->expresion = process_expresion(parser, expresion_tokens);
-        node->content = process_op(parser);
+        node->content = extract_op(parser);
         return node;
     }
     // For Statement
@@ -633,29 +632,36 @@ inline_fn OpNode* process_for_statement_op(Parser* parser)
         node->initialize_sentence = generate_ast_from_sentence(parser->ctx, initialize_sentence_tokens);
         node->condition_expresion = process_expresion(parser, condition_expresion_tokens);
         node->update_sentence = generate_ast_from_sentence(parser->ctx, update_sentence_tokens);
-        node->content = process_op(parser);
+        node->content = extract_op(parser);
         return node;
     }
     else
     {
-        report_error(parser->ctx, starting_token.code, STR("Unknown for statement format"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_for_unknown(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
 }
 
-inline_fn OpNode* process_variable_assignment_op(Parser* parser)
+inline_fn OpNode* extract_variable_assignment(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     
-    Array<Token> sentence = extract_sentence(parser, TokenKind_NextSentence, false);
+    Array<Token> sentence = extract_tokens_until(parser, TokenKind_NextSentence, false);
     
-    if (sentence.count < 3) {
-        report_error(parser->ctx, starting_token.code, STR("Invalid format for an assignment"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
-    }
+    assert(sentence.count >= 2);
+    if (sentence.count < 2) return alloc_node(parser, OpKind_Error, starting_token.code);
     
     Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 2);
     OpNode* value_node = process_expresion(parser, expresion);
+    
+    if (value_node->kind == OpKind_Error) {
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
+    
+    if (value_node->kind == OpKind_None) {
+        report_expr_is_empty(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
     
     auto node = (OpNode_Assignment*)alloc_node(parser, OpKind_VariableAssignment, starting_token.code);
     node->value = value_node;
@@ -664,15 +670,13 @@ inline_fn OpNode* process_variable_assignment_op(Parser* parser)
     return node;
 }
 
-inline_fn OpNode* process_array_element_assignment_op(Parser* parser)
+inline_fn OpNode* extract_array_element_assignment(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
-    Array<Token> sentence = extract_sentence(parser, TokenKind_NextSentence, false);
+    Array<Token> sentence = extract_tokens_until(parser, TokenKind_NextSentence, false);
     
-    if (sentence.count < 6) {
-        report_error(parser->ctx, starting_token.code, STR("Invalid format for an array assignment"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
-    }
+    assert(sentence.count >= 6);
+    if (sentence.count < 6) return alloc_node(parser, OpKind_Error, starting_token.code);
     
     i32 operator_index = -1;
     
@@ -683,21 +687,30 @@ inline_fn OpNode* process_array_element_assignment_op(Parser* parser)
     }
     
     if (operator_index < 0) {
-        report_error(parser->ctx, starting_token.code, STR("Operator not found for array assignment"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_assign_operator_not_found(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     
     Array<Token> indexing_tokens = array_subarray(sentence, 1, operator_index - 1);
     if (indexing_tokens.count < 3 || indexing_tokens[0].kind != TokenKind_OpenBracket || indexing_tokens[indexing_tokens.count - 1].kind != TokenKind_CloseBracket) {
-        report_error(parser->ctx, starting_token.code, STR("Invalid format for array indexing"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_missing_closing_bracket(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     indexing_tokens = array_subarray(indexing_tokens, 1, indexing_tokens.count - 2);
     OpNode* indexing_node = process_expresion(parser, indexing_tokens);
     
     Array<Token> value_tokens = array_subarray(sentence, operator_index + 1, sentence.count - (operator_index + 1));
     OpNode* value_node = process_expresion(parser, value_tokens);
+    
+    if (value_node->kind == OpKind_Error) {
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
+    
+    if (value_node->kind == OpKind_None) {
+        report_expr_is_empty(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
     
     auto node = (OpNode_ArrayElementAssignment*)alloc_node(parser, OpKind_ArrayElementAssignment, starting_token.code);
     node->identifier = starting_token.value;
@@ -707,15 +720,14 @@ inline_fn OpNode* process_array_element_assignment_op(Parser* parser)
     return node;
 }
 
-inline_fn OpNode* process_variable_definition_op(Parser* parser)
+inline_fn OpNode* extract_variable_definition(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     
     Token identifier_token = extract_token(parser);
-    if (extract_token(parser).kind != TokenKind_Colon) {
-        report_error(parser->ctx, starting_token.code, "Invalid format for a variable definition");
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
-    }
+    
+    Token colon_token = extract_token(parser);
+    assert(colon_token.kind == TokenKind_Colon);
     
     String type_identifier = STR("");
     b32 type_is_array = false;
@@ -751,12 +763,12 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
             }
             
             if (depth > 0) {
-                report_error(parser->ctx, starting_token.code, "Missing closing bracket");
-                return alloc_node(parser, OpKind_Unknown, starting_token.code);
+                report_common_missing_closing_bracket(starting_token.code);
+                return alloc_node(parser, OpKind_Error, starting_token.code);
             }
             if (depth < 0) {
-                report_error(parser->ctx, starting_token.code, "Missing open bracket");
-                return alloc_node(parser, OpKind_Unknown, starting_token.code);
+                report_common_missing_opening_bracket(starting_token.code);
+                return alloc_node(parser, OpKind_Error, starting_token.code);
             }
             
             Array<Token> array_tokens = extract_tokens(parser, index);
@@ -784,8 +796,8 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
         }
     }
     else {
-        report_error(parser->ctx, starting_token.code, "Expecting identifier in variable assignment");
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_objdef_expecting_type_identifier(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     Token assignment_token = extract_token(parser);
@@ -794,18 +806,23 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
     
     if (assignment_token.kind != TokenKind_NextSentence)
     {
-        if (assignment_token.kind != TokenKind_Assignment) {
-            report_error(parser->ctx, assignment_token.code, "Expecting an assignment for variable definition");
-            return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        if (assignment_token.kind != TokenKind_Assignment || assignment_token.binary_operator != BinaryOperator_None) {
+            report_objdef_expecting_assignment(starting_token.code);
+            return alloc_node(parser, OpKind_Error, starting_token.code);
         }
         
-        Array<Token> assignment_tokens = extract_sentence(parser, TokenKind_NextSentence, false);
+        Array<Token> assignment_tokens = extract_tokens_until(parser, TokenKind_NextSentence, false);
         assignment_node = process_expresion(parser, assignment_tokens);
+        
+        if (assignment_node->kind == OpKind_None) {
+            report_common_expecting_valid_expresion(starting_token.code);
+            return alloc_node(parser, OpKind_Error, starting_token.code);
+        }
         
         foreach(i, array_dimensions.count) {
             if (array_dimensions[i]->kind != OpKind_None) {
-                report_error(parser->ctx, starting_token.code, "Redundant array dimensions definition before assignment");
-                return alloc_node(parser, OpKind_Unknown, starting_token.code);
+                report_objdef_redundant_array_dimensions(starting_token.code);
+                return alloc_node(parser, OpKind_Error, starting_token.code);
             }
         }
     }
@@ -823,22 +840,22 @@ inline_fn OpNode* process_variable_definition_op(Parser* parser)
     return node;
 }
 
-inline_fn OpNode* process_function_call_op(Parser* parser)
+inline_fn OpNode* extract_function_call(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     Array<Token> sentence = extract_sentence_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
-    return process_function_call_as_expresion(parser, sentence);
+    return process_function_call(parser, sentence);
 }
 
-inline_fn OpNode* process_block_op(Parser* parser)
+inline_fn OpNode* extract_block(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     Array<Token> block_tokens = extract_sentence_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
     b32 close_bracket_found = block_tokens.count > 2;
     
     if (!close_bracket_found) {
-        report_error(parser->ctx, starting_token.code, STR("Missing close bracket"));
-        return alloc_node(parser, OpKind_Unknown, starting_token.code);
+        report_common_missing_closing_bracket(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
     assert(block_tokens.count >= 2);
@@ -846,48 +863,53 @@ inline_fn OpNode* process_block_op(Parser* parser)
     return generate_ast_from_block(parser->ctx, block_tokens_without_brakets);
 }
 
-void skip_tokens_before_op(Parser* parser)
+void skip_sentence(Parser* parser)
 {
     while (parser->token_index < parser->tokens.count) {
-        Token token = parser->tokens[parser->token_index];
-        if (token.kind != TokenKind_NextLine && token.kind != TokenKind_NextSentence) break;
-        parser->token_index++;
+        Token token = parser->tokens[parser->token_index++];
+        if (token.kind == TokenKind_NextSentence) break;
     }
 }
 
-OpNode* process_op(Parser* parser)
+OpNode* extract_op(Parser* parser)
 {
     skip_tokens_before_op(parser);
     
     if (parser->token_index >= parser->tokens.count) return NULL;
     
-    u32 analyze_token_count = MIN(5, parser->tokens.count - parser->token_index - 1);
-    Array<Token> analyze_tokens = array_subarray(parser->tokens, parser->token_index, analyze_token_count);
+    Array<Token> analyze_tokens = peek_tokens(parser, 0, 5);
     
     if (analyze_tokens.count > 0 && analyze_tokens[0].kind == TokenKind_Keyword && analyze_tokens[0].keyword == KeywordType_Else) {
-        report_error(parser->ctx, analyze_tokens[0].code, STR("'else' is not valid without the corresponding 'if'"));
+        report_else_not_found_if(analyze_tokens[0].code);
         parser->token_index++;
-        return alloc_node(parser, OpKind_Unknown, analyze_tokens[0].code);
+        return alloc_node(parser, OpKind_Error, analyze_tokens[0].code);
     }
     
     OpKind kind = op_kind_from_tokens(analyze_tokens);
     
-    if (kind == OpKind_None || kind == OpKind_Unknown) {
-        report_error(parser->ctx, parser->tokens[parser->token_index].code, STR("Unknown operation: {line}"));
-        parser->token_index++;
-        return NULL;
+    if (kind == OpKind_None || kind == OpKind_Error) {
+        report_syntactic_unknown_op(parser->tokens[parser->token_index].code);
+        skip_sentence(parser);
+        return alloc_node(parser, OpKind_Error, analyze_tokens[0].code);
     }
     else {
-        if (kind == OpKind_IfStatement) return process_if_statement_op(parser);
-        if (kind == OpKind_WhileStatement) return process_while_statement_op(parser);
-        if (kind == OpKind_ForStatement) return process_for_statement_op(parser);
-        if (kind == OpKind_VariableAssignment) return process_variable_assignment_op(parser);
-        if (kind == OpKind_ArrayElementAssignment) return process_array_element_assignment_op(parser);
-        if (kind == OpKind_FunctionCall) return process_function_call_op(parser);
-        if (kind == OpKind_VariableDefinition) return process_variable_definition_op(parser);
-        if (kind == OpKind_Block) return process_block_op(parser);
+        OpNode* node = NULL;
+        if (kind == OpKind_IfStatement) node = extract_if_statement(parser);
+        if (kind == OpKind_WhileStatement) node = extract_while_statement(parser);
+        if (kind == OpKind_ForStatement) node = extract_for_statement(parser);
+        if (kind == OpKind_VariableAssignment) node = extract_variable_assignment(parser);
+        if (kind == OpKind_ArrayElementAssignment) node = extract_array_element_assignment(parser);
+        if (kind == OpKind_FunctionCall) node = extract_function_call(parser);
+        if (kind == OpKind_VariableDefinition) node = extract_variable_definition(parser);
+        if (kind == OpKind_Block) node = extract_block(parser);
+        assert(node != NULL);
+        if (node == NULL) return NULL;
         
-        assert(0);
+        if (node->kind == OpKind_Error) {
+            skip_sentence(parser);
+        }
+        
+        return node;
     }
     
     return NULL;
@@ -905,7 +927,7 @@ OpNode* generate_ast_from_block(Yov* ctx, Array<Token> tokens)
     
     while (true)
     {
-        OpNode* node = process_op(parser);
+        OpNode* node = extract_op(parser);
         if (node == NULL) break;
         array_add(&parser->ops, node);
     }
@@ -919,9 +941,8 @@ OpNode* generate_ast_from_sentence(Yov* ctx, Array<Token> tokens)
     Parser* parser = arena_push_struct<Parser>(ctx->temp_arena);
     parser->ctx = ctx;
     parser->tokens = tokens;
-    // parser->ops = pooled_array_make<OpNode*>(ctx->temp_arena, 64);
     
-    OpNode* node = process_op(parser);
+    OpNode* node = extract_op(parser);
     return node;
 }
 

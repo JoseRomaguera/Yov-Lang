@@ -66,7 +66,9 @@ void os_print(Severity severity, String text)
     String text0 = string_copy(scratch.arena, text);
     
     DWORD written;
-    WriteConsoleA(windows.console_handle, text0.data, (u32)text0.size, &written, NULL);
+    //WriteConsoleA(windows.console_handle, text0.data, (u32)text0.size, &written, NULL);
+    WriteFile(windows.console_handle, text0.data, (u32)text0.size, &written, NULL);
+    FlushFileBuffers(windows.console_handle);
     OutputDebugStringA(text0.data);
 }
 

@@ -1,14 +1,5 @@
 #include "inc.h"
 
-inline_fn u32 string_get_codepoint(String str, u64* cursor_ptr)
-{
-    // TODO(Jose):
-    u64 cursor = *cursor_ptr;
-    u32 codepoint = str[cursor];
-    *cursor_ptr = cursor + 1;
-    return codepoint;
-}
-
 inline_fn b32 codepoint_is_separator(u32 codepoint) {
     if (codepoint == ' ') return true;
     if (codepoint == '\t') return true;
@@ -36,7 +27,7 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
     
     Token token{};
     token.value = string_substring(lexer->text, lexer->cursor, size);
-    token.code = code_location_make(lexer->cursor, lexer->code_line, lexer->code_column);
+    token.code = code_location_make(lexer->cursor, lexer->code_start_line_offset, lexer->code_line, lexer->code_column, lexer->script_id);
     
     if (kind == TokenKind_Identifier) {
         if (string_equals(STR("if"), token.value)) {;
@@ -71,6 +62,7 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
         char c = lexer->text[lexer->cursor + i];
         if (c == '\n') {
             lexer->code_line++;
+            lexer->code_start_line_offset = lexer->cursor + i + 1;
             lexer->code_column = 0;
         }
         else {
@@ -262,7 +254,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
         return extract_dynamic_token(lexer, TokenKind_Identifier, cursor - lexer->cursor);
     }
     
-    return extract_token(lexer, TokenKind_Unknown, 1);
+    return extract_token(lexer, TokenKind_Error, 1);
 }
 
 Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens)
@@ -271,7 +263,7 @@ Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens)
     lexer->ctx = ctx;
     lexer->tokens = pooled_array_make<Token>(lexer->ctx->temp_arena, 1024);
     lexer->text = text;
-    lexer->discard_tokens = (b8)discard_tokens;
+    lexer->script_id = 0;
     
     lexer->code_line = 1;
     lexer->code_column = 0;

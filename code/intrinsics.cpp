@@ -127,7 +127,7 @@ internal_fn Object* intrinsic__arg_int(Interpreter* inter, OpNode* node, Array<O
     }
     else {
         if (!i64_from_arg(arg->value, &value)) {
-            report_warning(inter->ctx, node->code, "Arg type missmatch, can't assign '%S' to a 'Int", arg->name);
+            // TODO(Jose): report_warning(inter->ctx, node->code, "Arg type missmatch, can't assign '%S' to a 'Int", arg->name);
         }
     }
     
@@ -148,7 +148,7 @@ internal_fn Object* intrinsic__arg_bool(Interpreter* inter, OpNode* node, Array<
     {
         i64 int_value = 0;
         if (!i64_from_arg(arg->value, &int_value)) {
-            report_warning(inter->ctx, node->code, "Arg type missmatch, can't assign '%S' to a 'Bool", arg->name);
+            // TODO(Jose): report_warning(inter->ctx, node->code, "Arg type missmatch, can't assign '%S' to a 'Bool", arg->name);
         }
         value = int_value != 0;
     }

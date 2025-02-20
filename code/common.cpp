@@ -677,6 +677,15 @@ String string_format_ex(Arena* arena, String string, ...)
     return result;
 }
 
+u32 string_get_codepoint(String str, u64* cursor_ptr)
+{
+    // TODO(Jose):
+    u64 cursor = *cursor_ptr;
+    u32 codepoint = str[cursor];
+    *cursor_ptr = cursor + 1;
+    return codepoint;
+}
+
 //- PATH 
 
 Array<String> path_subdivide(Arena* arena, String path)
@@ -1032,6 +1041,128 @@ String string_from_keyword(KeywordType keyword)
     return STR("?");
 }
 
+String string_from_tokens(Arena* arena, Array<Token> tokens)
+{
+    SCRATCH(arena);
+    StringBuilder builder = string_builder_make(scratch.arena);
+    
+    foreach(i, tokens.count) {
+        append(&builder, tokens[i].value);
+    }
+    
+    String res = string_from_builder(scratch.arena, &builder);
+    res = string_replace(scratch.arena, res, STR("\n"), STR("\\n"));
+    res = string_replace(scratch.arena, res, STR("\r"), STR(""));
+    res = string_replace(scratch.arena, res, STR("\t"), STR(" "));
+    
+    return string_copy(arena, res);
+}
+
+u32 get_node_size(OpKind kind) {
+    if (kind == OpKind_None) return sizeof(OpNode);
+    if (kind == OpKind_Error) return sizeof(OpNode);
+    if (kind == OpKind_Block) return sizeof(OpNode_Block);
+    if (kind == OpKind_IfStatement) return sizeof(OpNode_IfStatement);
+    if (kind == OpKind_WhileStatement) return sizeof(OpNode_WhileStatement);
+    if (kind == OpKind_ForStatement) return sizeof(OpNode_ForStatement);
+    if (kind == OpKind_ForeachArrayStatement) return sizeof(OpNode_ForeachArrayStatement);
+    if (kind == OpKind_VariableAssignment) return sizeof(OpNode_Assignment);
+    if (kind == OpKind_VariableDefinition) return sizeof(OpNode_VariableDefinition);
+    if (kind == OpKind_FunctionCall) return sizeof(OpNode_FunctionCall);
+    if (kind == OpKind_ArrayExpresion) return sizeof(OpNode_ArrayExpresion);
+    if (kind == OpKind_ArrayElementValue) return sizeof(OpNode_ArrayElementValue);
+    if (kind == OpKind_ArrayElementAssignment) return sizeof(OpNode_ArrayElementAssignment);
+    if (kind == OpKind_Binary) return sizeof(OpNode_Binary);
+    if (kind == OpKind_Sign) return sizeof(OpNode_Sign);
+    if (kind == OpKind_IntLiteral) return sizeof(OpNode_Literal);
+    if (kind == OpKind_StringLiteral) return sizeof(OpNode_Literal);
+    if (kind == OpKind_BoolLiteral) return sizeof(OpNode_Literal);
+    if (kind == OpKind_IdentifierValue) return sizeof(OpNode_IdentifierValue);
+    if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
+    assert(0);
+    return sizeof(OpNode) + KB(4);
+}
+
+Array<OpNode*> get_node_childs(Arena* arena, OpNode* node)
+{
+    SCRATCH(arena);
+    
+    PooledArray<OpNode*> nodes = pooled_array_make<OpNode*>(scratch.arena, 8);
+    
+    if (node->kind == OpKind_Block) {
+        auto node0 = (OpNode_Block*)node;
+        foreach(i, node0->ops.count) {
+            array_add(&nodes, node0->ops[i]);
+        }
+    }
+    else if (node->kind == OpKind_IfStatement) {
+        auto node0 = (OpNode_IfStatement*)node;
+        array_add(&nodes, node0->expresion);
+        array_add(&nodes, node0->success);
+        array_add(&nodes, node0->failure);
+    }
+    else if (node->kind == OpKind_WhileStatement) {
+        auto node0 = (OpNode_WhileStatement*)node;
+        array_add(&nodes, node0->expresion);
+        array_add(&nodes, node0->content);
+    }
+    else if (node->kind == OpKind_ForStatement) {
+        auto node0 = (OpNode_ForStatement*)node;
+        array_add(&nodes, node0->initialize_sentence);
+        array_add(&nodes, node0->condition_expresion);
+        array_add(&nodes, node0->update_sentence);
+        array_add(&nodes, node0->content);
+    }
+    else if (node->kind == OpKind_ForeachArrayStatement) {
+        auto node0 = (OpNode_ForeachArrayStatement*)node;
+        array_add(&nodes, node0->expresion);
+        array_add(&nodes, node0->content);
+    }
+    else if (node->kind == OpKind_VariableAssignment) {
+        auto node0 = (OpNode_Assignment*)node;
+        array_add(&nodes, node0->value);
+    }
+    else if (node->kind == OpKind_VariableDefinition) {
+        auto node0 = (OpNode_VariableDefinition*)node;
+        array_add(&nodes, node0->assignment);
+    }
+    else if (node->kind == OpKind_FunctionCall) {
+        auto node0 = (OpNode_FunctionCall*)node;
+        Array<OpNode*> params = node0->parameters;
+        foreach(i, params.count)
+            array_add(&nodes, params[i]);
+    }
+    else if (node->kind == OpKind_ArrayExpresion) {
+        auto node0 = (OpNode_ArrayExpresion*)node;
+        Array<OpNode*> exps = node0->nodes;
+        foreach(i, exps.count)
+            array_add(&nodes, exps[i]);
+    }
+    else if (node->kind == OpKind_ArrayElementValue) {
+        auto node0 = (OpNode_ArrayElementValue*)node;
+        array_add(&nodes, node0->expresion);
+    }
+    else if (node->kind == OpKind_ArrayElementAssignment) {
+        auto node0 = (OpNode_ArrayElementAssignment*)node;
+        array_add(&nodes, node0->indexing_expresion);
+        array_add(&nodes, node0->value);
+    }
+    else if (node->kind == OpKind_Binary) {
+        auto node0 = (OpNode_Binary*)node;
+        array_add(&nodes, node0->left);
+        array_add(&nodes, node0->right);
+    }
+    else if (node->kind == OpKind_Sign) {
+        auto node0 = (OpNode_Sign*)node;
+        array_add(&nodes, node0->expresion);
+    }
+    else {
+        assert(0);
+    }
+    
+    return array_from_pooled_array(arena, nodes);
+}
+
 //- REPORT 
 
 void print_ex(Severity severity, String str, ...)
@@ -1083,6 +1214,31 @@ void yov_shutdown(Yov* ctx)
     arena_free(ctx->temp_arena);
 }
 
+String yov_get_script_path(Yov* ctx, i32 script_id)
+{
+    assert(script_id == 0);
+    return ctx->script_path;
+}
+
+String yov_get_line_sample(Arena* arena, Yov* ctx, CodeLocation code)
+{
+    String text = ctx->script_text;
+    u64 starting_cursor = code.start_line_offset;
+    
+    u64 cursor = starting_cursor;
+    while (cursor < text.size) {
+        u64 next_cursor = cursor;
+        u32 codepoint = string_get_codepoint(text, &next_cursor);
+        if (codepoint == '\r') break;
+        if (codepoint == '\n') break;
+        if (cursor == starting_cursor && (codepoint == '\t' || codepoint == ' ')) starting_cursor = next_cursor;
+        cursor = next_cursor;
+    }
+    
+    String sample = string_substring(text, starting_cursor, cursor - starting_cursor);
+    return string_format(arena, "'%S'", sample);
+}
+
 b32 generate_program_args(Yov* ctx, Array<String> raw_args)
 {
     SCRATCH();
@@ -1114,7 +1270,7 @@ b32 generate_program_args(Yov* ctx, Array<String> raw_args)
     return true;
 }
 
-void report_ex(Yov* ctx, Severity severity, CodeLocation code, String text, ...)
+void report_error_ex(Yov* ctx, CodeLocation code, String text, ...)
 {
     SCRATCH();
     
@@ -1123,36 +1279,40 @@ void report_ex(Yov* ctx, Severity severity, CodeLocation code, String text, ...)
     String formatted_text = string_format_with_args(scratch.arena, text, args);
     va_end(args);
     
-    formatted_text = string_replace(scratch.arena, formatted_text, STR("{line}"), STR("*line*"));
+    String line_sample = yov_get_line_sample(scratch.arena, ctx, code);
+    formatted_text = string_replace(scratch.arena, formatted_text, STR("{line}"), line_sample);
     
     Report report;
     report.text = string_copy(ctx->static_arena, formatted_text);
     report.code = code;
-    report.severity = severity;
     array_add(&ctx->reports, report);
     
-    print_report(report);
-    
-    if (severity == Severity_Error) ctx->error_count++;
+    ctx->error_count++;
 }
 
-void print_report(Report report)
+internal_fn i32 report_compare(const void* _0, const void* _1)
 {
-    String prefix = STR("INFO");
+    const Report* r0 = (const Report*)_0;
+    const Report* r1 = (const Report*)_1;
     
-    if (report.severity == Severity_Warning) {
-        prefix = STR("WARNING");
-    }
-    else if (report.severity == Severity_Error) {
-        prefix = STR("ERROR");
-    }
-    
-    print(report.severity, "[%S]%u: %S\n", prefix, (u32)report.code.line, report.text);
+    if (r0->code.offset == r1->code.offset) return 0;
+    return (r0->code.offset < r1->code.offset) ? -1 : 1;
 }
 
-void print_reports(Array<Report> reports)
+void yov_print_reports(Yov* ctx)
 {
+    SCRATCH();
+    Array<Report> reports = array_from_pooled_array(scratch.arena, ctx->reports);
+    array_sort(reports, report_compare);
+    
     foreach(i, reports.count) {
-        print_report(reports[i]);
+        print_report(ctx, reports[i]);
     }
 }
+
+void print_report(Yov* ctx, Report report)
+{
+    String path = yov_get_script_path(ctx, report.code.script_id);
+    print(Severity_Error, "%S(%u): %S\n", path, (u32)report.code.line, report.text);
+}
+

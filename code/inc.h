@@ -46,6 +46,7 @@ static_assert(sizeof(f64) == 8);
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define CLAMP(x, _min, _max) MAX(MIN(x, _max), _min)
 #define ABS(x) (((x) < 0) ? (-(x)) : (x))
+#define SWAP(a, b) do { auto& _a = (a); auto& _b = (b); auto aux = _b; _b = _a; _a = aux; } while(0)
 
 #define _JOIN(x, y) x##y
 #define JOIN(x, y) _JOIN(x, y)
@@ -260,6 +261,7 @@ Array<String> string_split(Arena* arena, String str, String separator);
 String string_replace(Arena* arena, String str, String old_str, String new_str);
 String string_format_with_args(Arena* arena, String string, va_list args);
 String string_format_ex(Arena* arena, String string, ...);
+u32 string_get_codepoint(String str, u64* cursor_ptr);
 
 #define string_format(arena, str, ...) string_format_ex(arena, STR(str), __VA_ARGS__)
 
@@ -347,71 +349,19 @@ enum KeywordType {
 
 String string_from_keyword(KeywordType keyword);
 
-//- PROGRAM CONTEXT 
-
-#include "templates.h"
-
-void print_ex(Severity severity, String str, ...);
-#define print(severity, str, ...) print_ex(severity, STR(str), __VA_ARGS__)
-#define print_info(str, ...) print_ex(Severity_Info, STR(str), __VA_ARGS__)
-#define print_warning(str, ...) print_ex(Severity_Warning, STR(str), __VA_ARGS__)
-#define print_error(str, ...) print_ex(Severity_Error, STR(str), __VA_ARGS__)
-
-#define print_separator() print_ex(Severity_Info, STR("=========================\n"))
-
 struct CodeLocation {
     u64 offset;
+    u64 start_line_offset;
     u32 line;
     u32 column;
+    i32 script_id;
 };
 
-inline_fn CodeLocation code_location_make(u64 offset, u32 line, u32 column) { return { offset, line, column }; }
-
-struct Report {
-    String text;
-    CodeLocation code;
-    Severity severity;
-};
-
-struct ProgramArg {
-    String name;
-    String value;
-};
-
-struct Yov {
-    Arena* static_arena;
-    Arena* temp_arena;
-    
-    String script_name;
-    String script_dir;
-    String script_path;
-    
-    String caller_dir;
-    
-    Array<ProgramArg> args;
-    
-    PooledArray<Report> reports;
-    i32 error_count;
-};
-
-Yov* yov_initialize(Arena* arena, String script_path);
-void yov_shutdown(Yov* ctx);
-
-b32 generate_program_args(Yov* ctx, Array<String> raw_args);
-
-void report_ex(Yov* ctx, Severity severity, CodeLocation code, String text, ...);
-
-#define report_info(ctx, code, text, ...) report_ex(ctx, Severity_Info, code, STR(text), __VA_ARGS__);
-#define report_warning(ctx, code, text, ...) report_ex(ctx, Severity_Warning, code, STR(text), __VA_ARGS__);
-#define report_error(ctx, code, text, ...) report_ex(ctx, Severity_Error, code, STR(text), __VA_ARGS__);
-
-void print_report(Report report);
-void print_reports(Array<Report> reports);
-
-//- LEXER
+inline_fn CodeLocation code_location_make(u64 offset, u64 start_line_offset, u32 line, u32 column, i32 script_id) { return { offset, start_line_offset, line, column, script_id }; }
 
 enum TokenKind {
-    TokenKind_Unknown,
+    TokenKind_None,
+    TokenKind_Error,
     TokenKind_Separator,
     TokenKind_Comment,
     TokenKind_Identifier,
@@ -449,17 +399,134 @@ struct Token {
     };
 };
 
+String string_from_tokens(Arena* arena, Array<Token> tokens);
+
+//- PROGRAM CONTEXT 
+
+#include "templates.h"
+
+void print_ex(Severity severity, String str, ...);
+#define print(severity, str, ...) print_ex(severity, STR(str), __VA_ARGS__)
+#define print_info(str, ...) print_ex(Severity_Info, STR(str), __VA_ARGS__)
+#define print_warning(str, ...) print_ex(Severity_Warning, STR(str), __VA_ARGS__)
+#define print_error(str, ...) print_ex(Severity_Error, STR(str), __VA_ARGS__)
+
+#define print_separator() print_ex(Severity_Info, STR("=========================\n"))
+
+struct Report {
+    String text;
+    CodeLocation code;
+};
+
+struct ProgramArg {
+    String name;
+    String value;
+};
+
+struct Yov {
+    Arena* static_arena;
+    Arena* temp_arena;
+    
+    String script_name;
+    String script_dir;
+    String script_path;
+    String script_text;
+    
+    String caller_dir;
+    
+    Array<ProgramArg> args;
+    
+    PooledArray<Report> reports;
+    i32 error_count;
+};
+
+Yov* yov_initialize(Arena* arena, String script_path);
+void yov_shutdown(Yov* ctx);
+
+String yov_get_script_path(Yov* ctx, i32 script_id);
+String yov_get_line_sample(Arena* arena, Yov* ctx, CodeLocation code);
+
+b32 generate_program_args(Yov* ctx, Array<String> raw_args);
+
+void report_error_ex(Yov* ctx, CodeLocation code, String text, ...);
+
+void yov_print_reports(Yov* ctx);
+
+#define report_error(ctx, code, text, ...) report_error_ex(ctx, code, STR(text), __VA_ARGS__);
+#define log_trace(ctx, code, text, ...) print_info(STR(text), __VA_ARGS__);
+
+void print_report(Yov* ctx, Report report);
+
+//- SYNTACTIC REPORTS 
+
+#define report_common_missing_closing_bracket(_code) report_error(parser->ctx, _code, "Missing closing bracket");
+#define report_common_missing_opening_bracket(_code) report_error(parser->ctx, _code, "Missing opening bracket");
+#define report_common_missing_closing_parenthesis(_code) report_error(parser->ctx, _code, "Missing closing parenthesis");
+#define report_common_missing_opening_parenthesis(_code) report_error(parser->ctx, _code, "Missing opening parenthesis");
+#define report_common_missing_closing_brace(_code) report_error(parser->ctx, _code, "Missing closing brace");
+#define report_common_missing_opening_brace(_code) report_error(parser->ctx, _code, "Missing opening brace");
+#define report_common_expecting_valid_expresion(_code) report_error(parser->ctx, _code, "Expecting a valid expresion: {line}");
+#define report_common_expecting_parenthesis(_code, _for_what) report_error(parser->ctx, _code, "Expecting parenthesis for %S", STR(_for_what));
+#define report_syntactic_unknown_op(_code) report_error(parser->ctx, _code, "Unknown operation: {line}");
+#define report_expr_invalid_binary_operation(_code, _op_str) report_error(parser->ctx, _code, "Invalid binary operation: '%S'", _op_str);
+#define report_expr_syntactic_unknown(_code, _expr_str) report_error(parser->ctx, _code, "Unknown expresion: '%S'", _expr_str);
+#define report_expr_is_empty(_code) report_error(parser->ctx, _code, "Empty expresion: {line}");
+#define report_expr_empty_member(_code) report_error(parser->ctx, _code, "Member is not specified");
+#define report_array_indexing_expects_expresion(_code) report_error(parser->ctx, _code, "Array indexing expects an expresion");
+#define report_objdef_expecting_type_identifier(_code) report_error(parser->ctx, _code, "Expecting type identifier in object definition");
+#define report_objdef_expecting_assignment(_code) report_error(parser->ctx, _code, "Expecting an assignment for object definition");
+#define report_objdef_redundant_array_dimensions(_code) report_error(parser->ctx, _code, "Redundant array dimensions definition before assignment");
+#define report_else_not_found_if(_code) report_error(parser->ctx, _code, "'else' is not valid without the corresponding 'if'");
+#define report_for_unknown(_code) report_error(parser->ctx, _code, "Unknown for-statement: {line}");
+#define report_foreach_expecting_identifier(_code) report_error(parser->ctx, _code, "Expecting an identifier for the itarator");
+#define report_foreach_expecting_expresion(_code) report_error(parser->ctx, _code, "Expecting an array expresion");
+#define report_foreach_expecting_colon(_code) report_error(parser->ctx, _code, "Expecting a colon separating identifiers and array expresion");
+#define report_foreach_expecting_comma_separated_identifiers(_code) report_error(parser->ctx, _code, "Foreach-Statement expects comma separated identifiers");
+#define report_assign_operator_not_found(_code) report_error(parser->ctx, _code, "Operator not found for an assignment");
+
+//- SEMANTIC REPORTS
+
+#define report_zero_division(_code) report_error(inter->ctx, _code, "Divided by zero");
+#define report_right_path_cant_be_absolute(_code) report_error(inter->ctx, _code, "Right path can't be absolute");
+#define report_type_missmatch_append(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't append a '%S' into '%S'", _v0, _v1);
+#define report_type_missmatch_array_expr(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch in array expresion, expecting '%S' but found '%S'", _v0, _v1);
+#define report_type_missmatch_assign(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't assign '%S' to '%S'", _v0, _v1);
+#define report_type_undefined(_code, _t) report_error(inter->ctx, _code, "Undefined type '%S'", _t);
+#define report_invalid_binary_op(_code, _v0, _op, _v1) report_error(inter->ctx, _code, "Invalid binary operation: '%S' %S '%S'", _v0, _op, _v1);
+#define report_invalid_signed_op(_code, _op, _v) report_error(inter->ctx, _code, "Invalid signed operation '%S %S'", _op, _v);
+#define report_object_not_found(_code, _v) report_error(inter->ctx, _code, "Object '%S' not found", _v);
+#define report_object_duplicated(_code, _v) report_error(inter->ctx, _code, "Duplicated object '%S'", _v);
+#define report_member_not_found(_code, _v, _t) report_error(inter->ctx, _code, "Member '%S' not found in a '%S'", _v, _t);
+#define report_function_not_found(_code, _v) report_error(inter->ctx, _code, "Function '%S' not found", _v);
+#define report_function_expecting_parameters(_code, _v, _c) report_error(inter->ctx, _code, "Function '%S' is expecting %u parameters", _v, _c);
+#define report_function_wrong_parameter_type(_code, _f, _t, _c) report_error(inter->ctx, _code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
+#define report_indexing_expects_an_int(_code) report_error(inter->ctx, _code, "Indexing expects an Int");
+#define report_indexing_not_allowed(_code, _t) report_error(inter->ctx, _code, "Indexing not allowed for a '%S'", _t);
+#define report_indexing_out_of_bounds(_code) report_error(inter->ctx, _code, "Index out of bounds");
+#define report_dimensions_expects_an_int(_code) report_error(inter->ctx, _code, "Expecting an integer for the dimensions of the array");
+#define report_dimensions_must_be_positive(_code) report_error(inter->ctx, _code, "Expecting a positive integer for the dimensions of the array");
+#define report_expr_expects_bool(_code, _what)  report_error(inter->ctx, _code, "%S expects a Bool", STR(_what));
+#define report_expr_semantic_unknown(_code)  report_error(inter->ctx, _code, "Unknown expresion: {line}");
+#define report_for_expects_an_array(_code)  report_error(inter->ctx, _code, "Foreach-Statement expects an array");
+#define report_semantic_unknown_op(_code) report_error(inter->ctx, _code, "Unknown operation: {line}");
+
+//- LANG REPORTS
+
+#define report_stack_is_broken() report_error(inter->ctx, {}, "The stack is broken");
+
+//- LEXER
+
 struct Lexer {
     Yov* ctx;
     
     PooledArray<Token> tokens;
     String text;
+    i32 script_id;
     
     u64 cursor;
+    u64 code_start_line_offset;
     u32 code_column;
     u32 code_line;
-    
-    b8 discard_tokens;
 };
 
 Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens);
@@ -468,7 +535,7 @@ Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens);
 
 enum OpKind {
     OpKind_None,
-    OpKind_Unknown,
+    OpKind_Error,
     OpKind_Block,
     OpKind_IfStatement,
     OpKind_WhileStatement,
@@ -586,6 +653,9 @@ struct OpNode_MemberValue : OpNode {
     String member;
 };
 
+u32 get_node_size(OpKind kind);
+Array<OpNode*> get_node_childs(Arena* arena, OpNode* node);
+
 struct Parser {
     Yov* ctx;
     Array<Token> tokens;
@@ -593,14 +663,23 @@ struct Parser {
     PooledArray<OpNode*> ops;
 };
 
-Array<Token> extract_sentence(Parser* parser, TokenKind separator, b32 require_separator);
+b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token);
+
+Token peek_token(Parser* parser, i32 offset = 0);
+Array<Token> peek_tokens(Parser* parser, i32 offset, u32 count);
+void skip_tokens(Parser* parser, u32 count);
 void skip_tokens_before_op(Parser* parser);
-OpNode* process_op(Parser* parser);
+Token extract_token(Parser* parser);
+Array<Token> extract_tokens(Parser* parser, u32 count);
+Array<Token> extract_tokens_until(Parser* parser, TokenKind separator, b32 require_separator);
+
+OpNode* extract_op(Parser* parser);
 
 OpNode* generate_ast_from_block(Yov* ctx, Array<Token> tokens);
 OpNode* generate_ast_from_sentence(Yov* ctx, Array<Token> tokens);
 OpNode* generate_ast(Yov* ctx, Array<Token> tokens);
 
+OpNode* process_function_call(Parser* parser, Array<Token> tokens);
 OpNode* process_expresion(Parser* parser, Array<Token> tokens);
 
 //- INTERPRETER 
