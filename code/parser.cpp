@@ -137,7 +137,7 @@ Array<Token> extract_tokens_until(Parser* parser, TokenKind separator, b32 requi
     return array_subarray(parser->tokens, starting_index, parser->token_index - starting_index);
 }
 
-Array<Token> extract_sentence_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator)
+Array<Token> extract_tokens_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator)
 {
     u32 starting_index = parser->token_index;
     i32 depth = 0;
@@ -475,7 +475,7 @@ inline_fn OpNode* extract_if_statement(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
     
-    Array<Token> sentence = extract_tokens_until(parser, TokenKind_CloseParenthesis, true);
+    Array<Token> sentence = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
     
     assert(sentence.count >= 4);
     if (sentence.count < 4) return alloc_node(parser, OpKind_Error, starting_token.code);
@@ -843,14 +843,14 @@ inline_fn OpNode* extract_variable_definition(Parser* parser)
 inline_fn OpNode* extract_function_call(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
-    Array<Token> sentence = extract_sentence_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
+    Array<Token> sentence = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
     return process_function_call(parser, sentence);
 }
 
 inline_fn OpNode* extract_block(Parser* parser)
 {
     Token starting_token = parser->tokens[parser->token_index];
-    Array<Token> block_tokens = extract_sentence_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
+    Array<Token> block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
     b32 close_bracket_found = block_tokens.count > 2;
     
     if (!close_bracket_found) {

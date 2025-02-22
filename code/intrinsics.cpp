@@ -2,41 +2,71 @@
 
 //- CORE 
 
-internal_fn Object* intrinsic__print(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__print(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     print_info("%S", get_string(vars[0]));
-    return inter->void_obj;
+    
+    return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__println(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__println(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     print_info("%S\n", get_string(vars[0]));
-    return inter->void_obj;
+    return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__call(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__call(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
     i32 result = -1;
     String command_line = get_string(vars[0]);
     
-    if (user_assertion(inter, string_format(scratch.arena, "Call:\n%S", command_line))) {
+    Result res = user_assertion(inter, string_format(scratch.arena, "Call:\n%S", command_line));
+    
+    if (res.success) {
         result = os_call(get_string(inter->cd_obj), command_line);
     }
     
-    return obj_alloc_temp_int(inter, result);
+    return { obj_alloc_temp_int(inter, result), RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__exit(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__exit(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     interpreter_exit(inter);
-    return inter->void_obj;
+    return { inter->void_obj, RESULT_SUCCESS };
+}
+
+internal_fn IntrinsicFunctionResult intrinsic__set_cd(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    Object* obj = inter->cd_obj;
+    String path = get_string(vars[0]);
+    
+    if (os_path_is_absolute(path)) {
+        obj_copy(inter, obj, vars[0]);
+        return { inter->void_obj, RESULT_SUCCESS };
+    }
+    
+    String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(obj), path));
+    obj_set_string(inter, obj, res);
+    
+    return { inter->void_obj, RESULT_SUCCESS };;
+}
+
+//- UTILS 
+
+internal_fn IntrinsicFunctionResult intrinsic__path_resolve(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    String res = path_resolve(scratch.arena, get_string(vars[0]));
+    return { obj_alloc_temp_string(inter, res), RESULT_SUCCESS };
 }
 
 //- YOV 
 
-internal_fn Object* intrinsic__yov_require(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__yov_require(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     i64 major = get_int(vars[0]);
     i64 minor = get_int(vars[1]);
@@ -44,13 +74,13 @@ internal_fn Object* intrinsic__yov_require(Interpreter* inter, OpNode* node, Arr
     b32 res = major == YOV_MAJOR_VERSION && minor == YOV_MINOR_VERSION;
     
     if (!res) {
-        report_error(inter->ctx, node->code, "Require version: Yov v%u.%u", major, minor);
+        report_error(inter->ctx, code, "Require version: Yov v%u.%u", major, minor);
     }
     
-    return inter->void_obj;
+    return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__yov_require_min(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__yov_require_min(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     i64 major = get_int(vars[0]);
     i64 minor = get_int(vars[1]);
@@ -60,13 +90,13 @@ internal_fn Object* intrinsic__yov_require_min(Interpreter* inter, OpNode* node,
     else if (major == YOV_MAJOR_VERSION && minor > YOV_MINOR_VERSION) res = false;
     
     if (!res) {
-        report_error(inter->ctx, node->code, "Require minimum version: Yov v%u.%u", major, minor);
+        report_error(inter->ctx, code, "Require minimum version: Yov v%u.%u", major, minor);
     }
     
-    return inter->void_obj;
+    return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__yov_require_max(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__yov_require_max(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     i64 major = get_int(vars[0]);
     i64 minor = get_int(vars[1]);
@@ -76,10 +106,10 @@ internal_fn Object* intrinsic__yov_require_max(Interpreter* inter, OpNode* node,
     else if (major == YOV_MAJOR_VERSION && minor >= YOV_MINOR_VERSION) res = true;
     
     if (!res) {
-        report_error(inter->ctx, node->code, "Require maximum version: Yov v%u.%u", major, minor);
+        report_error(inter->ctx, code, "Require maximum version: Yov v%u.%u", major, minor);
     }
     
-    return inter->void_obj;
+    return { inter->void_obj, RESULT_SUCCESS };
 }
 
 //- ARGS 
@@ -115,7 +145,7 @@ internal_fn b32 i64_from_arg(String arg, i64* v)
     return false;
 }
 
-internal_fn Object* intrinsic__arg_int(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__arg_int(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -131,10 +161,10 @@ internal_fn Object* intrinsic__arg_int(Interpreter* inter, OpNode* node, Array<O
         }
     }
     
-    return obj_alloc_temp_int(inter, value);
+    return { obj_alloc_temp_int(inter, value), RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__arg_bool(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__arg_bool(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -153,10 +183,10 @@ internal_fn Object* intrinsic__arg_bool(Interpreter* inter, OpNode* node, Array<
         value = int_value != 0;
     }
     
-    return obj_alloc_temp_bool(inter, (b8)value);
+    return { obj_alloc_temp_bool(inter, (b8)value), RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__arg_string(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__arg_string(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -166,17 +196,17 @@ internal_fn Object* intrinsic__arg_string(Interpreter* inter, OpNode* node, Arra
     if (arg == NULL) value = get_string(vars[1]);
     else value = arg->value;
     
-    return obj_alloc_temp_string(inter, value);
+    return { obj_alloc_temp_string(inter, value), RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__arg_exists(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__arg_exists(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
-    return obj_alloc_temp_bool(inter, arg != NULL);
+    return { obj_alloc_temp_bool(inter, arg != NULL), RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__arg_flag(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__arg_flag(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -190,71 +220,58 @@ internal_fn Object* intrinsic__arg_flag(Interpreter* inter, OpNode* node, Array<
         else res = true;
     }
     
-    return obj_alloc_temp_bool(inter, (b8)res);
+    return { obj_alloc_temp_bool(inter, (b8)res), RESULT_SUCCESS };
 }
 
 //- MISC 
 
-internal_fn Object* intrinsic__ask_yesno(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__ask_yesno(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     String content = get_string(vars[0]);
     
     b32 result = os_ask_yesno(STR("Ask"), content);
-    return obj_alloc_temp_bool(inter, (b8)result);
+    return { obj_alloc_temp_bool(inter, (b8)result), RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__set_cd(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__exists(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
-    Object* obj = inter->cd_obj;
     String path = get_string(vars[0]);
+    b32 result = os_exists(path);
     
-    if (os_path_is_absolute(path)) {
-        obj_copy(inter, obj, vars[0]);
-        return inter->void_obj;
-    }
-    
-    String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(obj), path));
-    obj_set_string(inter, obj, res);
-    
-    return inter->void_obj;
+    return { obj_alloc_temp_bool(inter, result), RESULT_SUCCESS };
 }
 
-internal_fn Object* intrinsic__create_folder(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__create_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
     String path = get_string(vars[0]);
     b32 recursive = get_bool(vars[1]);
-    b32 result = false;
     
-    if (user_assertion(inter, string_format(scratch.arena, "Create folder:\n%S", path))) {
-        result = os_folder_create(path, recursive);
+    Result res = user_assertion(inter, string_format(scratch.arena, "Create folder:\n%S", path));
+    
+    if (res.success) {
+        res = os_create_directory(path, recursive);
     }
     
-    return obj_alloc_temp_bool(inter, (b8)result);
+    return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-internal_fn Object* intrinsic__copy_file(Interpreter* inter, OpNode* node, Array<Object*> vars)
+internal_fn IntrinsicFunctionResult intrinsic__copy_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
     String dst = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
     String src = path_absolute_to_cd(scratch.arena, inter, get_string(vars[1]));
+    b32 override = get_bool(vars[2]);
     
-    if (user_assertion(inter, string_format(scratch.arena, "Copy file\n'%S'\ninto\n'%S'", src, dst))) {
-        os_copy_file(dst, src, true);
-    }
+    Result res = user_assertion(inter, string_format(scratch.arena, "Copy file\n'%S'\ninto\n'%S'", src, dst));
     
-    return inter->void_obj;
-}
-
-internal_fn Object* intrinsic__path_resolve(Interpreter* inter, OpNode* node, Array<Object*> vars)
-{
-    SCRATCH();
-    String res = path_resolve(scratch.arena, get_string(vars[0]));
-    return obj_alloc_temp_string(inter, res);
+    if (res.success) res = os_copy_file(dst, src, override, false);
+    
+    return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
 FunctionDefinition make_intrinsic_function(Arena* arena, String identifier, i32 return_vtype, Array<i32> parameters, IntrinsicFunction* intrinsic)
@@ -281,26 +298,38 @@ Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* int
     SCRATCH(arena);
     PooledArray<FunctionDefinition> list = pooled_array_make<FunctionDefinition>(scratch.arena, 32);
     
+    // Core
     define_instrinsic("print", intrinsic__print, VType_Void, VType_String);
     define_instrinsic("println", intrinsic__println, VType_Void, VType_String);
     define_instrinsic("call", intrinsic__call, VType_Int, VType_String);
     define_instrinsic("exit", intrinsic__exit, VType_Void, VType_Void);
+    define_instrinsic("set_cd", intrinsic__set_cd, VType_Void, VType_String);
     
+    // Utils
+    define_instrinsic("path_resolve", intrinsic__path_resolve, VType_String, VType_String);
+    
+    // Yov
     define_instrinsic("yov_require", intrinsic__yov_require, VType_Void, VType_Int, VType_Int);
     define_instrinsic("yov_require_min", intrinsic__yov_require_min, VType_Void, VType_Int, VType_Int);
     define_instrinsic("yov_require_max", intrinsic__yov_require_max, VType_Void, VType_Int, VType_Int);
     
+    // Args
     define_instrinsic("arg_int", intrinsic__arg_int, VType_Int, VType_String, VType_Int);
     define_instrinsic("arg_bool", intrinsic__arg_bool, VType_Bool, VType_String, VType_Bool);
     define_instrinsic("arg_string", intrinsic__arg_string, VType_String, VType_String, VType_String);
     define_instrinsic("arg_flag", intrinsic__arg_flag, VType_Bool, VType_String);
     define_instrinsic("arg_exists", intrinsic__arg_exists, VType_Bool, VType_String);
     
+    // User
     define_instrinsic("ask_yesno", intrinsic__ask_yesno, VType_Bool, VType_String);
-    define_instrinsic("set_cd", intrinsic__set_cd, VType_Void, VType_String);
-    define_instrinsic("create_folder", intrinsic__create_folder, VType_Bool, VType_String, VType_Bool);
-    define_instrinsic("copy_file", intrinsic__copy_file, VType_Void, VType_String, VType_String);
-    define_instrinsic("path_resolve", intrinsic__path_resolve, VType_String, VType_String);
+    
+    // File System
+    define_instrinsic("exists", intrinsic__exists, VType_Bool, VType_String);
+    define_instrinsic("create_directory", intrinsic__create_directory, VType_Bool, VType_String, VType_Bool);
+    // TODO(Jose): define_instrinsic("delete_directory", intrinsic__create_directory, VType_Bool, VType_String, VType_Bool);
+    define_instrinsic("copy_file", intrinsic__copy_file, VType_Bool, VType_String, VType_String, VType_Bool);
+    // TODO(Jose): define_instrinsic("move_file", intrinsic__move_file, VType_Bool, VType_String, VType_String);
+    // TODO(Jose): define_instrinsic("delete_file", intrinsic__move_file, VType_Bool, VType_String, VType_String);
     
     return array_from_pooled_array(arena, list);
 }

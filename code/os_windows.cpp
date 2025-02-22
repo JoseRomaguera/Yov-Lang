@@ -108,6 +108,39 @@ void os_release_virtual_memory(void* address)
     VirtualFree(address, 0, MEM_RELEASE);
 }
 
+internal_fn String string_from_win_error(DWORD error)
+{
+    if (error == 0) return {};
+    if (error == ERROR_FILE_NOT_FOUND) return STR("File not found");
+    if (error == ERROR_PATH_NOT_FOUND || error == ERROR_BAD_PATHNAME) return STR("Invalid path");
+    if (error == ERROR_ACCESS_DENIED) return STR("Access denied");
+    if (error == ERROR_NOT_ENOUGH_MEMORY) return STR("Not enough memory");
+    if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) return STR("Operation blocked by other process");
+    if (error == ERROR_FILENAME_EXCED_RANGE) return STR("Path exceded limit");
+    if (error == ERROR_FILE_EXISTS) return STR("File already exists");
+    if (error == ERROR_ALREADY_EXISTS) return STR("Already exists");
+    if (error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL ) return STR("Disk is full");
+    if (error == ERROR_WRITE_PROTECT) return STR("Can't write");
+    if (error == ERROR_OPERATION_ABORTED) return STR("Operation aborted");
+    if (error == ERROR_VIRUS_INFECTED) return STR("Operation aborted, virus detected");
+    if (error == ERROR_FILE_TOO_LARGE) return STR("File too large");
+    if (error == ERROR_DIRECTORY) return STR("It's a directory");
+    return STR("Unknown error");
+}
+
+internal_fn String string_from_last_error()
+{
+    DWORD error = GetLastError();
+    return string_from_win_error(error);
+}
+
+b32 os_exists(String path)
+{
+    SCRATCH();
+    String path0 = string_copy(scratch.arena, path);
+    return GetFileAttributes(path0.data) != INVALID_FILE_ATTRIBUTES;
+}
+
 b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result)
 {
     SCRATCH(arena);
@@ -131,18 +164,23 @@ b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result)
     return true;
 }
 
-b32 os_copy_file(String dst_path, String src_path, b32 override)
+Result os_copy_file(String dst_path, String src_path, b32 override, b32 recursive)
 {
     SCRATCH();
     String dst_path0 = string_copy(scratch.arena, dst_path);
     String src_path0 = string_copy(scratch.arena, src_path);
     
+    // TODO(Jose): recursive
+    
     b32 fail_if_exists = !override;
     
-    return CopyFile(src_path0.data, dst_path0.data, fail_if_exists) != 0;
+    Result res{};
+    res.success = CopyFile(src_path0.data, dst_path0.data, fail_if_exists) != 0;
+    if (!res.success) res.message = string_from_last_error();
+    return res;
 }
 
-inline_fn b32 create_path(String path)
+inline_fn b32 create_recursive_path(String path)
 {
     SCRATCH();
     
@@ -166,12 +204,23 @@ inline_fn b32 create_path(String path)
     return TRUE;
 }
 
-b32 os_folder_create(String path, b32 recursive)
+Result os_create_directory(String path, b32 recursive)
 {
     SCRATCH();
     String path0 = string_copy(scratch.arena, path);
-	if (recursive) create_path(path0);
-    return (b32)CreateDirectory(path0.data, NULL);
+	if (recursive) create_recursive_path(path0);
+    
+    Result res{};
+    res.success = (b32)CreateDirectory(path0.data, NULL);
+    
+    DWORD error = 0;
+    if (!res.success) {
+        error = GetLastError();
+        if (error == ERROR_ALREADY_EXISTS) res.success = true;
+    }
+    
+    if (!res.success) res.message = string_from_win_error(error);
+    return res;
 }
 
 b32 os_ask_yesno(String title, String content)

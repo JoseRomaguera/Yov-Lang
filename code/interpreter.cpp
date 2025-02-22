@@ -526,6 +526,8 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
     
     Object* expresion_result = interpret_expresion(inter, node->expresion);
     
+    if (is_unknown(expresion_result)) return;
+    
     if (!is_bool(expresion_result)) {
         report_expr_expects_bool(node->code, "If-Statement");
         return;
@@ -694,35 +696,13 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0)
         return inter->nil_obj;
     }
     
-    if (fn->parameter_vtypes.count != node->parameters.count)
-    {
-        report_function_expecting_parameters(node->code, node->identifier, fn->parameter_vtypes.count);
-        return inter->nil_obj;
-    }
+    Array<Object*> objects = array_make<Object*>(scratch.arena, node->parameters.count);
     
-    Array<Object*> objects = array_make<Object*>(scratch.arena, fn->parameter_vtypes.count);
     foreach(i, objects.count) {
         objects[i] = interpret_expresion(inter, node->parameters[i]);
-        
-        if (objects[i]->vtype != fn->parameter_vtypes[i]) {
-            report_function_wrong_parameter_type(node->code, node->identifier, string_from_vtype(scratch.arena, inter, fn->parameter_vtypes[i]), i + 1);
-            return inter->nil_obj;
-        }
     }
     
-    if (!inter->settings.execute) {
-        return obj_alloc_temp(inter, fn->return_vtype);
-    }
-    
-    Object* return_obj = fn->intrinsic_fn(inter, node, objects);
-    
-    if (inter->settings.print_execution) {
-        String return_string = string_from_obj(scratch.arena, inter, return_obj);
-        String parameters = STR("TODO");
-        log_trace(inter->ctx, node->code, STR("%S(%S) => %S"), node->identifier, parameters, return_string);
-    }
-    
-    return return_obj;
+    return call_function(inter, fn, objects, node->code);
 }
 
 internal_fn void interpret_block(Interpreter* inter, OpNode* block0)
@@ -839,6 +819,9 @@ internal_fn void define_globals(Interpreter* inter)
     obj = define_object(inter, STR("context_caller_dir"), VType_String);
     obj_set_string(inter, obj, inter->ctx->caller_dir);
     
+    inter->exit_on_error_obj = define_object(inter, STR("context_exit_on_error"), VType_Bool);
+    obj_set_bool(inter->exit_on_error_obj, true);
+    
     inter->cd_obj = define_object(inter, STR("cd"), VType_String);
     obj_set_string(inter, inter->cd_obj, inter->ctx->script_dir);
     
@@ -897,6 +880,27 @@ void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings)
 void interpreter_exit(Interpreter* inter)
 {
     inter->ctx->error_count++;// TODO(Jose): Weird
+}
+
+void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, String message_error)
+{
+    String script_path = yov_get_script_path(inter->ctx, code.script_id);
+    print_error("%S(%u): %S\n\t--> %S\n", script_path, (u32)code.line, resolved_line, message_error);
+    
+    b32 exit_on_error = get_bool(inter->exit_on_error_obj);
+    if (exit_on_error) {
+        interpreter_exit(inter);
+    }
+}
+
+Result user_assertion(Interpreter* inter, String message)
+{
+    Result res{};
+    res.success = true;
+    if (!inter->settings.user_assertion) return res;
+    res.success = os_ask_yesno(STR("User Assertion"), message);
+    if (!res.success) res.message = STR("Operation denied by user");
+    return res;
 }
 
 VariableType vtype_get(Interpreter* inter, i32 vtype)
@@ -1228,11 +1232,14 @@ void obj_set_string(Interpreter* inter, Object* dst, String value)
 }
 
 
-String string_from_obj(Arena* arena, Interpreter* inter, Object* obj)
+String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw)
 {
     SCRATCH(arena);
     
-    if (is_string(obj)) return get_string(obj);
+    if (is_string(obj)) {
+        if (raw) return get_string(obj);
+        return string_format(arena, "\"%S\"", get_string(obj));
+    }
     if (is_int(obj)) { return string_format(arena, "%l", get_int(obj)); }
     if (is_bool(obj)) { return STR(get_bool(obj) ? "true" : "false"); }
     if (obj->vtype == VType_Void) { return STR("void"); }
@@ -1361,6 +1368,62 @@ FunctionDefinition* find_function(Interpreter* inter, String identifier)
     return NULL;
 }
 
+Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code)
+{
+    SCRATCH();
+    
+    if (parameters.count != fn->parameter_vtypes.count) {
+        report_function_expecting_parameters(code, fn->identifier, fn->parameter_vtypes.count);
+        return inter->nil_obj;
+    }
+    
+    foreach(i, parameters.count) {
+        if (parameters[i]->vtype != fn->parameter_vtypes[i]) {
+            report_function_wrong_parameter_type(code, fn->identifier, string_from_vtype(scratch.arena, inter, fn->parameter_vtypes[i]), i + 1);
+            return inter->nil_obj;
+        }
+    }
+    
+    if (!inter->settings.execute) {
+        return obj_alloc_temp(inter, fn->return_vtype);
+    }
+    
+    IntrinsicFunctionResult res = fn->intrinsic_fn(inter, parameters, code);
+    
+    if (res.return_obj->vtype != fn->return_vtype) {
+        assert(0); // TODO(Jose): 
+        return inter->nil_obj;
+    }
+    
+    String resolved_line;
+    
+    // Generate resolved line
+    {
+        StringBuilder builder = string_builder_make(scratch.arena);
+        append(&builder, fn->identifier);
+        append(&builder, "(");
+        foreach(i, parameters.count) {
+            append(&builder, string_from_obj(scratch.arena, inter, parameters[i], false));
+            if (i != parameters.count - 1) append(&builder, ", ");
+        }
+        append(&builder, ")");
+        resolved_line = string_from_builder(scratch.arena, &builder);
+    }
+    
+    if (!res.error_result.success) {
+        interpreter_report_runtime_error(inter, code, resolved_line, res.error_result.message);
+        return res.return_obj;
+    }
+    
+    if (inter->settings.print_execution) {
+        String return_string = string_from_obj(scratch.arena, inter, res.return_obj);
+        String parameters_string = STR("TODO");
+        log_trace(inter->ctx, node->code, STR("%S(%S) => %S"), fn->identifier, parameters_string, return_string);
+    }
+    
+    return res.return_obj;
+}
+
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code)
 {
     SCRATCH(arena);
@@ -1424,12 +1487,6 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path)
     Object* cd_obj = inter->cd_obj;
     if (!os_path_is_absolute(path)) path = path_resolve(scratch.arena, path_append(scratch.arena, get_string(cd_obj), path));
     return string_copy(arena, path);
-}
-
-b32 user_assertion(Interpreter* inter, String message)
-{
-    if (!inter->settings.user_assertion) return true;
-    return os_ask_yesno(STR("User Assertion"), message);
 }
 
 b32 interpretion_failed(Interpreter* inter)

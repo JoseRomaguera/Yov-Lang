@@ -193,6 +193,13 @@ inline_fn T* arena_push_struct(Arena* arena, u32 count = 1)
 void os_initialize();
 void os_shutdown();
 
+struct Result {
+    b32 success;
+    String message;
+};
+
+#define RESULT_SUCCESS Result{ true }
+
 enum Severity {
     Severity_Info,
     Severity_Warning,
@@ -211,10 +218,10 @@ void* os_reserve_virtual_memory(u32 pages, b32 commit);
 void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count);
 void os_release_virtual_memory(void* address);
 
+b32 os_exists(String path);
 b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result);
-b32 os_copy_file(String dst_path, String src_path, b32 override);
-
-b32 os_folder_create(String path, b32 recursive);
+Result os_copy_file(String dst_path, String src_path, b32 override, b32 recursive);
+Result os_create_directory(String path, b32 recursive);
 
 b32 os_ask_yesno(String title, String content);
 i32 os_call(String working_dir, String command);
@@ -672,6 +679,7 @@ void skip_tokens_before_op(Parser* parser);
 Token extract_token(Parser* parser);
 Array<Token> extract_tokens(Parser* parser, u32 count);
 Array<Token> extract_tokens_until(Parser* parser, TokenKind separator, b32 require_separator);
+Array<Token> extract_tokens_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator);
 
 OpNode* extract_op(Parser* parser);
 
@@ -751,8 +759,13 @@ struct Object {
     };
 };
 
+struct IntrinsicFunctionResult {
+    Object* return_obj;
+    Result error_result;
+};
+
 struct Interpreter;
-typedef Object* IntrinsicFunction(Interpreter* inter, OpNode* node, Array<Object*> objs);
+typedef IntrinsicFunctionResult IntrinsicFunction(Interpreter* inter, Array<Object*> objs, CodeLocation code);
 
 struct FunctionDefinition {
     String identifier;
@@ -785,9 +798,12 @@ struct Interpreter {
     i32 scope;
     
     Object* cd_obj;
+    Object* exit_on_error_obj;
 };
 
 void interpreter_exit(Interpreter* inter);
+void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, String message_error);
+Result user_assertion(Interpreter* inter, String message);
 
 VariableType vtype_get(Interpreter* inter, i32 vtype);
 i32 vtype_from_name(Interpreter* inter, String name);
@@ -820,7 +836,7 @@ void obj_set_string(Interpreter* inter, Object* dst, String value);
 
 //b32 var_assignment_is_valid(const ObjectMemory t0, const ObjectMemory t1);
 //b32 var_assignment_is_valid(const ObjectMemory t0, i32 vtype);
-String string_from_obj(Arena* arena, Interpreter* inter, Object* obj);
+String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);
 String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype);
 
 i32 push_scope(Interpreter* inter);
@@ -829,13 +845,13 @@ Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes);
 Object* define_object(Interpreter* inter, String identifier, i32 vtype);
 void undefine_object(Interpreter* inter, Object* obj);
 FunctionDefinition* find_function(Interpreter* inter, String identifier);
+Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code);
 
 Object* interpret_function_call(Interpreter* inter, OpNode* node);
 void interpret_op(Interpreter* inter, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
-b32 user_assertion(Interpreter* inter, String message);
 b32 interpretion_failed(Interpreter* inter);
 
 inline_fn b32 is_valid(const Object* obj) {
