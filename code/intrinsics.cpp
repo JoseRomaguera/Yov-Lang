@@ -247,13 +247,60 @@ internal_fn IntrinsicFunctionResult intrinsic__create_directory(Interpreter* int
 {
     SCRATCH();
     
-    String path = get_string(vars[0]);
+    String path = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
     b32 recursive = get_bool(vars[1]);
     
-    Result res = user_assertion(inter, string_format(scratch.arena, "Create folder:\n%S", path));
+    Result res = user_assertion(inter, string_format(scratch.arena, "Create directory:\n%S", path));
     
     if (res.success) {
         res = os_create_directory(path, recursive);
+    }
+    
+    return { obj_alloc_temp_bool(inter, res.success), res };
+}
+
+internal_fn IntrinsicFunctionResult intrinsic__delete_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String path = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Delete directory:\n%S", path));
+    
+    if (res.success) {
+        res = os_delete_directory(path);
+    }
+    
+    return { obj_alloc_temp_bool(inter, res.success), res };
+}
+
+internal_fn IntrinsicFunctionResult intrinsic__copy_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String dst = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    String src = path_absolute_to_cd(scratch.arena, inter, get_string(vars[1]));
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Copy directory\n'%S'\nto\n'%S'", src, dst));
+    
+    if (res.success) {
+        res = os_copy_directory(dst, src);
+    }
+    
+    return { obj_alloc_temp_bool(inter, res.success), res };
+}
+
+internal_fn IntrinsicFunctionResult intrinsic__move_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String dst = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    String src = path_absolute_to_cd(scratch.arena, inter, get_string(vars[1]));
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Move directory\n'%S'\nto\n'%S'", src, dst));
+    
+    if (res.success) {
+        res = os_move_directory(dst, src);
     }
     
     return { obj_alloc_temp_bool(inter, res.success), res };
@@ -267,9 +314,36 @@ internal_fn IntrinsicFunctionResult intrinsic__copy_file(Interpreter* inter, Arr
     String src = path_absolute_to_cd(scratch.arena, inter, get_string(vars[1]));
     b32 override = get_bool(vars[2]);
     
-    Result res = user_assertion(inter, string_format(scratch.arena, "Copy file\n'%S'\ninto\n'%S'", src, dst));
+    Result res = user_assertion(inter, string_format(scratch.arena, "Copy file\n'%S'\nto\n'%S'", src, dst));
     
-    if (res.success) res = os_copy_file(dst, src, override, false);
+    if (res.success) res = os_copy_file(dst, src, override);
+    
+    return { obj_alloc_temp_bool(inter, res.success), res };
+}
+
+internal_fn IntrinsicFunctionResult intrinsic__move_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String dst = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    String src = path_absolute_to_cd(scratch.arena, inter, get_string(vars[1]));
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Move file\n'%S'\nto\n'%S'", src, dst));
+    
+    if (res.success) res = os_move_file(dst, src);
+    
+    return { obj_alloc_temp_bool(inter, res.success), res };
+}
+
+internal_fn IntrinsicFunctionResult intrinsic__delete_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String path = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Delete file:\n'%S'", path));
+    
+    if (res.success) res = os_delete_file(path);
     
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
@@ -326,10 +400,12 @@ Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* int
     // File System
     define_instrinsic("exists", intrinsic__exists, VType_Bool, VType_String);
     define_instrinsic("create_directory", intrinsic__create_directory, VType_Bool, VType_String, VType_Bool);
-    // TODO(Jose): define_instrinsic("delete_directory", intrinsic__create_directory, VType_Bool, VType_String, VType_Bool);
+    define_instrinsic("delete_directory", intrinsic__delete_directory, VType_Bool, VType_String);
+    define_instrinsic("copy_directory", intrinsic__copy_directory, VType_Bool, VType_String, VType_String);
+    define_instrinsic("move_directory", intrinsic__move_directory, VType_Bool, VType_String, VType_String);
     define_instrinsic("copy_file", intrinsic__copy_file, VType_Bool, VType_String, VType_String, VType_Bool);
-    // TODO(Jose): define_instrinsic("move_file", intrinsic__move_file, VType_Bool, VType_String, VType_String);
-    // TODO(Jose): define_instrinsic("delete_file", intrinsic__move_file, VType_Bool, VType_String, VType_String);
+    define_instrinsic("move_file", intrinsic__move_file, VType_Bool, VType_String, VType_String);
+    define_instrinsic("delete_file", intrinsic__delete_file, VType_Bool, VType_String);
     
     return array_from_pooled_array(arena, list);
 }

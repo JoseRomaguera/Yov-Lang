@@ -164,15 +164,17 @@ void yov_run_script(Yov* ctx, b32 trace, b32 user_assert, b32 analyze_only)
 #if DEV
     if (1)
     {
+        SCRATCH();
+        
         print_separator();
         
-        u32 static_memory = (u32)ctx->static_arena->memory_position;
-        u32 temp_memory = (u32)ctx->temp_arena->memory_position;
-        u32 total_memory = static_memory + temp_memory;
+        u64 static_memory = (u32)ctx->static_arena->memory_position;
+        u64 temp_memory = (u32)ctx->temp_arena->memory_position;
+        u64 total_memory = static_memory + temp_memory;
         
-        print_info("Static Memory: %u\n", static_memory);
-        print_info("Temp Memory: %u\n", temp_memory);
-        print_info("Total Memory: %u\n", total_memory);
+        print_info("Static Memory: %S\n", string_from_memory(scratch.arena, static_memory));
+        print_info("Temp Memory: %S\n", string_from_memory(scratch.arena, temp_memory));
+        print_info("Total Memory: %S\n", string_from_memory(scratch.arena, total_memory));
         
         if (0) {
             print_info(STR("\n// TOKENS\n"));

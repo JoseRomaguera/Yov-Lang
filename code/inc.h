@@ -220,8 +220,13 @@ void os_release_virtual_memory(void* address);
 
 b32 os_exists(String path);
 b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result);
-Result os_copy_file(String dst_path, String src_path, b32 override, b32 recursive);
+Result os_copy_file(String dst_path, String src_path, b32 override);
+Result os_move_file(String dst_path, String src_path);
+Result os_delete_file(String path);
 Result os_create_directory(String path, b32 recursive);
+Result os_delete_directory(String path);
+Result os_copy_directory(String dst_path, String src_path);
+Result os_move_directory(String dst_path, String src_path);
 
 b32 os_ask_yesno(String title, String content);
 i32 os_call(String working_dir, String command);
@@ -263,6 +268,7 @@ b32 u32_from_string(u32* dst, String str);
 b32 u32_from_char(u32* dst, char c);
 b32 i64_from_string(String str, i64* out);
 b32 i32_from_string(String str, i32* out);
+String string_from_memory(Arena* arena, u64 bytes);
 String string_join(Arena* arena, LinkedList<String> ll);
 Array<String> string_split(Arena* arena, String str, String separator);
 String string_replace(Arena* arena, String str, String old_str, String new_str);
@@ -798,7 +804,6 @@ struct Interpreter {
     i32 scope;
     
     Object* cd_obj;
-    Object* exit_on_error_obj;
 };
 
 void interpreter_exit(Interpreter* inter);
@@ -845,9 +850,9 @@ Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes);
 Object* define_object(Interpreter* inter, String identifier, i32 vtype);
 void undefine_object(Interpreter* inter, Object* obj);
 FunctionDefinition* find_function(Interpreter* inter, String identifier);
-Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code);
+Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code, b32 is_expresion);
 
-Object* interpret_function_call(Interpreter* inter, OpNode* node);
+Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
 void interpret_op(Interpreter* inter, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);

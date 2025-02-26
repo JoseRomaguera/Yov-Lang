@@ -81,7 +81,7 @@ Token peek_token(Parser* parser, i32 offset)
 Array<Token> peek_tokens(Parser* parser, i32 offset, u32 count) {
     i32 index = parser->token_index + offset;
     if (index < 0 || index >= parser->tokens.count) return {};
-    count = MIN(count, parser->tokens.count - index - 1);
+    count = MIN(count, parser->tokens.count - index);
     return array_subarray(parser->tokens, index, count);
 }
 

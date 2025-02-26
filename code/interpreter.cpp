@@ -236,7 +236,7 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node)
     }
     
     if (node->kind == OpKind_FunctionCall) {
-        return interpret_function_call(inter, node);
+        return interpret_function_call(inter, node, true);
     }
     
     if (node->kind == OpKind_ArrayExpresion)
@@ -684,7 +684,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     pop_scope(inter);
 }
 
-Object* interpret_function_call(Interpreter* inter, OpNode* node0)
+Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion)
 {
     SCRATCH();
     auto node = (OpNode_FunctionCall*)node0;
@@ -702,7 +702,7 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0)
         objects[i] = interpret_expresion(inter, node->parameters[i]);
     }
     
-    return call_function(inter, fn, objects, node->code);
+    return call_function(inter, fn, objects, node->code, is_expresion);
 }
 
 internal_fn void interpret_block(Interpreter* inter, OpNode* block0)
@@ -742,7 +742,7 @@ void interpret_op(Interpreter* inter, OpNode* node)
     else if (node->kind == OpKind_WhileStatement) interpret_while_statement(inter, node);
     else if (node->kind == OpKind_ForStatement) interpret_for_statement(inter, node);
     else if (node->kind == OpKind_ForeachArrayStatement) interpret_foreach_array_statement(inter, node);
-    else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node);
+    else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, false);
     else if (node->kind == OpKind_Error) {}
     else {
         report_semantic_unknown_op(node->code);
@@ -819,9 +819,6 @@ internal_fn void define_globals(Interpreter* inter)
     obj = define_object(inter, STR("context_caller_dir"), VType_String);
     obj_set_string(inter, obj, inter->ctx->caller_dir);
     
-    inter->exit_on_error_obj = define_object(inter, STR("context_exit_on_error"), VType_Bool);
-    obj_set_bool(inter->exit_on_error_obj, true);
-    
     inter->cd_obj = define_object(inter, STR("cd"), VType_String);
     obj_set_string(inter, inter->cd_obj, inter->ctx->script_dir);
     
@@ -887,10 +884,7 @@ void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, Str
     String script_path = yov_get_script_path(inter->ctx, code.script_id);
     print_error("%S(%u): %S\n\t--> %S\n", script_path, (u32)code.line, resolved_line, message_error);
     
-    b32 exit_on_error = get_bool(inter->exit_on_error_obj);
-    if (exit_on_error) {
-        interpreter_exit(inter);
-    }
+    interpreter_exit(inter);
 }
 
 Result user_assertion(Interpreter* inter, String message)
@@ -1368,7 +1362,7 @@ FunctionDefinition* find_function(Interpreter* inter, String identifier)
     return NULL;
 }
 
-Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code)
+Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code, b32 is_expresion)
 {
     SCRATCH();
     
@@ -1410,7 +1404,7 @@ Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*>
         resolved_line = string_from_builder(scratch.arena, &builder);
     }
     
-    if (!res.error_result.success) {
+    if (!res.error_result.success && !is_expresion) {
         interpreter_report_runtime_error(inter, code, resolved_line, res.error_result.message);
         return res.return_obj;
     }

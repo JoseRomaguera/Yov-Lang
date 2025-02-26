@@ -112,7 +112,8 @@ internal_fn String string_from_win_error(DWORD error)
 {
     if (error == 0) return {};
     if (error == ERROR_FILE_NOT_FOUND) return STR("File not found");
-    if (error == ERROR_PATH_NOT_FOUND || error == ERROR_BAD_PATHNAME) return STR("Invalid path");
+    if (error == ERROR_PATH_NOT_FOUND) return STR("Path not found");
+    if (error == ERROR_BAD_PATHNAME) return STR("Invalid path");
     if (error == ERROR_ACCESS_DENIED) return STR("Access denied");
     if (error == ERROR_NOT_ENOUGH_MEMORY) return STR("Not enough memory");
     if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) return STR("Operation blocked by other process");
@@ -164,13 +165,11 @@ b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result)
     return true;
 }
 
-Result os_copy_file(String dst_path, String src_path, b32 override, b32 recursive)
+Result os_copy_file(String dst_path, String src_path, b32 override)
 {
     SCRATCH();
     String dst_path0 = string_copy(scratch.arena, dst_path);
     String src_path0 = string_copy(scratch.arena, src_path);
-    
-    // TODO(Jose): recursive
     
     b32 fail_if_exists = !override;
     
@@ -180,7 +179,34 @@ Result os_copy_file(String dst_path, String src_path, b32 override, b32 recursiv
     return res;
 }
 
-inline_fn b32 create_recursive_path(String path)
+Result os_move_file(String dst_path, String src_path)
+{
+    SCRATCH();
+    String dst_path0 = string_copy(scratch.arena, dst_path);
+    String src_path0 = string_copy(scratch.arena, src_path);
+    
+    Result res{};
+    res.success = MoveFile(src_path0.data, dst_path0.data) != 0;
+    if (!res.success) res.message = string_from_last_error();
+    return res;
+}
+
+Result os_delete_file(String path)
+{
+    SCRATCH();
+    String path0 = string_copy(scratch.arena, path);
+    
+    if (SetFileAttributes(path0.data, FILE_ATTRIBUTE_NORMAL) == 0) {
+        return Result { false, string_from_last_error() };
+    }
+    
+    Result res{};
+    res.success = DeleteFile(path0.data) != 0;
+    if (!res.success) res.message = string_from_last_error();
+    return res;
+}
+
+internal_fn Result create_recursive_path(String path)
 {
     SCRATCH();
     
@@ -197,20 +223,29 @@ inline_fn b32 create_recursive_path(String path)
         if (folder.size <= 3 && folder[1] == ':') continue;
         
         String folder0 = string_copy(scratch.arena, folder);
-        if (!CreateDirectory(folder0.data, NULL) && ERROR_ALREADY_EXISTS != GetLastError())
-            return FALSE;
+        if (!CreateDirectory(folder0.data, NULL)) {
+            DWORD error = GetLastError();
+            if (error != ERROR_ALREADY_EXISTS) {
+                return Result{ false, string_from_win_error(error) };
+            }
+        }
     }
     
-    return TRUE;
+    return RESULT_SUCCESS;
 }
 
 Result os_create_directory(String path, b32 recursive)
 {
     SCRATCH();
     String path0 = string_copy(scratch.arena, path);
-	if (recursive) create_recursive_path(path0);
     
-    Result res{};
+    Result res = RESULT_SUCCESS;
+    
+	if (recursive) {
+        res = create_recursive_path(path0);
+        if (!res.success) return res;
+    }
+    
     res.success = (b32)CreateDirectory(path0.data, NULL);
     
     DWORD error = 0;
@@ -221,6 +256,173 @@ Result os_create_directory(String path, b32 recursive)
     
     if (!res.success) res.message = string_from_win_error(error);
     return res;
+}
+
+internal_fn Result delete_directory_recursive(String path)
+{
+    // NOTE(Jose): "path" must be null terminated!!
+    SCRATCH();
+    
+    String path_querry = string_format(scratch.arena, "%S\\*", path);
+    
+    WIN32_FIND_DATA find_data;
+    HANDLE find_handle = FindFirstFileA(path_querry.data, &find_data);
+    
+    if (find_handle == INVALID_HANDLE_VALUE) {
+        Result res{};
+        res.message = string_from_last_error();
+        return res;
+    }
+    
+    while (1)
+    {
+        String file_name = STR(find_data.cFileName);
+        
+        b32 file_is_valid = true;
+        
+        if (string_equals(file_name, STR(".")) || string_equals(file_name, STR(".."))) {
+            file_is_valid = false;
+        }
+        
+        if (file_is_valid)
+        {
+            String file_path = string_format(scratch.arena, "%S/%S", path, file_name);
+            
+            Result res{};
+            if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                res = delete_directory_recursive(file_path);
+            } else {
+                res = os_delete_file(file_path);
+            }
+            
+            if (!res.success) return res;
+        }
+        
+        if (FindNextFileA(find_handle, &find_data) == 0) {
+            DWORD error = GetLastError();
+            if (error != ERROR_NO_MORE_FILES) {
+                return Result{ false, string_from_last_error() };
+            }
+            break;
+        }
+    }
+    
+    if (FindClose(find_handle) == 0) {
+        return Result{ false, string_from_last_error() };
+    }
+    
+    if (SetFileAttributesA(path.data, FILE_ATTRIBUTE_NORMAL) == 0) {
+        return Result{ false, string_from_last_error() };
+    }
+    
+    if (RemoveDirectoryA(path.data) == 0) {
+        return Result{ false, string_from_last_error() };
+    }
+    
+    return RESULT_SUCCESS;
+}
+
+Result os_delete_directory(String path)
+{
+    SCRATCH();
+    String path0 = string_copy(scratch.arena, path);
+    return delete_directory_recursive(path0);
+}
+
+internal_fn Result copy_directory_recursive(String dst_path, String src_path, b32 is_moving)
+{
+    // NOTE(Jose): All paths in parameters must be null terminated!!
+    SCRATCH();
+    
+    Result res = os_create_directory(dst_path, true);
+    if (!res.success) return res;
+    
+    String path_querry = string_format(scratch.arena, "%S\\*", src_path);
+    
+    WIN32_FIND_DATA find_data;
+    HANDLE find_handle = FindFirstFileA(path_querry.data, &find_data);
+    
+    if (find_handle == INVALID_HANDLE_VALUE) {
+        Result res{};
+        res.message = string_from_last_error();
+        return res;
+    }
+    
+    while (1)
+    {
+        String file_name = STR(find_data.cFileName);
+        
+        b32 file_is_valid = true;
+        
+        if (string_equals(file_name, STR(".")) || string_equals(file_name, STR(".."))) {
+            file_is_valid = false;
+        }
+        
+        if (file_is_valid)
+        {
+            String file_src = string_format(scratch.arena, "%S/%S", src_path, file_name);
+            String file_dst = string_format(scratch.arena, "%S/%S", dst_path, file_name);
+            
+            Result res{};
+            if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                res = copy_directory_recursive(file_dst, file_src, is_moving);
+            } else {
+                res = os_copy_file(file_dst, file_src, false);
+            }
+            
+            if (!res.success) return res;
+        }
+        
+        if (FindNextFileA(find_handle, &find_data) == 0) {
+            DWORD error = GetLastError();
+            if (error != ERROR_NO_MORE_FILES) {
+                return Result{ false, string_from_last_error() };
+            }
+            break;
+        }
+    }
+    
+    if (FindClose(find_handle) == 0) {
+        return Result{ false, string_from_last_error() };
+    }
+    
+    if (is_moving) {
+        res = delete_directory_recursive(src_path);
+        if (!res.success) return res;
+    }
+    
+    return RESULT_SUCCESS;
+}
+
+internal_fn Result copy_or_move_directory(String dst_path, String src_path, b32 is_moving)
+{
+    // NOTE(Jose): All paths in parameters must be null terminated!!
+    
+    if (os_exists(dst_path)) {
+        return Result{ false, STR("The destination already exists") };
+    }
+    
+    return copy_directory_recursive(dst_path, src_path, is_moving);
+}
+
+Result os_copy_directory(String dst_path, String src_path)
+{
+    SCRATCH();
+    
+    String dst_path0 = string_copy(scratch.arena, dst_path);
+    String src_path0 = string_copy(scratch.arena, src_path);
+    
+    return copy_or_move_directory(dst_path0, src_path0, false);
+}
+
+Result os_move_directory(String dst_path, String src_path)
+{
+    SCRATCH();
+    
+    String dst_path0 = string_copy(scratch.arena, dst_path);
+    String src_path0 = string_copy(scratch.arena, src_path);
+    
+    return copy_or_move_directory(dst_path0, src_path0, true);
 }
 
 b32 os_ask_yesno(String title, String content)

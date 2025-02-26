@@ -482,6 +482,29 @@ b32 i32_from_string(String str, i32* out)
 	return true;
 }
 
+String string_from_memory(Arena* arena, u64 bytes)
+{
+    f64 kb = bytes / 1024.0;
+    
+    if (kb < 1.0) {
+        return string_format(arena, "%l b", bytes);
+    }
+    
+    f64 mb = kb / 1024.0;
+    
+    if (mb < 1.0) {
+        return string_format(arena, "%.2f KB", kb);
+    }
+    
+    f64 gb = mb / 1024.0;
+    
+    if (gb < 1.0) {
+        return string_format(arena, "%.2f MB", mb);
+    }
+    
+    return string_format(arena, "%.2f GB", gb);
+}
+
 String string_join(Arena* arena, LinkedList<String> ll)
 {
     u64 size = 0;
