@@ -1,0 +1,29 @@
+
+// Recommend turning on "user_assert" flag:
+// yov.exe 02_file_system.yov user_assert /
+
+// For copy/move operations: First parameter is destination and second is source
+
+if (exists("_copied.yov")) println("Currently exists");
+else println("Not exists");
+
+copy_file("_copied.yov", "02_file_system.yov", true); // Third parameter is for allow overwriting
+
+if (exists("_moved.yov")) {
+    println("\"_moved.yov\" exits, deleting it...");
+    delete_file("_moved.yov");
+}
+move_file("_moved.yov", "_copied.yov");
+
+create_directory("_dir/_dir2", true); // Second parameter is for allow recursive
+copy_file("_dir/_new_copy.yov", "_moved.yov", false);
+
+copy_directory("_copied_dir", "_dir");
+move_directory("_moved_dir", "_copied_dir");
+
+delete_directory("_dir");
+delete_directory("_moved_dir");
+
+if (ask_yesno("Delete \"_moved.yov\"?")) delete_file("_moved.yov");
+
+println("Finished!!");

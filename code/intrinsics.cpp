@@ -31,6 +31,23 @@ internal_fn IntrinsicFunctionResult intrinsic__call(Interpreter* inter, Array<Ob
     return { obj_alloc_temp_int(inter, result), RESULT_SUCCESS };
 }
 
+internal_fn IntrinsicFunctionResult intrinsic__call_exe(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    i32 result = -1;
+    String exe_name = get_string(vars[0]);
+    String params = get_string(vars[1]);
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Call Exe:\n%S %S", exe_name, params));
+    
+    if (res.success) {
+        result = os_call_exe(get_string(inter->cd_obj), exe_name, params);
+    }
+    
+    return { obj_alloc_temp_int(inter, result), RESULT_SUCCESS };
+}
+
 internal_fn IntrinsicFunctionResult intrinsic__exit(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     interpreter_exit(inter);
@@ -376,6 +393,8 @@ Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* int
     define_instrinsic("print", intrinsic__print, VType_Void, VType_String);
     define_instrinsic("println", intrinsic__println, VType_Void, VType_String);
     define_instrinsic("call", intrinsic__call, VType_Int, VType_String);
+    define_instrinsic("call_exe", intrinsic__call_exe, VType_Int, VType_String, VType_String);
+    // TODO(Jose): define_instrinsic("call_script", intrinsic__call_script, VType_Void, VType_String, VType_String);
     define_instrinsic("exit", intrinsic__exit, VType_Void, VType_Void);
     define_instrinsic("set_cd", intrinsic__set_cd, VType_Void, VType_String);
     

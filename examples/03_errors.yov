@@ -1,0 +1,22 @@
+
+// Some instrinsics can fail:
+//    If the return value is used, the program continues.
+//    Otherwise the program exists with a runtime error.
+
+invalid := "\".txt";
+
+if (!create_directory(invalid, false)) println("Failed but program continues");
+res := create_directory(invalid, false);
+
+// Not all intrinsics generate errors.
+exists(invalid);
+
+if (!res) {
+    if (ask_yesno("Failed, do you want to exit?")) {
+        println("All right, bye");
+        exit();
+    }
+}
+
+create_directory(invalid, false);
+println("This line is never executed");

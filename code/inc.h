@@ -229,7 +229,9 @@ Result os_copy_directory(String dst_path, String src_path);
 Result os_move_directory(String dst_path, String src_path);
 
 b32 os_ask_yesno(String title, String content);
+
 i32 os_call(String working_dir, String command);
+i32 os_call_exe(String working_dir, String exe, String params);
 
 String os_get_working_path(Arena* arena);
 

@@ -114,6 +114,7 @@ internal_fn String string_from_win_error(DWORD error)
     if (error == ERROR_FILE_NOT_FOUND) return STR("File not found");
     if (error == ERROR_PATH_NOT_FOUND) return STR("Path not found");
     if (error == ERROR_BAD_PATHNAME) return STR("Invalid path");
+    if (error == ERROR_INVALID_NAME) return STR("Invalid name");
     if (error == ERROR_ACCESS_DENIED) return STR("Access denied");
     if (error == ERROR_NOT_ENOUGH_MEMORY) return STR("Not enough memory");
     if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) return STR("Operation blocked by other process");
@@ -462,6 +463,13 @@ i32 os_call(String working_dir, String command)
     CloseHandle(pi.hThread);
     
     return exit_code;
+}
+
+i32 os_call_exe(String working_dir, String exe, String params)
+{
+    SCRATCH();
+    String command = string_format(scratch.arena, "\"%S.exe\" %S", exe, params);
+    return os_call(working_dir, command);
 }
 
 String os_get_working_path(Arena* arena)

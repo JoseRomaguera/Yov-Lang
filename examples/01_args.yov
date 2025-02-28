@@ -1,0 +1,31 @@
+
+/*
+  Specify script args after '/'
+ Examples:
+      yov.exe 01_args.yov
+yov.exe 01_args.yov / arg0
+yov.exe 01_args.yov / arg0=whatever
+*/
+
+// Second parameter is the default value if does not exists
+
+arg0_int: Int = arg_int("arg0", 69);
+arg0_bool: Bool = arg_bool("arg0", true);
+arg0_str: String = arg_string("arg0", "si");
+arg0_exists: Bool = arg_exists("arg0");
+arg0_flag: Bool = arg_flag("arg0");
+
+println("Value int: {arg0_int}");
+println("Value bool: {arg0_bool}");
+println("Value string: {arg0_str}");
+println("Exists: {arg0_exists}");
+println("Flag: {arg0_flag}");
+
+if (context_args.count > 0) {
+    println("All the args:");
+    
+    for (arg : context_args) {
+        println("- {arg}");
+    }
+}
+else println("No args");
