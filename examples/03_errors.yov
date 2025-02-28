@@ -6,17 +6,17 @@
 invalid := "\".txt";
 
 if (!create_directory(invalid, false)) println("Failed but program continues");
+
 res := create_directory(invalid, false);
-
-// Not all intrinsics generate errors.
-exists(invalid);
-
 if (!res) {
     if (ask_yesno("Failed, do you want to exit?")) {
         println("All right, bye");
         exit();
     }
 }
+
+// Not all intrinsics generate errors.
+exists(invalid);
 
 create_directory(invalid, false);
 println("This line is never executed");
