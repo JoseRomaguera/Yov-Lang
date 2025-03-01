@@ -62,14 +62,7 @@ Yov takes advantage of this by analyzing the entire codebase before execution wi
 - Safety Measures: Includes helpful safeguards to prevent accidental file mishandling during script creation, making development more secure.
 
 ## Documentation
-
-TODO
-
-- Basics
-    - Context
-- Intrinsics
-- Interpreter arguments
-    - Debugging
+TODO, see examples for reference
 
 ## What will not be in Yov
 
@@ -81,5 +74,4 @@ TODO
 - No exceptions.
 
 ## Current State
-
-TODO, see examples for reference
+TODO
