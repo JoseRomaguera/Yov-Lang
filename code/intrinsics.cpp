@@ -329,11 +329,11 @@ internal_fn IntrinsicFunctionResult intrinsic__copy_file(Interpreter* inter, Arr
     
     String dst = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
     String src = path_absolute_to_cd(scratch.arena, inter, get_string(vars[1]));
-    b32 override = get_bool(vars[2]);
+    CopyMode copy_mode = get_enum_CopyMode(inter, vars[2]);
     
     Result res = user_assertion(inter, string_format(scratch.arena, "Copy file\n'%S'\nto\n'%S'", src, dst));
     
-    if (res.success) res = os_copy_file(dst, src, override);
+    if (res.success) res = os_copy_file(dst, src, copy_mode == CopyMode_Override);
     
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
@@ -422,7 +422,7 @@ Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* int
     define_instrinsic("delete_directory", intrinsic__delete_directory, VType_Bool, VType_String);
     define_instrinsic("copy_directory", intrinsic__copy_directory, VType_Bool, VType_String, VType_String);
     define_instrinsic("move_directory", intrinsic__move_directory, VType_Bool, VType_String, VType_String);
-    define_instrinsic("copy_file", intrinsic__copy_file, VType_Bool, VType_String, VType_String, VType_Bool);
+    define_instrinsic("copy_file", intrinsic__copy_file, VType_Bool, VType_String, VType_String, VType_Enum_CopyMode);
     define_instrinsic("move_file", intrinsic__move_file, VType_Bool, VType_String, VType_String);
     define_instrinsic("delete_file", intrinsic__delete_file, VType_Bool, VType_String);
     

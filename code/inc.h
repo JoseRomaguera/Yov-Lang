@@ -354,16 +354,6 @@ enum BinaryOperator {
 
 String string_from_binary_operator(BinaryOperator op);
 
-enum KeywordType {
-    KeywordType_None,
-    KeywordType_If,
-    KeywordType_Else,
-    KeywordType_While,
-    KeywordType_For,
-};
-
-String string_from_keyword(KeywordType keyword);
-
 struct CodeLocation {
     u64 offset;
     u64 start_line_offset;
@@ -399,7 +389,12 @@ enum TokenKind {
     TokenKind_Assignment,
     TokenKind_BinaryOperator,
     
-    TokenKind_Keyword,
+    TokenKind_IfKeyword,
+    TokenKind_ElseKeyword,
+    TokenKind_WhileKeyword,
+    TokenKind_ForKeyword,
+    TokenKind_EnumKeyword,
+    
     TokenKind_BoolLiteral,
 };
 
@@ -409,7 +404,6 @@ struct Token {
     CodeLocation code;
     
     union {
-        KeywordType keyword;
         BinaryOperator binary_operator;
     };
 };
@@ -498,20 +492,27 @@ void print_report(Yov* ctx, Report report);
 #define report_foreach_expecting_colon(_code) report_error(parser->ctx, _code, "Expecting a colon separating identifiers and array expresion");
 #define report_foreach_expecting_comma_separated_identifiers(_code) report_error(parser->ctx, _code, "Foreach-Statement expects comma separated identifiers");
 #define report_assign_operator_not_found(_code) report_error(parser->ctx, _code, "Operator not found for an assignment");
+#define report_enumdef_expecting_comma_separated_identifier(_code) report_error(parser->ctx, _code, "Expecting comma separated identifier for enum values");
 
 //- SEMANTIC REPORTS
 
 #define report_zero_division(_code) report_error(inter->ctx, _code, "Divided by zero");
 #define report_right_path_cant_be_absolute(_code) report_error(inter->ctx, _code, "Right path can't be absolute");
+#define report_nested_definition(_code) report_error(inter->ctx, _code, "This definition can't be nested");
 #define report_type_missmatch_append(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't append a '%S' into '%S'", _v0, _v1);
 #define report_type_missmatch_array_expr(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch in array expresion, expecting '%S' but found '%S'", _v0, _v1);
 #define report_type_missmatch_assign(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't assign '%S' to '%S'", _v0, _v1);
 #define report_type_undefined(_code, _t) report_error(inter->ctx, _code, "Undefined type '%S'", _t);
 #define report_invalid_binary_op(_code, _v0, _op, _v1) report_error(inter->ctx, _code, "Invalid binary operation: '%S' %S '%S'", _v0, _op, _v1);
 #define report_invalid_signed_op(_code, _op, _v) report_error(inter->ctx, _code, "Invalid signed operation '%S %S'", _op, _v);
+#define report_symbol_not_found(_code, _v) report_error(inter->ctx, _code, "Symbol '%S' not found", _v);
 #define report_object_not_found(_code, _v) report_error(inter->ctx, _code, "Object '%S' not found", _v);
+#define report_object_type_not_found(_code, _t) report_error(inter->ctx, _code, "Object Type '%S' not found", _t);
 #define report_object_duplicated(_code, _v) report_error(inter->ctx, _code, "Duplicated object '%S'", _v);
-#define report_member_not_found(_code, _v, _t) report_error(inter->ctx, _code, "Member '%S' not found in a '%S'", _v, _t);
+#define report_member_not_found_in_object(_code, _v, _t) report_error(inter->ctx, _code, "Member '%S' not found in a '%S'", _v, _t);
+#define report_member_not_found_in_type(_code, _v, _t) report_error(inter->ctx, _code, "Member '%S' not found in '%S'", _v, _t);
+#define report_member_invalid_symbol(_code, _v) report_error(inter->ctx, _code, "'%S' does not have members to access", _v);
+#define report_enum_value_expects_an_int(_code) report_error(inter->ctx, _code, "Enum value expects an Int");
 #define report_function_not_found(_code, _v) report_error(inter->ctx, _code, "Function '%S' not found", _v);
 #define report_function_expecting_parameters(_code, _v, _c) report_error(inter->ctx, _code, "Function '%S' is expecting %u parameters", _v, _c);
 #define report_function_wrong_parameter_type(_code, _f, _t, _c) report_error(inter->ctx, _code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
@@ -569,6 +570,7 @@ enum OpKind {
     OpKind_BoolLiteral,
     OpKind_IdentifierValue,
     OpKind_MemberValue,
+    OpKind_EnumDefinition,
 };
 
 struct OpNode {
@@ -668,6 +670,12 @@ struct OpNode_MemberValue : OpNode {
     String member;
 };
 
+struct OpNode_EnumDefinition : OpNode {
+    String identifier;
+    Array<String> names;
+    Array<OpNode*> values;
+};
+
 u32 get_node_size(OpKind kind);
 Array<OpNode*> get_node_childs(Arena* arena, OpNode* node);
 
@@ -686,7 +694,7 @@ void skip_tokens(Parser* parser, u32 count);
 void skip_tokens_before_op(Parser* parser);
 Token extract_token(Parser* parser);
 Array<Token> extract_tokens(Parser* parser, u32 count);
-Array<Token> extract_tokens_until(Parser* parser, TokenKind separator, b32 require_separator);
+Array<Token> extract_tokens_until(Parser* parser, b32 require_separator, TokenKind sep0, TokenKind sep1 = TokenKind_None);
 Array<Token> extract_tokens_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator);
 
 OpNode* extract_op(Parser* parser);
@@ -699,36 +707,6 @@ OpNode* process_function_call(Parser* parser, Array<Token> tokens);
 OpNode* process_expresion(Parser* parser, Array<Token> tokens);
 
 //- INTERPRETER 
-
-#define VType_Unknown -1
-#define VType_Void 0
-#define VType_Int 1
-#define VType_Bool 2
-#define VType_String 3
-
-#define VType_IntArray vtype_from_array_dimension(inter, VType_Int, 1)
-#define VType_BoolArray vtype_from_array_dimension(inter, VType_Bool, 1)
-#define VType_StringArray vtype_from_array_dimension(inter, VType_String, 1)
-
-enum VariableKind {
-    VariableKind_Unknown,
-    VariableKind_Void,
-    VariableKind_Primitive,
-    VariableKind_Array,
-};
-
-struct VariableType {
-    i32 vtype;
-    String name;
-    VariableKind kind;
-    u32 size;
-    
-    i32 array_of;
-};
-
-// Int: {Object(Memory)}
-// IntArray: {Object} [Memory, Memory]
-// Int: {Object}
 
 struct ObjectMemory_Int {
     i64 value;
@@ -744,10 +722,14 @@ struct ObjectMemory_Array {
     void* data;
     i64 count;
 };
+struct ObjectMemory_Enum {
+    i64 index;
+};
 
 struct ObjectMemory {
     union {
         ObjectMemory_Int integer;
+        ObjectMemory_Enum enum_;
         ObjectMemory_Bool boolean;
         ObjectMemory_String string;
         ObjectMemory_Array array;
@@ -761,10 +743,41 @@ struct Object {
     
     union {
         ObjectMemory_Int integer;
+        ObjectMemory_Enum enum_;
         ObjectMemory_Bool boolean;
         ObjectMemory_String string;
         ObjectMemory_Array array;
     };
+};
+
+#define VType_Unknown -1
+#define VType_Void 0
+#define VType_Int 1
+#define VType_Bool 2
+#define VType_String 3
+#define VType_Enum_CopyMode 4
+
+#define VType_IntArray vtype_from_array_dimension(inter, VType_Int, 1)
+#define VType_BoolArray vtype_from_array_dimension(inter, VType_Bool, 1)
+#define VType_StringArray vtype_from_array_dimension(inter, VType_String, 1)
+
+enum VariableKind {
+    VariableKind_Unknown,
+    VariableKind_Void,
+    VariableKind_Primitive,
+    VariableKind_Array,
+    VariableKind_Enum,
+};
+
+struct VariableType {
+    i32 vtype;
+    String name;
+    VariableKind kind;
+    
+    i32 array_of;
+    
+    Array<String> enum_names;
+    Array<i64> enum_values;
 };
 
 struct IntrinsicFunctionResult {
@@ -783,6 +796,22 @@ struct FunctionDefinition {
     IntrinsicFunction* intrinsic_fn;
 };
 
+enum SymbolType {
+    SymbolType_None,
+    SymbolType_Object,
+    SymbolType_Function,
+    SymbolType_Type,
+};
+
+struct Symbol {
+    SymbolType type;
+    String identifier;
+    
+    Object* object;
+    FunctionDefinition* function;
+    i32 vtype;
+};
+
 struct InterpreterSettings {
     b8 execute; // Execute AST until an error ocurrs otherwise do semantic analysis of all the AST
     b8 user_assertion; // Forces user assertion of every operation to the OS
@@ -797,7 +826,9 @@ struct Interpreter {
     Yov* ctx;
     InterpreterSettings settings;
     
-    Array<VariableType> vtype_table;
+    OpNode* root;
+    
+    PooledArray<VariableType> vtype_table;
     Array<FunctionDefinition> functions;
     Object* nil_obj;
     Object* void_obj;
@@ -817,7 +848,7 @@ i32 vtype_from_name(Interpreter* inter, String name);
 i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension);
 i32 vtype_from_array_element(Interpreter* inter, i32 vtype);
 i32 vtype_from_array_base(Interpreter* inter, i32 vtype);
-u32 vtype_get_stride(i32 vtype);
+u32 vtype_get_stride(Interpreter* inter, i32 vtype);
 i32 encode_vtype(u32 index, u32 dimensions);
 void decode_vtype(i32 vtype, u32* _index, u32* _dimensions);
 
@@ -828,6 +859,8 @@ Object* obj_alloc_temp_bool(Interpreter* inter, b32 value);
 Object* obj_alloc_temp_string(Interpreter* inter, String value);
 Object* obj_alloc_temp_array(Interpreter* inter, i32 element_vtype, i64 count);
 Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions);
+Object* obj_alloc_temp_enum(Interpreter* inter, i32 vtype, i64 index);
+Object* obj_alloc_temp_array_from_enum(Interpreter* inter, i32 enum_vtype);
 
 ObjectMemory* obj_get_data(Object* obj);
 ObjectMemory obj_copy_data(Interpreter* inter, Object* obj);
@@ -841,21 +874,34 @@ void obj_set_int(Object* dst, i64 value);
 void obj_set_bool(Object* dst, b32 value);
 void obj_set_string(Interpreter* inter, Object* dst, String value);
 
-//b32 var_assignment_is_valid(const ObjectMemory t0, const ObjectMemory t1);
-//b32 var_assignment_is_valid(const ObjectMemory t0, i32 vtype);
 String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);
 String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype);
 
 i32 push_scope(Interpreter* inter);
 void pop_scope(Interpreter* inter);
+Symbol find_symbol(Interpreter* inter, String identifier);
 Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes);
 Object* define_object(Interpreter* inter, String identifier, i32 vtype);
 void undefine_object(Interpreter* inter, Object* obj);
 FunctionDefinition* find_function(Interpreter* inter, String identifier);
 Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code, b32 is_expresion);
 
+Object* member_from_object(Interpreter* inter, Object* obj, String member);
+Object* member_from_type(Interpreter* inter, i32 vtype, String member);
+
+struct ExpresionContext {
+    i32 expected_vtype;
+};
+
+inline_fn ExpresionContext expresion_context_make(i32 expected_vtype) {
+    ExpresionContext d{};
+    d.expected_vtype = expected_vtype;
+    return d;
+}
+
+Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext context);
 Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
-void interpret_op(Interpreter* inter, OpNode* node);
+void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
@@ -895,6 +941,9 @@ inline_fn b32 is_array(Object* obj) {
     if (obj == NULL) return false;
     return is_array(obj->vtype);
 }
+inline_fn b32 is_enum(Interpreter* inter, i32 vtype) {
+    return vtype_get(inter, vtype).kind == VariableKind_Enum;
+}
 
 inline_fn i64 get_int(Object* obj) {
     assert(is_int(obj));
@@ -910,6 +959,15 @@ inline_fn String get_string(Object* obj) {
     str.data = obj->string.data;
     str.size = obj->string.size;
     return str;
+}
+
+enum CopyMode {
+    CopyMode_NoOverride,
+    CopyMode_Override,
+};
+inline_fn CopyMode get_enum_CopyMode(Interpreter* inter, Object* obj) {
+    assert(is_enum(inter, obj->vtype));
+    return (CopyMode)obj->enum_.index;
 }
 
 template<typename T>

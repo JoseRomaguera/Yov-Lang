@@ -1054,16 +1054,6 @@ String string_from_binary_operator(BinaryOperator op) {
     return STR("?");
 }
 
-String string_from_keyword(KeywordType keyword)
-{
-    if (keyword == KeywordType_If) return STR("if");
-    if (keyword == KeywordType_Else) return STR("else");
-    if (keyword == KeywordType_While) return STR("while");
-    if (keyword == KeywordType_For) return STR("for");
-    assert(0);
-    return STR("?");
-}
-
 String string_from_tokens(Arena* arena, Array<Token> tokens)
 {
     SCRATCH(arena);
@@ -1102,6 +1092,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_BoolLiteral) return sizeof(OpNode_Literal);
     if (kind == OpKind_IdentifierValue) return sizeof(OpNode_IdentifierValue);
     if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
+    if (kind == OpKind_EnumDefinition) return sizeof(OpNode_EnumDefinition);
     assert(0);
     return sizeof(OpNode) + KB(4);
 }

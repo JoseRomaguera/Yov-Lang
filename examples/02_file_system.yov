@@ -7,7 +7,7 @@
 if (exists("_copied.yov")) println("Currently exists");
 else println("Not exists");
 
-copy_file("_copied.yov", "02_file_system.yov", true); // Third parameter is for allow overwriting
+copy_file("_copied.yov", "02_file_system.yov", .Override);
 
 if (exists("_moved.yov")) {
     println("\"_moved.yov\" exits, deleting it...");
@@ -16,7 +16,7 @@ if (exists("_moved.yov")) {
 move_file("_moved.yov", "_copied.yov");
 
 create_directory("_dir/_dir2", true); // Second parameter is for allow recursive
-copy_file("_dir/_new_copy.yov", "_moved.yov", false);
+copy_file("_dir/_new_copy.yov", "_moved.yov", .NoOverride);
 
 copy_directory("_copied_dir", "_dir");
 move_directory("_moved_dir", "_copied_dir");

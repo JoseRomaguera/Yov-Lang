@@ -1,0 +1,30 @@
+
+foo : Foo;
+foo = Foo.A;
+
+foo2 := Foo.B;
+foo2 = .C;
+foo3: Foo = .D;
+
+enum_name: String = Foo.name;
+enum_count: Int = Foo.count;
+enum_array: Foo[] = Foo.array;
+
+println("Name = {enum_name}");
+println("Count = {enum_count}");
+println("Array = {enum_array}");
+
+for (e : Foo) {
+    index := e.index;
+    value := e.value;
+    name := e.name;
+    
+    println("{e}:");
+    println("\tName = {name}");
+    println("\tIndex = {index}");
+    println("\tValue = {value}");
+}
+
+Foo :: enum {
+    A, B = 2, C, D,
+}

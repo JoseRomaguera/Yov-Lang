@@ -30,22 +30,11 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
     token.code = code_location_make(lexer->cursor, lexer->code_start_line_offset, lexer->code_line, lexer->code_column, lexer->script_id);
     
     if (kind == TokenKind_Identifier) {
-        if (string_equals(STR("if"), token.value)) {;
-            kind = TokenKind_Keyword;
-            token.keyword = KeywordType_If;
-        }
-        else if (string_equals(STR("else"), token.value)) {
-            kind = TokenKind_Keyword;
-            token.keyword = KeywordType_Else;
-        }
-        else if (string_equals(STR("while"), token.value)) {
-            kind = TokenKind_Keyword;
-            token.keyword = KeywordType_While;
-        }
-        else if (string_equals(STR("for"), token.value)) {
-            kind = TokenKind_Keyword;
-            token.keyword = KeywordType_For;
-        }
+        if (string_equals(STR("if"), token.value)) kind = TokenKind_IfKeyword;
+        else if (string_equals(STR("else"), token.value)) kind = TokenKind_ElseKeyword;
+        else if (string_equals(STR("while"), token.value)) kind = TokenKind_WhileKeyword;
+        else if (string_equals(STR("for"), token.value)) kind = TokenKind_ForKeyword;
+        else if (string_equals(STR("enum"), token.value)) kind = TokenKind_EnumKeyword;
         else if (string_equals(STR("true"), token.value)) kind = TokenKind_BoolLiteral;
         else if (string_equals(STR("false"), token.value)) kind = TokenKind_BoolLiteral;
     }
@@ -278,6 +267,7 @@ Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens)
         {
             if (token.kind == TokenKind_Separator) discard = true;
             if (token.kind == TokenKind_Comment) discard = true;
+            if (token.kind == TokenKind_NextLine) discard = true;
         }
         
         if (!discard) array_add(&lexer->tokens, token);

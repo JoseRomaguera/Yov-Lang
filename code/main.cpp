@@ -7,9 +7,11 @@ inline_fn void log_token(Token token)
         print_info("-> Identifier: ");
         print_info(token.value);
     }
-    else if (token.kind == TokenKind_Keyword) {
-        print_info("-> Keyword: %S", string_from_keyword(token.keyword));
-    }
+    else if (token.kind == TokenKind_IfKeyword) print_info("-> if");
+    else if (token.kind == TokenKind_ElseKeyword) print_info("-> else");
+    else if (token.kind == TokenKind_WhileKeyword) print_info("-> while");
+    else if (token.kind == TokenKind_ForKeyword) print_info("-> for");
+    else if (token.kind == TokenKind_EnumKeyword) print_info("-> enum");
     else if (token.kind == TokenKind_IntLiteral) {
         print_info("-> Int Literal: ");
         print_info(token.value);
