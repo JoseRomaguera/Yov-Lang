@@ -375,6 +375,7 @@ enum TokenKind {
     TokenKind_Dot,
     TokenKind_Comma,
     TokenKind_Colon,
+    TokenKind_Arrow,
     TokenKind_OpenBracket,
     TokenKind_CloseBracket,
     TokenKind_OpenBrace,
@@ -394,6 +395,7 @@ enum TokenKind {
     TokenKind_WhileKeyword,
     TokenKind_ForKeyword,
     TokenKind_EnumKeyword,
+    TokenKind_ReturnKeyword,
     
     TokenKind_BoolLiteral,
 };
@@ -474,6 +476,7 @@ void print_report(Yov* ctx, Report report);
 #define report_common_missing_opening_parenthesis(_code) report_error(parser->ctx, _code, "Missing opening parenthesis");
 #define report_common_missing_closing_brace(_code) report_error(parser->ctx, _code, "Missing closing brace");
 #define report_common_missing_opening_brace(_code) report_error(parser->ctx, _code, "Missing opening brace");
+#define report_common_missing_block(_code) report_error(parser->ctx, _code, "Missing block");
 #define report_common_expecting_valid_expresion(_code) report_error(parser->ctx, _code, "Expecting a valid expresion: {line}");
 #define report_common_expecting_parenthesis(_code, _for_what) report_error(parser->ctx, _code, "Expecting parenthesis for %S", STR(_for_what));
 #define report_syntactic_unknown_op(_code) report_error(parser->ctx, _code, "Unknown operation: {line}");
@@ -482,7 +485,8 @@ void print_report(Yov* ctx, Report report);
 #define report_expr_is_empty(_code) report_error(parser->ctx, _code, "Empty expresion: {line}");
 #define report_expr_empty_member(_code) report_error(parser->ctx, _code, "Member is not specified");
 #define report_array_indexing_expects_expresion(_code) report_error(parser->ctx, _code, "Array indexing expects an expresion");
-#define report_objdef_expecting_type_identifier(_code) report_error(parser->ctx, _code, "Expecting type identifier in object definition");
+#define report_objdef_expecting_colon(_code) report_error(parser->ctx, _code, "Expecting colon in object definition");
+#define report_objdef_expecting_type_identifier(_code) report_error(parser->ctx, _code, "Expecting type identifier");
 #define report_objdef_expecting_assignment(_code) report_error(parser->ctx, _code, "Expecting an assignment for object definition");
 #define report_objdef_redundant_array_dimensions(_code) report_error(parser->ctx, _code, "Redundant array dimensions definition before assignment");
 #define report_else_not_found_if(_code) report_error(parser->ctx, _code, "'else' is not valid without the corresponding 'if'");
@@ -493,6 +497,7 @@ void print_report(Yov* ctx, Report report);
 #define report_foreach_expecting_comma_separated_identifiers(_code) report_error(parser->ctx, _code, "Foreach-Statement expects comma separated identifiers");
 #define report_assign_operator_not_found(_code) report_error(parser->ctx, _code, "Operator not found for an assignment");
 #define report_enumdef_expecting_comma_separated_identifier(_code) report_error(parser->ctx, _code, "Expecting comma separated identifier for enum values");
+#define report_expecting_object_definition(_code) report_error(parser->ctx, _code, "Expecting an object definition");
 
 //- SEMANTIC REPORTS
 
@@ -502,13 +507,13 @@ void print_report(Yov* ctx, Report report);
 #define report_type_missmatch_append(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't append a '%S' into '%S'", _v0, _v1);
 #define report_type_missmatch_array_expr(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch in array expresion, expecting '%S' but found '%S'", _v0, _v1);
 #define report_type_missmatch_assign(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't assign '%S' to '%S'", _v0, _v1);
-#define report_type_undefined(_code, _t) report_error(inter->ctx, _code, "Undefined type '%S'", _t);
 #define report_invalid_binary_op(_code, _v0, _op, _v1) report_error(inter->ctx, _code, "Invalid binary operation: '%S' %S '%S'", _v0, _op, _v1);
 #define report_invalid_signed_op(_code, _op, _v) report_error(inter->ctx, _code, "Invalid signed operation '%S %S'", _op, _v);
 #define report_symbol_not_found(_code, _v) report_error(inter->ctx, _code, "Symbol '%S' not found", _v);
 #define report_object_not_found(_code, _v) report_error(inter->ctx, _code, "Object '%S' not found", _v);
 #define report_object_type_not_found(_code, _t) report_error(inter->ctx, _code, "Object Type '%S' not found", _t);
 #define report_object_duplicated(_code, _v) report_error(inter->ctx, _code, "Duplicated object '%S'", _v);
+#define report_object_invalid_type(_code, _t) report_error(inter->ctx, _code, "Invalid Type '%S'", STR(_t));
 #define report_member_not_found_in_object(_code, _v, _t) report_error(inter->ctx, _code, "Member '%S' not found in a '%S'", _v, _t);
 #define report_member_not_found_in_type(_code, _v, _t) report_error(inter->ctx, _code, "Member '%S' not found in '%S'", _v, _t);
 #define report_member_invalid_symbol(_code, _v) report_error(inter->ctx, _code, "'%S' does not have members to access", _v);
@@ -516,6 +521,8 @@ void print_report(Yov* ctx, Report report);
 #define report_function_not_found(_code, _v) report_error(inter->ctx, _code, "Function '%S' not found", _v);
 #define report_function_expecting_parameters(_code, _v, _c) report_error(inter->ctx, _code, "Function '%S' is expecting %u parameters", _v, _c);
 #define report_function_wrong_parameter_type(_code, _f, _t, _c) report_error(inter->ctx, _code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
+#define report_function_wrong_return_type(_code, _t) report_error(inter->ctx, _code, "Expected a '%S' as a return", _t);
+#define report_function_no_return(_code, _f) report_error(inter->ctx, _code, "Not all paths of '%S' have a return", _f);
 #define report_indexing_expects_an_int(_code) report_error(inter->ctx, _code, "Indexing expects an Int");
 #define report_indexing_not_allowed(_code, _t) report_error(inter->ctx, _code, "Indexing not allowed for a '%S'", _t);
 #define report_indexing_out_of_bounds(_code) report_error(inter->ctx, _code, "Index out of bounds");
@@ -558,7 +565,8 @@ enum OpKind {
     OpKind_ForStatement,
     OpKind_ForeachArrayStatement,
     OpKind_VariableAssignment,
-    OpKind_VariableDefinition,
+    OpKind_ObjectDefinition,
+    OpKind_ObjectType,
     OpKind_FunctionCall,
     OpKind_ArrayExpresion,
     OpKind_ArrayElementValue,
@@ -571,6 +579,8 @@ enum OpKind {
     OpKind_IdentifierValue,
     OpKind_MemberValue,
     OpKind_EnumDefinition,
+    OpKind_FunctionDefinition,
+    OpKind_Return,
 };
 
 struct OpNode {
@@ -613,12 +623,16 @@ struct OpNode_Assignment : OpNode {
     BinaryOperator binary_operator;
 };
 
-struct OpNode_VariableDefinition : OpNode {
-    String type;
-    String identifier;
-    OpNode* assignment;
+struct OpNode_ObjectType : OpNode {
+    String name;
     Array<OpNode*> array_dimensions;
     b8 is_array;
+};
+
+struct OpNode_ObjectDefinition : OpNode {
+    String object_name;
+    OpNode_ObjectType* type;
+    OpNode* assignment;
 };
 
 struct OpNode_FunctionCall : OpNode {
@@ -666,7 +680,7 @@ struct OpNode_IdentifierValue : OpNode {
 };
 
 struct OpNode_MemberValue : OpNode {
-    String identifier;
+    OpNode* expresion;
     String member;
 };
 
@@ -675,16 +689,34 @@ struct OpNode_EnumDefinition : OpNode {
     Array<String> names;
     Array<OpNode*> values;
 };
+struct OpNode_FunctionDefinition : OpNode {
+    String identifier;
+    OpNode_Block* block;
+    Array<OpNode_ObjectDefinition*> parameters;
+    OpNode* return_node;
+};
+
+struct OpNode_Return : OpNode {
+    OpNode* expresion;
+};
 
 u32 get_node_size(OpKind kind);
 Array<OpNode*> get_node_childs(Arena* arena, OpNode* node);
 
+struct ParserState {
+    Array<Token> tokens;
+    i32 token_index;
+};
+
 struct Parser {
     Yov* ctx;
-    Array<Token> tokens;
-    u32 token_index;
-    PooledArray<OpNode*> ops;
+    PooledArray<ParserState> state_stack;
 };
+
+void parser_push_state(Parser* parser, Array<Token> tokens);
+void parser_pop_state(Parser* parser);
+ParserState* parser_get_state(Parser* parser);
+
 
 b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token);
 
@@ -692,16 +724,20 @@ Token peek_token(Parser* parser, i32 offset = 0);
 Array<Token> peek_tokens(Parser* parser, i32 offset, u32 count);
 void skip_tokens(Parser* parser, u32 count);
 void skip_tokens_before_op(Parser* parser);
+void skip_sentence(Parser* parser);
 Token extract_token(Parser* parser);
 Array<Token> extract_tokens(Parser* parser, u32 count);
 Array<Token> extract_tokens_until(Parser* parser, b32 require_separator, TokenKind sep0, TokenKind sep1 = TokenKind_None);
 Array<Token> extract_tokens_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator);
 
-OpNode* extract_op(Parser* parser);
+Array<Array<Token>> split_tokens_in_parameters(Arena* arena, Array<Token> tokens);
 
-OpNode* generate_ast_from_block(Yov* ctx, Array<Token> tokens);
-OpNode* generate_ast_from_sentence(Yov* ctx, Array<Token> tokens);
-OpNode* generate_ast(Yov* ctx, Array<Token> tokens);
+OpNode* extract_op(Parser* parser);
+OpNode* extract_block(Parser* parser);
+OpNode* extract_object_type(Parser* parser);
+OpNode* extract_object_definition(Parser* parser);
+
+OpNode* generate_ast(Yov* ctx, Array<Token> tokens, b32 is_block);
 
 OpNode* process_function_call(Parser* parser, Array<Token> tokens);
 OpNode* process_expresion(Parser* parser, Array<Token> tokens);
@@ -736,10 +772,12 @@ struct ObjectMemory {
     };
 };
 
+struct Scope;
+
 struct Object {
     String identifier;
     i32 vtype;
-    i32 scope;
+    Scope* scope;
     
     union {
         ObjectMemory_Int integer;
@@ -780,20 +818,27 @@ struct VariableType {
     Array<i64> enum_values;
 };
 
-struct IntrinsicFunctionResult {
+struct FunctionReturn {
     Object* return_obj;
     Result error_result;
 };
 
 struct Interpreter;
-typedef IntrinsicFunctionResult IntrinsicFunction(Interpreter* inter, Array<Object*> objs, CodeLocation code);
+typedef FunctionReturn IntrinsicFunction(Interpreter* inter, Array<Object*> objs, CodeLocation code);
+
+struct ParameterDefinition {
+    i32 vtype;
+    String name;
+    Object* default_value;
+};
 
 struct FunctionDefinition {
     String identifier;
+    Array<ParameterDefinition> parameters;
     i32 return_vtype;
-    Array<i32> parameter_vtypes;
     
     IntrinsicFunction* intrinsic_fn;
+    OpNode_Block* defined_fn;
 };
 
 enum SymbolType {
@@ -822,6 +867,21 @@ struct InterpreterSettings {
 
 void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings);
 
+enum ScopeType {
+    ScopeType_Global,
+    ScopeType_Block,
+    ScopeType_Function,
+};
+
+struct Scope {
+    ScopeType type;
+    PooledArray<Object> objects;
+    Object* return_obj;
+    i32 expected_return_vtype;
+    Scope* next;
+    Scope* previous;
+};
+
 struct Interpreter {
     Yov* ctx;
     InterpreterSettings settings;
@@ -829,12 +889,13 @@ struct Interpreter {
     OpNode* root;
     
     PooledArray<VariableType> vtype_table;
-    Array<FunctionDefinition> functions;
+    PooledArray<FunctionDefinition> functions;
     Object* nil_obj;
     Object* void_obj;
     
-    PooledArray<Object> objects;
-    i32 scope;
+    Scope* global_scope;
+    Scope* current_scope;
+    Scope* free_scope;
     
     Object* cd_obj;
 };
@@ -877,14 +938,16 @@ void obj_set_string(Interpreter* inter, Object* dst, String value);
 String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);
 String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype);
 
-i32 push_scope(Interpreter* inter);
+Scope* alloc_scope(Interpreter* inter, ScopeType type);
+Scope* push_scope(Interpreter* inter, ScopeType type, i32 expected_return_vtype);
 void pop_scope(Interpreter* inter);
+Scope* get_returnable_scope(Interpreter* inter);
+
 Symbol find_symbol(Interpreter* inter, String identifier);
 Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes);
 Object* define_object(Interpreter* inter, String identifier, i32 vtype);
-void undefine_object(Interpreter* inter, Object* obj);
 FunctionDefinition* find_function(Interpreter* inter, String identifier);
-Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code, b32 is_expresion);
+Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, OpNode* parent_node, b32 is_expresion);
 
 Object* member_from_object(Interpreter* inter, Object* obj, String member);
 Object* member_from_type(Interpreter* inter, i32 vtype, String member);
@@ -906,6 +969,7 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
 b32 interpretion_failed(Interpreter* inter);
+b32 skip_ops(Interpreter* inter);
 
 inline_fn b32 is_valid(const Object* obj) {
     if (obj == NULL) return false;

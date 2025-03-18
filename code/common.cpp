@@ -1080,8 +1080,10 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_ForStatement) return sizeof(OpNode_ForStatement);
     if (kind == OpKind_ForeachArrayStatement) return sizeof(OpNode_ForeachArrayStatement);
     if (kind == OpKind_VariableAssignment) return sizeof(OpNode_Assignment);
-    if (kind == OpKind_VariableDefinition) return sizeof(OpNode_VariableDefinition);
+    if (kind == OpKind_ObjectDefinition) return sizeof(OpNode_ObjectDefinition);
+    if (kind == OpKind_ObjectType) return sizeof(OpNode_ObjectType);
     if (kind == OpKind_FunctionCall) return sizeof(OpNode_FunctionCall);
+    if (kind == OpKind_Return) return sizeof(OpNode_Return);
     if (kind == OpKind_ArrayExpresion) return sizeof(OpNode_ArrayExpresion);
     if (kind == OpKind_ArrayElementValue) return sizeof(OpNode_ArrayElementValue);
     if (kind == OpKind_ArrayElementAssignment) return sizeof(OpNode_ArrayElementAssignment);
@@ -1093,6 +1095,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_IdentifierValue) return sizeof(OpNode_IdentifierValue);
     if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
     if (kind == OpKind_EnumDefinition) return sizeof(OpNode_EnumDefinition);
+    if (kind == OpKind_FunctionDefinition) return sizeof(OpNode_FunctionDefinition);
     assert(0);
     return sizeof(OpNode) + KB(4);
 }
@@ -1136,8 +1139,9 @@ Array<OpNode*> get_node_childs(Arena* arena, OpNode* node)
         auto node0 = (OpNode_Assignment*)node;
         array_add(&nodes, node0->value);
     }
-    else if (node->kind == OpKind_VariableDefinition) {
-        auto node0 = (OpNode_VariableDefinition*)node;
+    else if (node->kind == OpKind_ObjectDefinition) {
+        auto node0 = (OpNode_ObjectDefinition*)node;
+        array_add(&nodes, (OpNode*)node0->type);
         array_add(&nodes, node0->assignment);
     }
     else if (node->kind == OpKind_FunctionCall) {
@@ -1168,6 +1172,10 @@ Array<OpNode*> get_node_childs(Arena* arena, OpNode* node)
     }
     else if (node->kind == OpKind_Sign) {
         auto node0 = (OpNode_Sign*)node;
+        array_add(&nodes, node0->expresion);
+    }
+    else if (node->kind == OpKind_MemberValue) {
+        auto node0 = (OpNode_MemberValue*)node;
         array_add(&nodes, node0->expresion);
     }
     else {

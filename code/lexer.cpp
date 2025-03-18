@@ -35,6 +35,7 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
         else if (string_equals(STR("while"), token.value)) kind = TokenKind_WhileKeyword;
         else if (string_equals(STR("for"), token.value)) kind = TokenKind_ForKeyword;
         else if (string_equals(STR("enum"), token.value)) kind = TokenKind_EnumKeyword;
+        else if (string_equals(STR("return"), token.value)) kind = TokenKind_ReturnKeyword;
         else if (string_equals(STR("true"), token.value)) kind = TokenKind_BoolLiteral;
         else if (string_equals(STR("false"), token.value)) kind = TokenKind_BoolLiteral;
     }
@@ -173,6 +174,8 @@ inline_fn Token extract_next_token(Lexer* lexer)
         }
         return extract_dynamic_token(lexer, TokenKind_StringLiteral, cursor - lexer->cursor);
     }
+    
+    if (c0 == '-' && c1 == '>') return extract_token(lexer, TokenKind_Arrow, 2);
     
     if (c0 == ',') return extract_token(lexer, TokenKind_Comma, 1);
     if (c0 == '.') return extract_token(lexer, TokenKind_Dot, 1);

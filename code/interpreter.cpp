@@ -59,6 +59,15 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         }
     }
     
+    if (is_enum(inter, left->vtype) && is_enum(inter, right->vtype)) {
+        if (op == BinaryOperator_Equals) {
+            return obj_alloc_temp_bool(inter, left->enum_.index == right->enum_.index);
+        }
+        else if (op == BinaryOperator_NotEquals) {
+            return obj_alloc_temp_bool(inter, left->enum_.index != right->enum_.index);
+        }
+    }
+    
     if (left_type.array_of == right_type.array_of && left_type.kind == VariableKind_Array && right_type.kind == VariableKind_Array)
     {
         VariableType array_of = vtype_get(inter, left_type.array_of);
@@ -204,24 +213,59 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
     
     if (node->kind == OpKind_MemberValue) {
         auto node0 = (OpNode_MemberValue*)node;
-        String identifier = node0->identifier;
+        
+        OpNode* expresion_node = node0->expresion;
         String member = node0->member;
         assert(member.size);
         
-        if (identifier.size == 0 && context.expected_vtype > 0) {
-            identifier = string_from_vtype(scratch.arena, inter, context.expected_vtype);
-        }
-        
-        Symbol symbol = find_symbol(inter, identifier);
-        
-        if (symbol.type == SymbolType_None) {
-            report_symbol_not_found(node->code, identifier);
-            return inter->nil_obj;
-        }
-        
-        if (symbol.type == SymbolType_Object)
+        if (expresion_node->kind == OpKind_IdentifierValue || expresion_node->kind == OpKind_None)
         {
-            Object* obj = symbol.object;
+            String identifier = {};
+            
+            if (expresion_node->kind == OpKind_IdentifierValue)
+                identifier = ((OpNode_IdentifierValue*)expresion_node)->identifier;
+            
+            if (identifier.size == 0 && context.expected_vtype > 0) {
+                identifier = string_from_vtype(scratch.arena, inter, context.expected_vtype);
+            }
+            
+            Symbol symbol = find_symbol(inter, identifier);
+            
+            if (symbol.type == SymbolType_None) {
+                report_symbol_not_found(node->code, identifier);
+                return inter->nil_obj;
+            }
+            
+            if (symbol.type == SymbolType_Object)
+            {
+                Object* obj = symbol.object;
+                Object* member_obj = member_from_object(inter, obj, member);
+                
+                if (member_obj == inter->nil_obj) {
+                    report_member_not_found_in_object(node->code, member, string_from_vtype(scratch.arena, inter, obj->vtype));
+                }
+                
+                return member_obj;
+            }
+            
+            if (symbol.type == SymbolType_Type)
+            {
+                Object* member_obj = member_from_type(inter, symbol.vtype, member);
+                
+                if (member_obj == inter->nil_obj) {
+                    report_member_not_found_in_type(node->code, member, string_from_vtype(scratch.arena, inter, symbol.vtype));
+                }
+                
+                return member_obj;
+            }
+            
+            report_member_invalid_symbol(node->code, symbol.identifier);
+        }
+        else
+        {
+            Object* obj = interpret_expresion(inter, expresion_node, context);
+            if (obj == inter->nil_obj) return inter->nil_obj;
+            
             Object* member_obj = member_from_object(inter, obj, member);
             
             if (member_obj == inter->nil_obj) {
@@ -231,18 +275,6 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
             return member_obj;
         }
         
-        if (symbol.type == SymbolType_Type)
-        {
-            Object* member_obj = member_from_type(inter, symbol.vtype, member);
-            
-            if (member_obj == inter->nil_obj) {
-                report_member_not_found_in_type(node->code, member, string_from_vtype(scratch.arena, inter, symbol.vtype));
-            }
-            
-            return member_obj;
-        }
-        
-        report_member_invalid_symbol(node->code, symbol.identifier);
         return inter->nil_obj;
     }
     
@@ -260,7 +292,12 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
         }
         
         if (objects.count == 0) {
-            return inter->void_obj;
+            if (context.expected_vtype <= 0) {
+                return inter->void_obj;
+            }
+            
+            i32 element_vtype = vtype_from_array_element(inter, context.expected_vtype);
+            return obj_alloc_temp_array(inter, element_vtype, 0);
         }
         
         i32 vtype = objects[0]->vtype;
@@ -356,35 +393,26 @@ void interpret_indexed_assignment(Interpreter* inter, Object* array, i64 index, 
     if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S[%l] = %S"), array->identifier, index, string_from_obj(scratch.arena, inter, array));
 }
 
-void interpret_variable_definition(Interpreter* inter, OpNode* node0)
+Object* interpret_assignment_for_object_definition(Interpreter* inter, OpNode_ObjectDefinition* node)
 {
     SCRATCH();
-    
-    auto node = (OpNode_VariableDefinition*)node0;
-    String identifier = node->identifier;
-    Object* obj = find_object(inter, identifier, false);
-    if (obj != NULL) {
-        report_object_duplicated(node->code, identifier);
-        return;
-    }
-    
     i32 vtype = -1;
     
     // Explicit type
     {
-        String type_name = node->type;
+        String type_name = node->type->name;
         
         if (type_name.size > 0)
         {
             vtype = vtype_from_name(inter, type_name);
             
             if (vtype <= 0) {
-                report_type_undefined(node->code, type_name);
-                return;
+                report_object_type_not_found(node->code, type_name);
+                return inter->nil_obj;
             }
             
-            if (node->is_array) {
-                vtype = vtype_from_array_dimension(inter, vtype, node->array_dimensions.count);
+            if (node->type->is_array) {
+                vtype = vtype_from_array_dimension(inter, vtype, node->type->array_dimensions.count);
             }
         }
     }
@@ -392,37 +420,26 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
     OpNode* assignment = node->assignment;
     Object* assignment_result = interpret_expresion(inter, assignment, expresion_context_make(vtype));
     
-    if (is_unknown(assignment_result)) return;
+    if (is_unknown(assignment_result)) return inter->nil_obj;
     
-    // Implicit type
-    if (vtype < 0)
+    if (node->type->is_array)
     {
-        if (is_void(assignment_result)) {
-            assert(0);
-            return;
-        }
-        
-        vtype = assignment_result->vtype;
-    }
-    
-    if (node->is_array)
-    {
-        Array<i64> dimensions = array_make<i64>(scratch.arena, node->array_dimensions.count);
+        Array<i64> dimensions = array_make<i64>(scratch.arena, node->type->array_dimensions.count);
         
         b8 initialize_array = false;
         
         foreach(i, dimensions.count) {
-            Object* dim = interpret_expresion(inter, node->array_dimensions[i], expresion_context_make(VType_Int));
-            if (is_unknown(dim)) return;
+            Object* dim = interpret_expresion(inter, node->type->array_dimensions[i], expresion_context_make(VType_Int));
+            if (is_unknown(dim)) return inter->nil_obj;
             
             if (!is_void(dim) && !is_int(dim)) {
                 report_dimensions_expects_an_int(node->code);
-                return;
+                return inter->nil_obj;
             }
             dimensions[i] = is_int(dim) ? get_int(dim) : 0;
             if (dimensions[i] < 0) {
                 report_dimensions_must_be_positive(node->code);
-                return;
+                return inter->nil_obj;
             }
             
             if (dimensions[i] > 0) initialize_array = true;
@@ -435,15 +452,52 @@ void interpret_variable_definition(Interpreter* inter, OpNode* node0)
         }
     }
     
-    obj = define_object(inter, identifier, vtype);
-    
-    if (is_valid(assignment_result) && assignment_result->vtype != vtype) {
-        report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, obj->vtype));
+    if (is_void(assignment_result))
+    {
+        if (vtype <= 0) {
+            report_object_invalid_type(node->code, "void");
+            return inter->nil_obj;
+        }
+        
+        assignment_result = obj_alloc_temp(inter, vtype);
     }
+    else
+    {
+        if (vtype < 0) {
+            vtype = assignment_result->vtype;
+        }
+        else {
+            if (assignment_result->vtype != vtype) {
+                report_type_missmatch_assign(node->code, string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, vtype));
+                return inter->nil_obj;
+            }
+        }
+    }
+    
+    return assignment_result;
+}
+
+void interpret_object_definition(Interpreter* inter, OpNode* node0)
+{
+    SCRATCH();
+    
+    auto node = (OpNode_ObjectDefinition*)node0;
+    String identifier = node->object_name;
+    Object* obj = find_object(inter, identifier, false);
+    if (obj != NULL) {
+        report_object_duplicated(node->code, identifier);
+        return;
+    }
+    
+    Object* assignment_result = interpret_assignment_for_object_definition(inter, node);
+    if (is_unknown(assignment_result)) return;
+    if (is_void(assignment_result)) return;
+    
+    obj = define_object(inter, identifier, assignment_result->vtype);
     
     if (inter->settings.execute)
     {
-        if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("%S %S"), string_from_vtype(scratch.arena, inter, vtype), obj->identifier);
+        if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("%S %S"), string_from_vtype(scratch.arena, inter, obj->vtype), obj->identifier);
         
         if (is_valid(assignment_result)) {
             if (!obj_copy(inter, obj, assignment_result)) return;
@@ -554,19 +608,31 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
         if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("if (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
         b32 result = get_bool(expresion_result);
         
-        push_scope(inter);
+        push_scope(inter, ScopeType_Block, 0);
         if (result) interpret_op(inter, node, node->success);
         else interpret_op(inter, node, node->failure);
         pop_scope(inter);
     }
     else {
-        push_scope(inter);
+        
+        Scope* scope = get_returnable_scope(inter);
+        Object* previous_return_obj = scope->return_obj;
+        
+        push_scope(inter, ScopeType_Block, 0);
         interpret_op(inter, node, node->success);
         pop_scope(inter);
+        Object* success_return_obj = scope->return_obj;
+        scope->return_obj = previous_return_obj;
         
-        push_scope(inter);
+        push_scope(inter, ScopeType_Block, 0);
         interpret_op(inter, node, node->failure);
         pop_scope(inter);
+        Object* failed_return_obj = scope->return_obj;
+        scope->return_obj = previous_return_obj;
+        
+        if (success_return_obj != inter->nil_obj && failed_return_obj != inter->nil_obj) {
+            scope->return_obj = success_return_obj;
+        }
     }
     
 }
@@ -579,6 +645,7 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
     while (1)
     {
         Object* expresion_result = interpret_expresion(inter, node->expresion, expresion_context_make(VType_Bool));
+        if (skip_ops(inter)) return;
         
         if (!is_bool(expresion_result)) {
             report_expr_expects_bool(node->code, "While-Statement");
@@ -591,17 +658,22 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
             
             if (!get_bool(expresion_result)) break;
             
-            push_scope(inter);
+            push_scope(inter, ScopeType_Block, 0);
             interpret_op(inter, node, node->content);
             pop_scope(inter);
         }
         else
         {
-            push_scope(inter);
+            Scope* scope = get_returnable_scope(inter);
+            Object* previous_return_obj = scope->return_obj;
+            push_scope(inter, ScopeType_Block, 0);
             interpret_op(inter, node, node->content);
             pop_scope(inter);
+            scope->return_obj = previous_return_obj;
             break;
         }
+        
+        if (skip_ops(inter)) return;
     }
 }
 
@@ -610,13 +682,14 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_ForStatement*)node0;
     
-    push_scope(inter);
+    push_scope(inter, ScopeType_Block, 0);
     
     interpret_op(inter, node, node->initialize_sentence);
     
     while (1)
     {
         Object* expresion_result = interpret_expresion(inter, node->condition_expresion, expresion_context_make(VType_Bool));
+        if (skip_ops(inter)) return;
         
         if (!is_bool(expresion_result)) {
             report_expr_expects_bool(node->code, "For-Statement");
@@ -629,7 +702,7 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
             
             if (!get_bool(expresion_result)) break;
             
-            push_scope(inter);
+            push_scope(inter, ScopeType_Block, 0);
             interpret_op(inter, node, node->content);
             pop_scope(inter);
             
@@ -637,12 +710,17 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
         }
         else
         {
-            push_scope(inter);
+            Scope* scope = get_returnable_scope(inter);
+            Object* previous_return_obj = scope->return_obj;
+            push_scope(inter, ScopeType_Block, 0);
             interpret_op(inter, node, node->content);
             pop_scope(inter);
             interpret_op(inter, node, node->update_sentence);
+            scope->return_obj = previous_return_obj;
             break;
         }
+        
+        if (skip_ops(inter)) return;
     }
     
     pop_scope(inter);
@@ -653,7 +731,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_ForeachArrayStatement*)node0;
     
-    push_scope(inter);
+    push_scope(inter, ScopeType_Block, 0);
     
     Object* array = inter->void_obj;
     
@@ -690,6 +768,8 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
         return;
     }
     
+    if (skip_ops(inter)) return;
+    
     Object* element = define_object(inter, node->element_name, array_type.array_of);
     
     Object* index = NULL;
@@ -707,7 +787,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
             
             if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_obj(scratch.arena, inter, element));
             
-            push_scope(inter);
+            push_scope(inter, ScopeType_Block, 0);
             interpret_op(inter, node, node->content);
             pop_scope(inter);
             
@@ -715,12 +795,16 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
         }
         else
         {
-            push_scope(inter);
+            Scope* scope = get_returnable_scope(inter);
+            Object* previous_return_obj = scope->return_obj;
+            push_scope(inter, ScopeType_Block, 0);
             interpret_op(inter, node, node->content);
             pop_scope(inter);
-            
+            scope->return_obj = previous_return_obj;
             break;
         }
+        
+        if (skip_ops(inter)) return;
     }
     
     pop_scope(inter);
@@ -742,11 +826,32 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expres
     
     foreach(i, objects.count) {
         i32 expected_vtype = -1;
-        if (i < fn->parameter_vtypes.count) expected_vtype = fn->parameter_vtypes[i];
+        if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
         objects[i] = interpret_expresion(inter, node->parameters[i], expresion_context_make(expected_vtype));
     }
     
-    return call_function(inter, fn, objects, node->code, is_expresion);
+    if (skip_ops(inter)) return inter->nil_obj;
+    
+    return call_function(inter, fn, objects, node, is_expresion);
+}
+
+void interpret_return(Interpreter* inter, OpNode* node0)
+{
+    SCRATCH();
+    OpNode_Return* node = (OpNode_Return*)node0;
+    Scope* scope = get_returnable_scope(inter);
+    
+    scope->return_obj = inter->nil_obj;
+    
+    Object* obj = interpret_expresion(inter, node->expresion, expresion_context_make(scope->expected_return_vtype));
+    if (is_unknown(obj)) return;
+    
+    if (obj->vtype != scope->expected_return_vtype) {
+        report_function_wrong_return_type(node->code, string_from_vtype(scratch.arena, inter, scope->expected_return_vtype));
+        return;
+    }
+    
+    scope->return_obj = obj;
 }
 
 internal_fn void interpret_block(Interpreter* inter, OpNode* block0)
@@ -754,20 +859,16 @@ internal_fn void interpret_block(Interpreter* inter, OpNode* block0)
     auto block = (OpNode_Block*)block0;
     assert(block->kind == OpKind_Block);
     
-    push_scope(inter);
+    push_scope(inter, ScopeType_Block, 0);
     
     Array<OpNode*> ops = block->ops;
     
-    i32 op_index = 0;
-    while (op_index < ops.count)
+    foreach(i, ops.count)
     {
-        if (interpretion_failed(inter)) break;
+        if (skip_ops(inter)) break;
         
-        i32 next_op_index = op_index + 1;
-        
-        OpNode* node = ops[op_index];
+        OpNode* node = ops[i];
         interpret_op(inter, block, node);
-        op_index = next_op_index;
     }
     
     pop_scope(inter);
@@ -775,11 +876,11 @@ internal_fn void interpret_block(Interpreter* inter, OpNode* block0)
 
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
 {
-    if (interpretion_failed(inter)) return;
+    if (skip_ops(inter)) return;
     if (node->kind == OpKind_None) return;
     
     if (node->kind == OpKind_Block) interpret_block(inter, node);
-    else if (node->kind == OpKind_VariableDefinition) interpret_variable_definition(inter, node);
+    else if (node->kind == OpKind_ObjectDefinition) interpret_object_definition(inter, node);
     else if (node->kind == OpKind_VariableAssignment) interpret_variable_assignment(inter, node);
     else if (node->kind == OpKind_ArrayElementAssignment) interpret_array_element_assignment(inter, node);
     else if (node->kind == OpKind_IfStatement) interpret_if_statement(inter, node);
@@ -787,8 +888,9 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     else if (node->kind == OpKind_ForStatement) interpret_for_statement(inter, node);
     else if (node->kind == OpKind_ForeachArrayStatement) interpret_foreach_array_statement(inter, node);
     else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, false);
+    else if (node->kind == OpKind_Return) interpret_return(inter, node);
     else if (node->kind == OpKind_Error) {}
-    else if (node->kind == OpKind_EnumDefinition) {
+    else if (node->kind == OpKind_EnumDefinition || node->kind == OpKind_FunctionDefinition) {
         if (parent != inter->root) {
             report_nested_definition(node->code);
         }
@@ -822,12 +924,16 @@ internal_fn i32 define_enum(Interpreter* inter, String name, Array<String> names
     return t.vtype;
 }
 
+void register_intrinsic_functions(Interpreter* inter);
+
 internal_fn void register_definitions(Interpreter* inter)
 {
     SCRATCH();
     
+    inter->vtype_table = pooled_array_make<VariableType>(inter->ctx->static_arena, 32);
+    inter->functions = pooled_array_make<FunctionDefinition>(inter->ctx->static_arena, 32);
+    
     PooledArray<VariableType>* list = &inter->vtype_table;
-    *list = pooled_array_make<VariableType>(inter->ctx->static_arena, 32);
     
     VariableType t;
     
@@ -884,7 +990,7 @@ internal_fn void register_definitions(Interpreter* inter)
         assert(vtype == VType_Enum_CopyMode);
     }
     
-    // Script Enum Definitions
+    // Script Definitions
     if (inter->root->kind == OpKind_Block)
     {
         OpNode_Block* block = (OpNode_Block*)inter->root;
@@ -922,8 +1028,53 @@ internal_fn void register_definitions(Interpreter* inter)
                 
                 define_enum(inter, node->identifier, node->names, values);
             }
+            else if (node0->kind == OpKind_FunctionDefinition)
+            {
+                OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)node0;
+                
+                b32 valid = true;
+                
+                Array<ParameterDefinition> parameters = array_make<ParameterDefinition>(inter->ctx->static_arena, node->parameters.count);
+                
+                foreach(i, parameters.count)
+                {
+                    OpNode_ObjectDefinition* param_node = node->parameters[i];
+                    ParameterDefinition* def = &parameters[i];
+                    
+                    Object* assignment_result = interpret_assignment_for_object_definition(inter, param_node);
+                    if (is_unknown(assignment_result) || is_void(assignment_result)) {
+                        valid = false;
+                        continue;
+                    }
+                    
+                    b32 has_default_value = (param_node->assignment->kind != OpKind_None && param_node->assignment->kind != OpKind_Error);
+                    
+                    def->vtype = assignment_result->vtype;
+                    def->name = param_node->object_name;
+                    def->default_value = has_default_value ? assignment_result : inter->nil_obj;
+                }
+                
+                i32 return_vtype = VType_Void;
+                
+                if (node->return_node->kind == OpKind_ObjectType) {
+                    OpNode_ObjectType* type_node = (OpNode_ObjectType*)node->return_node;
+                    return_vtype = vtype_from_name(inter, type_node->name);
+                    return_vtype = vtype_from_array_dimension(inter, return_vtype, type_node->array_dimensions.count);
+                }
+                
+                if (!valid) continue;
+                
+                FunctionDefinition fn{};
+                fn.identifier = node->identifier;
+                fn.return_vtype = return_vtype;
+                fn.parameters = parameters;
+                fn.defined_fn = node->block;
+                array_add(&inter->functions, fn);
+            }
         }
     }
+    
+    register_intrinsic_functions(inter);
     
     foreach(i, inter->vtype_table.count) {
         VariableType t = inter->vtype_table[i];
@@ -967,19 +1118,12 @@ internal_fn void define_globals(Interpreter* inter)
     }
 }
 
-Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* inter);
-
-internal_fn void define_functions(Interpreter* inter) {
-    inter->functions = get_intrinsic_functions(inter->ctx->static_arena, inter);
-}
-
 void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings)
 {
     Interpreter* inter = arena_push_struct<Interpreter>(ctx->static_arena);
     inter->ctx = ctx;
     inter->settings = settings;
     inter->root = block;
-    inter->objects = pooled_array_make<Object>(ctx->static_arena, 32);
     
     inter->void_obj = arena_push_struct<Object>(inter->ctx->static_arena);
     inter->void_obj->vtype = VType_Void;
@@ -987,13 +1131,15 @@ void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings)
     inter->nil_obj = arena_push_struct<Object>(inter->ctx->static_arena);
     inter->nil_obj->vtype = VType_Unknown;
     
+    inter->global_scope = alloc_scope(inter, ScopeType_Global);
+    inter->current_scope = inter->global_scope;
+    
     register_definitions(inter);
     define_globals(inter);
-    define_functions(inter);
     
     interpret_block(inter, block);
     
-    assert(inter->ctx->error_count != 0 || inter->scope == 0);
+    assert(inter->ctx->error_count != 0 || inter->global_scope == inter->current_scope);
 }
 
 void interpreter_exit(Interpreter* inter)
@@ -1134,7 +1280,7 @@ Object* obj_alloc_temp(Interpreter* inter, i32 vtype)
     Object* obj = arena_push_struct<Object>(inter->ctx->static_arena);
     obj->identifier = STR("TEMP");
     obj->vtype = vtype;
-    obj->scope = inter->scope;
+    obj->scope = inter->current_scope;
     return obj;
 }
 
@@ -1445,24 +1591,72 @@ String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype)
     return name;
 }
 
-i32 push_scope(Interpreter* inter) {
-    return ++inter->scope;
+Scope* alloc_scope(Interpreter* inter, ScopeType type)
+{
+    Scope* scope = arena_push_struct<Scope>(inter->ctx->static_arena);
+    scope->objects = pooled_array_make<Object>(inter->ctx->static_arena, 32);
+    scope->type = type;
+    scope->return_obj = inter->void_obj;
+    return scope;
+}
+
+Scope* push_scope(Interpreter* inter, ScopeType type, i32 expected_return_vtype)
+{
+    Scope* scope = NULL;
+    
+    if (inter->free_scope != NULL) {
+        scope = inter->free_scope;
+        inter->free_scope = scope->next;
+        scope->next = NULL;
+        scope->previous = NULL;
+        scope->type = type;
+    }
+    
+    if (scope == NULL) scope = alloc_scope(inter, type);
+    
+    scope->expected_return_vtype = expected_return_vtype;
+    
+    scope->previous = inter->current_scope;
+    inter->current_scope->next = scope->previous;
+    inter->current_scope = scope;
+    
+    return scope;
 }
 
 void pop_scope(Interpreter* inter)
 {
-    if (inter->scope <= 0) {
+    if (inter->current_scope == inter->global_scope) {
         report_stack_is_broken();
         return;
     }
-    inter->scope--;
     
-    for (auto it = pooled_array_make_iterator_tail(&inter->objects); it.valid; --it) {
-        Object* obj = it.value;
-        if (obj->scope > inter->scope) {
-            undefine_object(inter, obj);
-        }
+    Scope* scope = inter->current_scope;
+    inter->current_scope = scope->previous;
+    inter->current_scope->next = NULL;
+    
+    scope->next = NULL;
+    scope->previous = NULL;
+    // TODO(Jose): FREE MEMORY
+    array_reset(&scope->objects);
+    
+    // TODO(Jose): FREE MEMORY
+    scope->return_obj = inter->void_obj;
+    
+    scope->next = inter->free_scope;
+    inter->free_scope = scope;
+}
+
+Scope* get_returnable_scope(Interpreter* inter)
+{
+    Scope* scope = inter->current_scope;
+    
+    while (true) {
+        if (scope->type == ScopeType_Function) return scope;
+        if (scope->type == ScopeType_Global) return scope;
+        scope = scope->previous;
     }
+    assert(0);
+    return inter->global_scope;
 }
 
 Symbol find_symbol(Interpreter* inter, String identifier)
@@ -1507,21 +1701,25 @@ Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes)
 {
     if (identifier.size == 0) return NULL;
     
-    Object* match = NULL;
-    i32 match_scope = -1;
+    Scope* scope = inter->current_scope;
     
-    for (auto it = pooled_array_make_iterator(&inter->objects); it.valid; ++it) {
-        Object* obj = it.value;
-        if (string_equals(obj->identifier, identifier)) {
-            if (!parent_scopes && obj->scope != inter->scope) continue;
-            if (obj->scope > match_scope) {
-                match = obj;
-                match_scope = obj->scope;
+    while (true)
+    {
+        for (auto it = pooled_array_make_iterator(&scope->objects); it.valid; ++it) {
+            Object* obj = it.value;
+            if (string_equals(obj->identifier, identifier)) {
+                return obj;
             }
         }
+        
+        if (!parent_scopes) break;
+        
+        if (scope->type == ScopeType_Function) break;
+        if (scope->type == ScopeType_Global) break;
+        scope = scope->previous;
     }
     
-    return match;
+    return NULL;
 }
 
 Object* define_object(Interpreter* inter, String identifier, i32 vtype)
@@ -1529,23 +1727,14 @@ Object* define_object(Interpreter* inter, String identifier, i32 vtype)
     assert(find_object(inter, identifier, false) == NULL);
     assert(identifier.size);
     
-    Object* obj = NULL;
+    Scope* scope = inter->current_scope;
     
-    for (auto it = pooled_array_make_iterator(&inter->objects); it.valid; ++it) {
-        if (it.value->identifier.size == 0) obj = it.value;
-    }
-    
-    if (obj == NULL) obj = array_add(&inter->objects);
+    Object* obj = array_add(&scope->objects);
     obj->identifier = identifier;
     obj->vtype = vtype;
-    obj->scope = inter->scope;
+    obj->scope = scope;
     
     return obj;
-}
-
-void undefine_object(Interpreter* inter, Object* obj) {
-    // TODO(Jose): FREE MEMORY HERE
-    *obj = {};
 }
 
 FunctionDefinition* find_function(Interpreter* inter, String identifier)
@@ -1557,31 +1746,27 @@ FunctionDefinition* find_function(Interpreter* inter, String identifier)
     return NULL;
 }
 
-Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, CodeLocation code, b32 is_expresion)
+Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, OpNode* parent_node, b32 is_expresion)
 {
     SCRATCH();
     
-    if (parameters.count != fn->parameter_vtypes.count) {
-        report_function_expecting_parameters(code, fn->identifier, fn->parameter_vtypes.count);
+    CodeLocation code = parent_node->code;
+    
+    if (parameters.count != fn->parameters.count) {
+        report_function_expecting_parameters(code, fn->identifier, fn->parameters.count);
         return inter->nil_obj;
+    }
+    
+    // Ignore errors
+    foreach(i, parameters.count) {
+        if (parameters[i]->vtype < 0) return inter->nil_obj;
     }
     
     foreach(i, parameters.count) {
-        if (parameters[i]->vtype != fn->parameter_vtypes[i]) {
-            report_function_wrong_parameter_type(code, fn->identifier, string_from_vtype(scratch.arena, inter, fn->parameter_vtypes[i]), i + 1);
+        if (parameters[i]->vtype != fn->parameters[i].vtype) {
+            report_function_wrong_parameter_type(code, fn->identifier, string_from_vtype(scratch.arena, inter, fn->parameters[i].vtype), i + 1);
             return inter->nil_obj;
         }
-    }
-    
-    if (!inter->settings.execute) {
-        return obj_alloc_temp(inter, fn->return_vtype);
-    }
-    
-    IntrinsicFunctionResult res = fn->intrinsic_fn(inter, parameters, code);
-    
-    if (res.return_obj->vtype != fn->return_vtype) {
-        assert(0); // TODO(Jose): 
-        return inter->nil_obj;
     }
     
     String resolved_line;
@@ -1599,18 +1784,56 @@ Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*>
         resolved_line = string_from_builder(scratch.arena, &builder);
     }
     
-    if (!res.error_result.success && !is_expresion) {
-        interpreter_report_runtime_error(inter, code, resolved_line, res.error_result.message);
-        return res.return_obj;
+    b32 is_intrinsic = fn->intrinsic_fn != NULL;
+    
+    if (is_intrinsic && !inter->settings.execute) {
+        return obj_alloc_temp(inter, fn->return_vtype);
+    }
+    
+    FunctionReturn ret{};
+    
+    if (is_intrinsic) {
+        ret = fn->intrinsic_fn(inter, parameters, code);
+    }
+    else {
+        ret.return_obj = inter->void_obj;
+        ret.error_result = RESULT_SUCCESS;
+        
+        Scope* fn_scope = push_scope(inter, ScopeType_Function, fn->return_vtype);
+        
+        foreach(i, fn->parameters.count) {
+            ParameterDefinition param_def = fn->parameters[i];
+            Object* param = define_object(inter, param_def.name, param_def.vtype);
+            obj_copy(inter, param, parameters[i]);
+        }
+        
+        interpret_op(inter, parent_node, fn->defined_fn);
+        ret = { fn_scope->return_obj, RESULT_SUCCESS };
+        
+        pop_scope(inter);
+    }
+    
+    if (ret.return_obj->vtype < 0) return inter->nil_obj;
+    
+    if (ret.return_obj->vtype != fn->return_vtype)
+    {
+        CodeLocation fn_code = (fn->defined_fn == NULL) ? code : fn->defined_fn->code;
+        report_function_no_return(fn_code, fn->identifier);
+        return inter->nil_obj;
+    }
+    
+    if (!ret.error_result.success && !is_expresion) {
+        interpreter_report_runtime_error(inter, code, resolved_line, ret.error_result.message);
+        return ret.return_obj;
     }
     
     if (inter->settings.print_execution) {
-        String return_string = string_from_obj(scratch.arena, inter, res.return_obj);
+        String return_string = string_from_obj(scratch.arena, inter, ret.return_obj);
         String parameters_string = STR("TODO");
         log_trace(inter->ctx, node->code, STR("%S(%S) => %S"), fn->identifier, parameters_string, return_string);
     }
     
-    return res.return_obj;
+    return ret.return_obj;
 }
 
 Object* member_from_object(Interpreter* inter, Object* obj, String member)
@@ -1750,4 +1973,12 @@ b32 interpretion_failed(Interpreter* inter)
 {
     if (!inter->settings.execute) return false;
     return inter->ctx->error_count > 0;
+}
+
+b32 skip_ops(Interpreter* inter)
+{
+    if (interpretion_failed(inter)) return true;
+    Scope* returnable_scope = get_returnable_scope(inter);
+    if (inter->settings.execute && returnable_scope->expected_return_vtype > 0 && returnable_scope->return_obj != inter->void_obj) return true;
+    return false;
 }

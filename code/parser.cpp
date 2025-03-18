@@ -13,6 +13,7 @@ internal_fn OpKind op_kind_from_tokens(Array<Token> tokens)
     if (t0.kind == TokenKind_IfKeyword) return OpKind_IfStatement;
     if (t0.kind == TokenKind_WhileKeyword) return OpKind_WhileStatement;
     if (t0.kind == TokenKind_ForKeyword) return OpKind_ForStatement;
+    if (t0.kind == TokenKind_ReturnKeyword) return OpKind_Return;
     
     if (t0.kind == TokenKind_OpenBrace) return OpKind_Block;
     
@@ -22,21 +23,37 @@ internal_fn OpKind op_kind_from_tokens(Array<Token> tokens)
     }
     
     // Variable definition
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Identifier) return OpKind_VariableDefinition;
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Assignment) return OpKind_VariableDefinition;
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_OpenBracket) return OpKind_VariableDefinition;
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Identifier) return OpKind_ObjectDefinition;
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Assignment) return OpKind_ObjectDefinition;
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_OpenBracket) return OpKind_ObjectDefinition;
     
     // Array definition
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_OpenBracket && t2.kind == TokenKind_CloseBracket && t3.kind == TokenKind_Identifier) return OpKind_VariableDefinition;
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_OpenBracket && t2.kind == TokenKind_CloseBracket && t3.kind == TokenKind_Identifier) return OpKind_ObjectDefinition;
     
     // Array assignment
     if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_OpenBracket && t2.kind != TokenKind_CloseBracket) return OpKind_ArrayElementAssignment;
     
     if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Colon) {
         if (t3.kind == TokenKind_EnumKeyword) return OpKind_EnumDefinition;
+        if (t3.kind == TokenKind_OpenParenthesis) return OpKind_FunctionDefinition;
     }
     
     return OpKind_None;
+}
+
+void parser_push_state(Parser* parser, Array<Token> tokens) {
+    ParserState state{};
+    state.tokens = tokens;
+    state.token_index = 0;
+    array_add(&parser->state_stack, state);
+}
+
+void parser_pop_state(Parser* parser) {
+    array_erase(&parser->state_stack, parser->state_stack.count - 1);
+}
+
+ParserState* parser_get_state(Parser* parser) {
+    return &parser->state_stack[parser->state_stack.count - 1];
 }
 
 b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token)
@@ -63,93 +80,141 @@ b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index
 
 Token peek_token(Parser* parser, i32 offset)
 {
-    i32 index = (i32)parser->token_index + offset;
-    if (index < 0 || index >= parser->tokens.count) return {};
-    return parser->tokens[index];
+    ParserState* state = parser_get_state(parser);
+    i32 index = (i32)state->token_index + offset;
+    if (index < 0 || index >= state->tokens.count) return {};
+    return state->tokens[index];
 }
 
 Array<Token> peek_tokens(Parser* parser, i32 offset, u32 count) {
-    i32 index = parser->token_index + offset;
-    if (index < 0 || index >= parser->tokens.count) return {};
-    count = MIN(count, parser->tokens.count - index);
-    return array_subarray(parser->tokens, index, count);
+    ParserState* state = parser_get_state(parser);
+    i32 index = state->token_index + offset;
+    if (index < 0 || index >= state->tokens.count) return {};
+    count = MIN(count, state->tokens.count - index);
+    return array_subarray(state->tokens, index, count);
 }
 
 void skip_tokens(Parser* parser, u32 count)
 {
-    if (parser->token_index + count > parser->tokens.count) {
+    ParserState* state = parser_get_state(parser);
+    if (state->token_index + count > state->tokens.count) {
         assert(0);
-        parser->token_index = parser->tokens.count;
+        state->token_index = state->tokens.count;
         return;
     }
-    parser->token_index += count;
+    state->token_index += count;
 }
 
 void skip_tokens_before_op(Parser* parser)
 {
-    while (parser->token_index < parser->tokens.count) {
-        Token token = parser->tokens[parser->token_index];
+    ParserState* state = parser_get_state(parser);
+    while (state->token_index < state->tokens.count) {
+        Token token = state->tokens[state->token_index];
         if (token.kind != TokenKind_NextLine && token.kind != TokenKind_NextSentence) break;
-        parser->token_index++;
+        state->token_index++;
+    }
+}
+
+void skip_sentence(Parser* parser)
+{
+    ParserState* state = parser_get_state(parser);
+    while (state->token_index < state->tokens.count) {
+        Token token = state->tokens[state->token_index++];
+        if (token.kind == TokenKind_NextSentence) break;
     }
 }
 
 Token extract_token(Parser* parser)
 {
-    if (parser->token_index >= parser->tokens.count) {
-        assert(0);
+    ParserState* state = parser_get_state(parser);
+    if (state->token_index >= state->tokens.count) {
         return {};
     }
-    return parser->tokens[parser->token_index++];
+    return state->tokens[state->token_index++];
 }
 
 Array<Token> extract_tokens(Parser* parser, u32 count)
 {
-    if (parser->token_index + count >= parser->tokens.count) {
+    ParserState* state = parser_get_state(parser);
+    if (state->token_index + count > state->tokens.count) {
         assert(0);
         return {};
     }
-    Array<Token> tokens = array_subarray(parser->tokens, parser->token_index, count);
-    parser->token_index += count;
+    Array<Token> tokens = array_subarray(state->tokens, state->token_index, count);
+    state->token_index += count;
     return tokens;
 }
 
 Array<Token> extract_tokens_until(Parser* parser, b32 require_separator, TokenKind sep0, TokenKind sep1)
 {
-    u32 starting_index = parser->token_index;
-    while (parser->token_index < parser->tokens.count) {
-        if (parser->tokens[parser->token_index].kind == sep0) break;
-        if (parser->tokens[parser->token_index].kind == sep1) break;
-        parser->token_index++;
+    ParserState* state = parser_get_state(parser);
+    u32 starting_index = state->token_index;
+    while (state->token_index < state->tokens.count) {
+        if (state->tokens[state->token_index].kind == sep0) break;
+        if (state->tokens[state->token_index].kind == sep1) break;
+        state->token_index++;
     }
-    if (require_separator && parser->token_index < parser->tokens.count) {
-        parser->token_index++;
+    if (require_separator && state->token_index < state->tokens.count) {
+        state->token_index++;
     }
-    return array_subarray(parser->tokens, starting_index, parser->token_index - starting_index);
+    return array_subarray(state->tokens, starting_index, state->token_index - starting_index);
 }
 
 Array<Token> extract_tokens_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator)
 {
-    u32 starting_index = parser->token_index;
+    ParserState* state = parser_get_state(parser);
+    u32 starting_index = state->token_index;
     i32 depth = 0;
     
-    while (parser->token_index < parser->tokens.count) {
-        Token token = parser->tokens[parser->token_index];
+    while (state->token_index < state->tokens.count) {
+        Token token = state->tokens[state->token_index];
         if (token.kind == open_token) depth++;
         else if (token.kind == close_token) {
             depth--;
             if (depth == 0) break;
         }
-        parser->token_index++;
+        state->token_index++;
     }
     
-    u32 end_index = parser->token_index;
-    if (parser->token_index < parser->tokens.count) {
+    u32 end_index = state->token_index;
+    if (state->token_index < state->tokens.count) {
         if (require_separator) end_index++;
-        parser->token_index++;
+        state->token_index++;
     }
     
-    return (depth == 0) ? array_subarray(parser->tokens, starting_index, end_index - starting_index) : Array<Token>{};
+    return (depth == 0) ? array_subarray(state->tokens, starting_index, end_index - starting_index) : Array<Token>{};
+}
+
+Array<Array<Token>> split_tokens_in_parameters(Arena* arena, Array<Token> tokens)
+{
+    SCRATCH(arena);
+    
+    PooledArray<Array<Token>> params = pooled_array_make<Array<Token>>(scratch.arena, 8);
+    
+    u32 cursor = 0;
+    u32 last_cursor = 0;
+    i32 depth = 0;
+    
+    while (cursor < tokens.count) {
+        Token t = tokens[cursor];
+        if (t.kind == TokenKind_Comma && depth <= 0) {
+            Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
+            array_add(&params, param);
+            last_cursor = cursor + 1;
+        }
+        if (t.kind == TokenKind_OpenParenthesis) depth++;
+        else if (t.kind == TokenKind_CloseParenthesis) depth--;
+        else if (t.kind == TokenKind_OpenBrace) depth++;
+        else if (t.kind == TokenKind_CloseBrace) depth--;
+        else if (t.kind == TokenKind_OpenBracket) depth++;
+        else if (t.kind == TokenKind_CloseBracket) depth--;
+        cursor++;
+    }
+    
+    Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
+    array_add(&params, param);
+    
+    return array_from_pooled_array(arena, params);
 }
 
 internal_fn OpNode* alloc_node(Parser* parser, OpKind kind, CodeLocation code)
@@ -163,30 +228,17 @@ internal_fn OpNode* alloc_node(Parser* parser, OpKind kind, CodeLocation code)
 
 internal_fn Array<OpNode*> process_parameters(Parser* parser, Array<Token> tokens)
 {
+    SCRATCH();
     if (tokens.count == 0) return {};
     
-    u32 parameter_count = 1;
-    foreach(i, tokens.count) if (tokens[i].kind == TokenKind_Comma) parameter_count++;
-    Array<OpNode*> nodes = array_make<OpNode*>(parser->ctx->static_arena, parameter_count);
+    Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, tokens);
+    Array<OpNode*> nodes = array_make<OpNode*>(parser->ctx->static_arena, parameters.count);
     
-    u32 parameter_index = 0;
-    u32 start_parameter_token_index = 0;
-    u32 index = 0;
-    
-    while (true)
-    {
-        if (index >= tokens.count || tokens[index].kind == TokenKind_Comma) {
-            Array<Token> parameter_tokens = array_subarray(tokens, start_parameter_token_index, index - start_parameter_token_index);
-            nodes[parameter_index++] = process_expresion(parser, parameter_tokens);
-            start_parameter_token_index = index + 1;
-        }
-        
-        if (index >= tokens.count) break;
-        
-        index++;
+    foreach(i, parameters.count) {
+        Array<Token> parameter_tokens = parameters[i];
+        nodes[i] = process_expresion(parser, parameter_tokens);
     }
     
-    assert(parameter_index == parameter_count);
     return nodes;
 }
 
@@ -266,8 +318,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
     }
     
     // Member access
-    if (tokens.count == 3 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_Dot && tokens[2].kind == TokenKind_Identifier ||
-        tokens.count == 2 && tokens[0].kind == TokenKind_Dot && tokens[1].kind == TokenKind_Identifier)
+    if (tokens.count >= 2 && tokens[tokens.count - 2].kind == TokenKind_Dot && tokens[tokens.count - 1].kind == TokenKind_Identifier)
     {
         String member_value = tokens[tokens.count - 1].value;
         
@@ -276,8 +327,11 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
             return alloc_node(parser, OpKind_Error, tokens[0].code);
         }
         
+        Array<Token> expresion_tokens = array_subarray(tokens, 0, tokens.count - 2);
+        OpNode* expresion = process_expresion(parser, expresion_tokens);
+        
         auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
-        node->identifier = (tokens[0].kind == TokenKind_Identifier) ? tokens[0].value : String{};
+        node->expresion = expresion;
         node->member = member_value;
         return node;
     }
@@ -465,7 +519,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
 
 internal_fn OpNode* extract_if_statement(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
+    Token starting_token = peek_token(parser);
     
     Array<Token> sentence = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
     
@@ -490,12 +544,11 @@ internal_fn OpNode* extract_if_statement(Parser* parser)
     node->success = extract_op(parser);
     
     skip_tokens_before_op(parser);
-    if (parser->token_index < parser->tokens.count) {
-        Token else_token = parser->tokens[parser->token_index];
-        if (else_token.kind == TokenKind_ElseKeyword) {
-            parser->token_index++; // Skip else
-            node->failure = extract_op(parser);
-        }
+    
+    Token else_token = peek_token(parser);
+    if (else_token.kind == TokenKind_ElseKeyword) {
+        extract_token(parser); // Skip else
+        node->failure = extract_op(parser);
     }
     
     if (node->failure == NULL) 
@@ -506,7 +559,7 @@ internal_fn OpNode* extract_if_statement(Parser* parser)
 
 internal_fn OpNode* extract_while_statement(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
+    Token starting_token = peek_token(parser);
     
     Array<Token> sentence = extract_tokens_until(parser, true, TokenKind_CloseParenthesis);
     
@@ -535,7 +588,7 @@ internal_fn OpNode* extract_while_statement(Parser* parser)
 
 internal_fn OpNode* extract_for_statement(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
+    Token starting_token = peek_token(parser);
     
     Array<Token> sentence = extract_tokens_until(parser, true, TokenKind_CloseParenthesis);
     
@@ -621,9 +674,17 @@ internal_fn OpNode* extract_for_statement(Parser* parser)
         Array<Token> update_sentence_tokens = array_subarray(expresions, separator_indices[1] + 1, expresions.count - (separator_indices[1] + 1));
         
         auto node = (OpNode_ForStatement*)alloc_node(parser, OpKind_ForStatement, starting_token.code);
-        node->initialize_sentence = generate_ast_from_sentence(parser->ctx, initialize_sentence_tokens);
+        
+        parser_push_state(parser, initialize_sentence_tokens);
+        node->initialize_sentence = extract_op(parser);
+        parser_pop_state(parser);
+        
         node->condition_expresion = process_expresion(parser, condition_expresion_tokens);
-        node->update_sentence = generate_ast_from_sentence(parser->ctx, update_sentence_tokens);
+        
+        parser_push_state(parser, update_sentence_tokens);
+        node->update_sentence = extract_op(parser);
+        parser_pop_state(parser);
+        
         node->content = extract_op(parser);
         return node;
     }
@@ -706,9 +767,122 @@ internal_fn OpNode* extract_enum_definition(Parser* parser)
     return node;
 }
 
+internal_fn OpNode* extract_function_definition(Parser* parser)
+{
+    SCRATCH();
+    
+    Token starting_token = peek_token(parser);
+    
+    Token identifier_token = extract_token(parser);
+    assert(identifier_token.kind == TokenKind_Identifier);
+    
+    Token colon0_token = extract_token(parser);
+    assert(colon0_token.kind == TokenKind_Colon);
+    Token colon1_token = extract_token(parser);
+    assert(colon1_token.kind == TokenKind_Colon);
+    
+    assert(peek_token(parser).kind == TokenKind_OpenParenthesis);
+    Array<Token> parameter_tokens = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
+    
+    if (parameter_tokens.count < 2) {
+        report_common_missing_closing_parenthesis(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
+    
+    Array<OpNode_ObjectDefinition*> params{};
+    
+    // Parameters
+    if (parameter_tokens.count > 2)
+    {
+        parameter_tokens = array_subarray(parameter_tokens, 1, parameter_tokens.count - 2);
+        
+        Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, parameter_tokens);
+        params = array_make<OpNode_ObjectDefinition*>(parser->ctx->static_arena, parameters.count);
+        
+        u32 param_index = 0;
+        b32 valid = true;
+        
+        foreach (i, parameters.count)
+        {
+            Array<Token> tokens = parameters[i];
+            
+            parser_push_state(parser, tokens);
+            OpNode* node = extract_object_definition(parser);
+            parser_pop_state(parser);
+            
+            if (node->kind != OpKind_ObjectDefinition)
+            {
+                valid = false;
+                
+                if (node->kind != OpKind_Error) {
+                    report_expecting_object_definition(node->code);
+                    node = alloc_node(parser, OpKind_Error, node->code);
+                }
+            }
+            
+            params[param_index++] = (OpNode_ObjectDefinition*)node;
+        }
+        
+        if (!valid) {
+            return alloc_node(parser, OpKind_Error, starting_token.code);
+        }
+    }
+    
+    OpNode* return_node;
+    
+    // Return definition
+    if (peek_token(parser).kind == TokenKind_Arrow) {
+        extract_token(parser);
+        
+        Token return_start_node = peek_token(parser);
+        
+        return_node = extract_object_type(parser);
+        if (return_node->kind != OpKind_ObjectType) {
+            return alloc_node(parser, OpKind_Error, return_start_node.code);
+        }
+    }
+    else return_node = alloc_node(parser, OpKind_None, starting_token.code);
+    
+    if (peek_token(parser).kind != TokenKind_OpenBrace) {
+        report_common_missing_opening_brace(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
+    
+    Array<Token> block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
+    
+    if (block_tokens.count < 2) {
+        report_common_missing_closing_brace(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
+    
+    OpNode_Block* block;
+    if (block_tokens.count == 2) {
+        block = (OpNode_Block*)alloc_node(parser, OpKind_Block, block_tokens[0].code);
+    }
+    else {
+        block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
+        
+        parser_push_state(parser, block_tokens);
+        block = (OpNode_Block*)extract_block(parser);
+        parser_pop_state(parser);
+        
+        if (block->kind != OpKind_Block) {
+            report_common_missing_block(block_tokens[0].code);
+            return alloc_node(parser, OpKind_Error, starting_token.code);
+        }
+    }
+    
+    OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)alloc_node(parser, OpKind_FunctionDefinition, starting_token.code);
+    node->identifier = identifier_token.value;
+    node->block = block;
+    node->parameters = params;
+    node->return_node = return_node;
+    return node;
+}
+
 internal_fn OpNode* extract_variable_assignment(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
+    Token starting_token = peek_token(parser);
     
     Array<Token> sentence = extract_tokens_until(parser, false, TokenKind_NextSentence);
     
@@ -736,7 +910,7 @@ internal_fn OpNode* extract_variable_assignment(Parser* parser)
 
 internal_fn OpNode* extract_array_element_assignment(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
+    Token starting_token = peek_token(parser);
     Array<Token> sentence = extract_tokens_until(parser, false, TokenKind_NextSentence);
     
     assert(sentence.count >= 6);
@@ -784,79 +958,85 @@ internal_fn OpNode* extract_array_element_assignment(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_variable_definition(Parser* parser)
+OpNode* extract_object_type(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
+    String name{};
+    b32 is_array = false;
+    Array<OpNode*> array_dimensions{};
+    
+    Token starting_token = peek_token(parser);
+    
+    Token identifier_token = extract_token(parser);
+    if (identifier_token.kind != TokenKind_Identifier) {
+        report_objdef_expecting_type_identifier(identifier_token.code);
+        return alloc_node(parser, OpKind_Error, identifier_token.code);
+    }
+    
+    name = identifier_token.value;
+    
+    Token open_bracket = peek_token(parser, 0);
+    
+    if (open_bracket.kind == TokenKind_OpenBracket)
+    {
+        is_array = true;
+        
+        i32 starting_cursor = parser_get_state(parser)->token_index;
+        u32 dimensions = 0;
+        
+        while (peek_token(parser).kind == TokenKind_OpenBracket) {
+            Array<Token> tokens = extract_tokens_with_depth(parser, TokenKind_OpenBracket, TokenKind_CloseBracket, true);
+            if (tokens.count < 2) {
+                report_common_missing_closing_bracket(starting_token.code);
+                return alloc_node(parser, OpKind_Error, starting_token.code);
+            }
+            dimensions++;
+        }
+        
+        parser_get_state(parser)->token_index = starting_cursor;
+        
+        // Check array dimensions
+        {
+            array_dimensions = array_make<OpNode*>(parser->ctx->static_arena, dimensions);
+            
+            foreach(i, dimensions)
+            {
+                Array<Token> tokens = extract_tokens_with_depth(parser, TokenKind_OpenBracket, TokenKind_CloseBracket, true);
+                assert(tokens.count >= 2);
+                tokens = array_subarray(tokens, 1, tokens.count - 2);
+                array_dimensions[i] = process_expresion(parser, tokens);
+            }
+        }
+    }
+    
+    OpNode_ObjectType* node = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
+    node->name = name;
+    node->is_array = (b8)is_array;
+    node->array_dimensions = array_dimensions;
+    return node;
+}
+
+OpNode* extract_object_definition(Parser* parser)
+{
+    Token starting_token = peek_token(parser);
     
     Token identifier_token = extract_token(parser);
     
     Token colon_token = extract_token(parser);
-    assert(colon_token.kind == TokenKind_Colon);
+    if (colon_token.kind != TokenKind_Colon) {
+        report_objdef_expecting_colon(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
     
-    String type_identifier = STR("");
-    b32 type_is_array = false;
-    Array<OpNode*> array_dimensions{};
+    OpNode_ObjectType* node_type = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
     
     Token type_or_assignment_token = peek_token(parser);
     
     if (type_or_assignment_token.kind == TokenKind_Assignment) {}
     else if (type_or_assignment_token.kind == TokenKind_Identifier)
     {
-        type_identifier = type_or_assignment_token.value;
-        
-        skip_tokens(parser, 1);
-        Token open_bracket = peek_token(parser, 0);
-        
-        if (open_bracket.kind == TokenKind_OpenBracket)
-        {
-            type_is_array = true;
-            
-            u32 index = 0;
-            i32 depth = 0;
-            u32 dimensions = 0;
-            while (1) {
-                Token t = peek_token(parser, index);
-                if (t.kind == TokenKind_OpenBracket) {
-                    depth++;
-                    dimensions++;
-                }
-                else if (t.kind == TokenKind_CloseBracket) depth--;
-                else if (t.kind == TokenKind_NextSentence) break;
-                else if (t.kind == TokenKind_Assignment) break;
-                index++;
-            }
-            
-            if (depth > 0) {
-                report_common_missing_closing_bracket(starting_token.code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
-            }
-            if (depth < 0) {
-                report_common_missing_opening_bracket(starting_token.code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
-            }
-            
-            Array<Token> array_tokens = extract_tokens(parser, index);
-            
-            // Check array dimensions
-            {
-                array_dimensions = array_make<OpNode*>(parser->ctx->static_arena, dimensions);
-                
-                u32 dimension = 0;
-                u32 last_dimension_index = 0;
-                
-                foreach(i, array_tokens.count) {
-                    Token t = array_tokens[i];
-                    if (t.kind == TokenKind_CloseBracket)
-                    {
-                        Array<Token> dimension_tokens = array_subarray(array_tokens, last_dimension_index + 1, i - (last_dimension_index + 1));
-                        array_dimensions[dimension] = process_expresion(parser, dimension_tokens);
-                        
-                        last_dimension_index = i + 1;
-                        dimension++;
-                        continue;
-                    }
-                }
-            }
+        node_type = (OpNode_ObjectType*)extract_object_type(parser);
+        if (node_type->kind != OpKind_ObjectType) {
+            return alloc_node(parser, OpKind_Error, starting_token.code);
         }
     }
     else {
@@ -868,7 +1048,7 @@ internal_fn OpNode* extract_variable_definition(Parser* parser)
     
     OpNode* assignment_node = NULL;
     
-    if (assignment_token.kind != TokenKind_NextSentence)
+    if (assignment_token.kind != TokenKind_NextSentence && assignment_token.kind != TokenKind_None)
     {
         if (assignment_token.kind != TokenKind_Assignment || assignment_token.binary_operator != BinaryOperator_None) {
             report_objdef_expecting_assignment(starting_token.code);
@@ -883,8 +1063,8 @@ internal_fn OpNode* extract_variable_definition(Parser* parser)
             return alloc_node(parser, OpKind_Error, starting_token.code);
         }
         
-        foreach(i, array_dimensions.count) {
-            if (array_dimensions[i]->kind != OpKind_None) {
+        foreach(i, node_type->array_dimensions.count) {
+            if (node_type->array_dimensions[i]->kind != OpKind_None) {
                 report_objdef_redundant_array_dimensions(starting_token.code);
                 return alloc_node(parser, OpKind_Error, starting_token.code);
             }
@@ -894,69 +1074,97 @@ internal_fn OpNode* extract_variable_definition(Parser* parser)
         assignment_node = alloc_node(parser, OpKind_None, starting_token.code);
     }
     
-    auto node = (OpNode_VariableDefinition*)alloc_node(parser, OpKind_VariableDefinition, starting_token.code);
+    auto node = (OpNode_ObjectDefinition*)alloc_node(parser, OpKind_ObjectDefinition, starting_token.code);
     node->assignment = assignment_node;
-    node->type = type_identifier;
-    node->identifier = identifier_token.value;
-    node->is_array = (b8)type_is_array;
-    node->array_dimensions = array_dimensions;
+    node->type = node_type;
+    node->object_name = identifier_token.value;
     
     return node;
 }
 
 internal_fn OpNode* extract_function_call(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
+    Token starting_token = peek_token(parser);
     Array<Token> sentence = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
     return process_function_call(parser, sentence);
 }
 
-internal_fn OpNode* extract_block(Parser* parser)
+internal_fn OpNode* extract_return(Parser* parser)
 {
-    Token starting_token = parser->tokens[parser->token_index];
-    Array<Token> block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
-    b32 close_bracket_found = block_tokens.count >= 2;
+    Token return_token = extract_token(parser);
+    assert(return_token.kind == TokenKind_ReturnKeyword);
     
-    if (!close_bracket_found) {
-        report_common_missing_closing_bracket(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
+    Array<Token> expresion_tokens = extract_tokens_until(parser, false, TokenKind_NextSentence);
+    OpNode* expresion = process_expresion(parser, expresion_tokens);
+    
+    OpNode_Return* node = (OpNode_Return*)alloc_node(parser, OpKind_Return, return_token.code);
+    node->expresion = expresion;
+    return node;
+}
+
+OpNode* extract_block(Parser* parser)
+{
+    SCRATCH();
+    
+    Token starting_token = peek_token(parser);
+    Array<Token> block_tokens = parser_get_state(parser)->tokens;
+    
+    if (starting_token.kind == TokenKind_OpenBrace)
+    {
+        block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
+        b32 close_bracket_found = block_tokens.count >= 2;
+        
+        if (!close_bracket_found) {
+            report_common_missing_closing_bracket(starting_token.code);
+            return alloc_node(parser, OpKind_Error, starting_token.code);
+        }
+        
+        block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
     }
     
     // Empty block
-    if (block_tokens.count == 2) {
-        return alloc_node(parser, OpKind_Block, block_tokens[0].code);
+    if (block_tokens.count == 0) {
+        return alloc_node(parser, OpKind_Block, starting_token.code);
     }
     
-    Array<Token> block_tokens_without_brakets = array_subarray(block_tokens, 1, block_tokens.count - 2);
-    return generate_ast_from_block(parser->ctx, block_tokens_without_brakets);
-}
-
-void skip_sentence(Parser* parser)
-{
-    while (parser->token_index < parser->tokens.count) {
-        Token token = parser->tokens[parser->token_index++];
-        if (token.kind == TokenKind_NextSentence) break;
+    parser_push_state(parser, block_tokens);
+    
+    PooledArray<OpNode*> ops = pooled_array_make<OpNode*>(scratch.arena, 64);
+    auto block_node = (OpNode_Block*)alloc_node(parser, OpKind_Block, starting_token.code);
+    
+    while (true)
+    {
+        OpNode* node = extract_op(parser);
+        if (node == NULL) break;
+        array_add(&ops, node);
     }
+    
+    block_node->ops = array_from_pooled_array(parser->ctx->static_arena, ops);
+    
+    parser_pop_state(parser);
+    
+    return block_node;
 }
 
 OpNode* extract_op(Parser* parser)
 {
     skip_tokens_before_op(parser);
     
-    if (parser->token_index >= parser->tokens.count) return NULL;
+    ParserState* state = parser_get_state(parser);
+    if (state->token_index >= state->tokens.count) return NULL;
     
     Array<Token> analyze_tokens = peek_tokens(parser, 0, 5);
     
     if (analyze_tokens.count > 0 && analyze_tokens[0].kind == TokenKind_ElseKeyword) {
         report_else_not_found_if(analyze_tokens[0].code);
-        parser->token_index++;
+        state->token_index++;
         return alloc_node(parser, OpKind_Error, analyze_tokens[0].code);
     }
     
     OpKind kind = op_kind_from_tokens(analyze_tokens);
     
     if (kind == OpKind_None || kind == OpKind_Error) {
-        report_syntactic_unknown_op(parser->tokens[parser->token_index].code);
+        report_syntactic_unknown_op(state->tokens[state->token_index].code);
         skip_sentence(parser);
         return alloc_node(parser, OpKind_Error, analyze_tokens[0].code);
     }
@@ -966,10 +1174,12 @@ OpNode* extract_op(Parser* parser)
         if (kind == OpKind_WhileStatement) node = extract_while_statement(parser);
         if (kind == OpKind_ForStatement) node = extract_for_statement(parser);
         if (kind == OpKind_EnumDefinition) node = extract_enum_definition(parser);
+        if (kind == OpKind_FunctionDefinition) node = extract_function_definition(parser);
         if (kind == OpKind_VariableAssignment) node = extract_variable_assignment(parser);
         if (kind == OpKind_ArrayElementAssignment) node = extract_array_element_assignment(parser);
         if (kind == OpKind_FunctionCall) node = extract_function_call(parser);
-        if (kind == OpKind_VariableDefinition) node = extract_variable_definition(parser);
+        if (kind == OpKind_ObjectDefinition) node = extract_object_definition(parser);
+        if (kind == OpKind_Return) node = extract_return(parser);
         if (kind == OpKind_Block) node = extract_block(parser);
         assert(node != NULL);
         if (node == NULL) return NULL;
@@ -984,37 +1194,12 @@ OpNode* extract_op(Parser* parser)
     return NULL;
 }
 
-OpNode* generate_ast_from_block(Yov* ctx, Array<Token> tokens)
-{
+OpNode* generate_ast(Yov* ctx, Array<Token> tokens, b32 is_block) {
     Parser* parser = arena_push_struct<Parser>(ctx->temp_arena);
     parser->ctx = ctx;
-    parser->tokens = tokens;
+    parser->state_stack = pooled_array_make<ParserState>(ctx->temp_arena, 8);
     
-    parser->ops = pooled_array_make<OpNode*>(ctx->temp_arena, 64);
-    
-    auto block_node = (OpNode_Block*)alloc_node(parser, OpKind_Block, tokens[0].code);
-    
-    while (true)
-    {
-        OpNode* node = extract_op(parser);
-        if (node == NULL) break;
-        array_add(&parser->ops, node);
-    }
-    
-    block_node->ops = array_from_pooled_array(ctx->static_arena, parser->ops);
-    return block_node;
-}
-
-OpNode* generate_ast_from_sentence(Yov* ctx, Array<Token> tokens)
-{
-    Parser* parser = arena_push_struct<Parser>(ctx->temp_arena);
-    parser->ctx = ctx;
-    parser->tokens = tokens;
-    
-    OpNode* node = extract_op(parser);
-    return node;
-}
-
-OpNode* generate_ast(Yov* ctx, Array<Token> tokens) {
-    return generate_ast_from_block(ctx, tokens);
+    parser_push_state(parser, tokens);
+    if (is_block) return extract_block(parser);
+    else return extract_op(parser);
 }

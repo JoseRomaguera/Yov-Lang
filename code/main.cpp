@@ -1,5 +1,7 @@
 #include "inc.h"
 
+#if DEV
+
 inline_fn void log_token(Token token)
 {
     if (token.kind == TokenKind_Separator) print_info(STR("-> Separator"));
@@ -77,9 +79,9 @@ void log_ast(OpNode* node, i32 depth)
     if (node->kind == OpKind_ForeachArrayStatement) print_info("foreach-statement");
     if (node->kind == OpKind_VariableAssignment) print_info("variable assignment");
     if (node->kind == OpKind_FunctionCall) print_info("function call");
-    if (node->kind == OpKind_VariableDefinition) {
-        auto node0 = (OpNode_VariableDefinition*)node;
-        print_info("vardef: '%S %S'", node0->type, node0->identifier);
+    if (node->kind == OpKind_ObjectDefinition) {
+        auto node0 = (OpNode_ObjectDefinition*)node;
+        print_info("objdef: '%S'", node0->object_name);
     }
     if (node->kind == OpKind_Binary) {
         auto node0 = (OpNode_Binary*)node;
@@ -107,7 +109,7 @@ void log_ast(OpNode* node, i32 depth)
     }
     if (node->kind == OpKind_MemberValue) {
         auto node0 = (OpNode_MemberValue*)node;
-        print_info("member_value: %S.%S", node0->identifier, node0->member);
+        print_info("member_value: %S", node0->member);
     }
     if (node->kind == OpKind_ArrayExpresion) { print_info("array expresion"); }
     if (node->kind == OpKind_ArrayElementValue) {
@@ -128,6 +130,8 @@ void log_ast(OpNode* node, i32 depth)
     }
 }
 
+#endif
+
 void yov_run_script(Yov* ctx, b32 trace, b32 user_assert, b32 analyze_only)
 {
     RawBuffer raw_file;
@@ -139,7 +143,7 @@ void yov_run_script(Yov* ctx, b32 trace, b32 user_assert, b32 analyze_only)
     ctx->script_text = STR(raw_file);
     
     Array<Token> tokens = generate_tokens(ctx, ctx->script_text, true);
-    OpNode* ast = generate_ast(ctx, tokens);
+    OpNode* ast = generate_ast(ctx, tokens, true);
     
     InterpreterSettings settings{};
     settings.print_execution = (b8)trace;

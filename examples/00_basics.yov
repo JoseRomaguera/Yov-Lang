@@ -1,5 +1,5 @@
 
-integer0 : Int;
+integer0 : Int; // Zero initialized
 integer1 := 5; // Int by default
 integer2 := 10 - integer1;
 

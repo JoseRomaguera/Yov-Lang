@@ -2,20 +2,20 @@
 
 //- CORE 
 
-internal_fn IntrinsicFunctionResult intrinsic__print(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__print(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     print_info("%S", get_string(vars[0]));
     
     return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__println(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__println(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     print_info("%S\n", get_string(vars[0]));
     return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__call(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__call(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -31,7 +31,7 @@ internal_fn IntrinsicFunctionResult intrinsic__call(Interpreter* inter, Array<Ob
     return { obj_alloc_temp_int(inter, result), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__call_exe(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__call_exe(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -48,13 +48,13 @@ internal_fn IntrinsicFunctionResult intrinsic__call_exe(Interpreter* inter, Arra
     return { obj_alloc_temp_int(inter, result), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__exit(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__exit(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     interpreter_exit(inter);
     return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__set_cd(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__set_cd(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -74,7 +74,7 @@ internal_fn IntrinsicFunctionResult intrinsic__set_cd(Interpreter* inter, Array<
 
 //- UTILS 
 
-internal_fn IntrinsicFunctionResult intrinsic__path_resolve(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__path_resolve(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     String res = path_resolve(scratch.arena, get_string(vars[0]));
@@ -83,7 +83,7 @@ internal_fn IntrinsicFunctionResult intrinsic__path_resolve(Interpreter* inter, 
 
 //- YOV 
 
-internal_fn IntrinsicFunctionResult intrinsic__yov_require(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__yov_require(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     i64 major = get_int(vars[0]);
     i64 minor = get_int(vars[1]);
@@ -97,7 +97,7 @@ internal_fn IntrinsicFunctionResult intrinsic__yov_require(Interpreter* inter, A
     return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__yov_require_min(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__yov_require_min(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     i64 major = get_int(vars[0]);
     i64 minor = get_int(vars[1]);
@@ -113,7 +113,7 @@ internal_fn IntrinsicFunctionResult intrinsic__yov_require_min(Interpreter* inte
     return { inter->void_obj, RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__yov_require_max(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__yov_require_max(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     i64 major = get_int(vars[0]);
     i64 minor = get_int(vars[1]);
@@ -162,7 +162,7 @@ internal_fn b32 i64_from_arg(String arg, i64* v)
     return false;
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__arg_int(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__arg_int(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -181,7 +181,7 @@ internal_fn IntrinsicFunctionResult intrinsic__arg_int(Interpreter* inter, Array
     return { obj_alloc_temp_int(inter, value), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__arg_bool(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__arg_bool(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -203,7 +203,7 @@ internal_fn IntrinsicFunctionResult intrinsic__arg_bool(Interpreter* inter, Arra
     return { obj_alloc_temp_bool(inter, (b8)value), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__arg_string(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__arg_string(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -216,14 +216,14 @@ internal_fn IntrinsicFunctionResult intrinsic__arg_string(Interpreter* inter, Ar
     return { obj_alloc_temp_string(inter, value), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__arg_exists(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__arg_exists(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
     return { obj_alloc_temp_bool(inter, arg != NULL), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__arg_flag(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__arg_flag(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     ProgramArg* arg = find_arg(inter, get_string(vars[0]));
@@ -242,7 +242,7 @@ internal_fn IntrinsicFunctionResult intrinsic__arg_flag(Interpreter* inter, Arra
 
 //- MISC 
 
-internal_fn IntrinsicFunctionResult intrinsic__ask_yesno(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__ask_yesno(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     String content = get_string(vars[0]);
     
@@ -250,7 +250,7 @@ internal_fn IntrinsicFunctionResult intrinsic__ask_yesno(Interpreter* inter, Arr
     return { obj_alloc_temp_bool(inter, (b8)result), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__exists(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__exists(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -260,7 +260,7 @@ internal_fn IntrinsicFunctionResult intrinsic__exists(Interpreter* inter, Array<
     return { obj_alloc_temp_bool(inter, result), RESULT_SUCCESS };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__create_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__create_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -276,7 +276,7 @@ internal_fn IntrinsicFunctionResult intrinsic__create_directory(Interpreter* int
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__delete_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__delete_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -291,7 +291,7 @@ internal_fn IntrinsicFunctionResult intrinsic__delete_directory(Interpreter* int
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__copy_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__copy_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -307,7 +307,7 @@ internal_fn IntrinsicFunctionResult intrinsic__copy_directory(Interpreter* inter
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__move_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__move_directory(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -323,7 +323,7 @@ internal_fn IntrinsicFunctionResult intrinsic__move_directory(Interpreter* inter
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__copy_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__copy_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -338,7 +338,7 @@ internal_fn IntrinsicFunctionResult intrinsic__copy_file(Interpreter* inter, Arr
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__move_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__move_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -352,7 +352,7 @@ internal_fn IntrinsicFunctionResult intrinsic__move_file(Interpreter* inter, Arr
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-internal_fn IntrinsicFunctionResult intrinsic__delete_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__delete_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -365,66 +365,94 @@ internal_fn IntrinsicFunctionResult intrinsic__delete_file(Interpreter* inter, A
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-FunctionDefinition make_intrinsic_function(Arena* arena, String identifier, i32 return_vtype, Array<i32> parameters, IntrinsicFunction* intrinsic)
+FunctionDefinition make_intrinsic_function(Arena* arena, String identifier, ParameterDefinition return_def, Array<ParameterDefinition> parameters, IntrinsicFunction* intrinsic)
 {
-    if (parameters.count == 1 && parameters[0] == VType_Void) {
+    if (parameters.count == 1 && parameters[0].vtype == VType_Void) {
         parameters = {};
     }
     
     FunctionDefinition fn{};
     fn.identifier = identifier;
-    fn.return_vtype = return_vtype;
-    fn.parameter_vtypes = array_copy(arena, parameters);
+    fn.return_vtype = return_def.vtype;
+    fn.parameters = array_copy(arena, parameters);
     fn.intrinsic_fn = intrinsic;
     return fn;
 }
 
+ParameterDefinition param_void(Interpreter* inter) {
+    ParameterDefinition def{};
+    def.vtype = VType_Void;
+    def.default_value = inter->nil_obj;
+    return def;
+}
+
+ParameterDefinition param_string(Interpreter* inter, const char* name) {
+    ParameterDefinition def{};
+    def.vtype = VType_String;
+    def.name = STR(name);
+    def.default_value = inter->nil_obj; // TODO(Jose): 
+    return def;
+}
+
+ParameterDefinition param_int(Interpreter* inter, const char* name) {
+    ParameterDefinition def{};
+    def.vtype = VType_Int;
+    def.name = STR(name);
+    def.default_value = inter->nil_obj; // TODO(Jose): 
+    return def;
+}
+
+ParameterDefinition param_bool(Interpreter* inter, const char* name) {
+    ParameterDefinition def{};
+    def.vtype = VType_Bool;
+    def.name = STR(name);
+    def.default_value = inter->nil_obj; // TODO(Jose): 
+    return def;
+}
+
 #define define_instrinsic(_name, _fn, _return, ...) do { \
-i32 params[] = { __VA_ARGS__ }; \
-array_add(&list, make_intrinsic_function(arena, STR(_name), _return, array_make(params, array_count(params)), _fn)); \
+ParameterDefinition params[] = { __VA_ARGS__ }; \
+array_add(&inter->functions, make_intrinsic_function(arena, STR(_name), _return, array_make(params, array_count(params)), _fn)); \
 } while (0)
 
-Array<FunctionDefinition> get_intrinsic_functions(Arena* arena, Interpreter* inter)
+void register_intrinsic_functions(Interpreter* inter)
 {
-    SCRATCH(arena);
-    PooledArray<FunctionDefinition> list = pooled_array_make<FunctionDefinition>(scratch.arena, 32);
+    Arena* arena = inter->ctx->static_arena;
     
     // Core
-    define_instrinsic("print", intrinsic__print, VType_Void, VType_String);
-    define_instrinsic("println", intrinsic__println, VType_Void, VType_String);
-    define_instrinsic("call", intrinsic__call, VType_Int, VType_String);
-    define_instrinsic("call_exe", intrinsic__call_exe, VType_Int, VType_String, VType_String);
-    // TODO(Jose): define_instrinsic("call_script", intrinsic__call_script, VType_Void, VType_String, VType_String);
-    define_instrinsic("exit", intrinsic__exit, VType_Void, VType_Void);
-    define_instrinsic("set_cd", intrinsic__set_cd, VType_Void, VType_String);
+    define_instrinsic("print", intrinsic__print, param_void(inter), param_string(inter, "text"));
+    define_instrinsic("println", intrinsic__println, param_void(inter), param_string(inter, "text"));
+    define_instrinsic("call", intrinsic__call, param_int(inter, "return_code"), param_string(inter, "command"));
+    define_instrinsic("call_exe", intrinsic__call_exe, param_int(inter, "return_code"), param_string(inter, "exe_name"), param_string(inter, "arguments"));
+    // TODO(Jose): define_instrinsic("call_script", intrinsic__call_script, param_void(inter), param_string(inter, ""), param_string(inter, ""));
+    define_instrinsic("exit", intrinsic__exit, param_void(inter), param_void(inter));
+    define_instrinsic("set_cd", intrinsic__set_cd, param_void(inter), param_string(inter, "cd"));
     
     // Utils
-    define_instrinsic("path_resolve", intrinsic__path_resolve, VType_String, VType_String);
+    define_instrinsic("path_resolve", intrinsic__path_resolve, param_string(inter, "result"), param_string(inter, "path"));
     
     // Yov
-    define_instrinsic("yov_require", intrinsic__yov_require, VType_Void, VType_Int, VType_Int);
-    define_instrinsic("yov_require_min", intrinsic__yov_require_min, VType_Void, VType_Int, VType_Int);
-    define_instrinsic("yov_require_max", intrinsic__yov_require_max, VType_Void, VType_Int, VType_Int);
+    define_instrinsic("yov_require", intrinsic__yov_require, param_void(inter), param_int(inter, "major"), param_int(inter, "minor"));
+    define_instrinsic("yov_require_min", intrinsic__yov_require_min, param_void(inter), param_int(inter, "major"), param_int(inter, "minor"));
+    define_instrinsic("yov_require_max", intrinsic__yov_require_max, param_void(inter), param_int(inter, "major"), param_int(inter, "minor"));
     
     // Args
-    define_instrinsic("arg_int", intrinsic__arg_int, VType_Int, VType_String, VType_Int);
-    define_instrinsic("arg_bool", intrinsic__arg_bool, VType_Bool, VType_String, VType_Bool);
-    define_instrinsic("arg_string", intrinsic__arg_string, VType_String, VType_String, VType_String);
-    define_instrinsic("arg_flag", intrinsic__arg_flag, VType_Bool, VType_String);
-    define_instrinsic("arg_exists", intrinsic__arg_exists, VType_Bool, VType_String);
+    define_instrinsic("arg_int", intrinsic__arg_int, param_int(inter, "result"), param_string(inter, "name"), param_int(inter, "default"));
+    define_instrinsic("arg_bool", intrinsic__arg_bool, param_bool(inter, "result"), param_string(inter, "name"), param_bool(inter, "default"));
+    define_instrinsic("arg_string", intrinsic__arg_string, param_string(inter, "result"), param_string(inter, "name"), param_string(inter, "default"));
+    define_instrinsic("arg_flag", intrinsic__arg_flag, param_bool(inter, "result"), param_string(inter, "name"));
+    define_instrinsic("arg_exists", intrinsic__arg_exists, param_bool(inter, "result"), param_string(inter, "name"));
     
     // User
-    define_instrinsic("ask_yesno", intrinsic__ask_yesno, VType_Bool, VType_String);
+    define_instrinsic("ask_yesno", intrinsic__ask_yesno, param_bool(inter, "result"), param_string(inter, "text"));
     
     // File System
-    define_instrinsic("exists", intrinsic__exists, VType_Bool, VType_String);
-    define_instrinsic("create_directory", intrinsic__create_directory, VType_Bool, VType_String, VType_Bool);
-    define_instrinsic("delete_directory", intrinsic__delete_directory, VType_Bool, VType_String);
-    define_instrinsic("copy_directory", intrinsic__copy_directory, VType_Bool, VType_String, VType_String);
-    define_instrinsic("move_directory", intrinsic__move_directory, VType_Bool, VType_String, VType_String);
-    define_instrinsic("copy_file", intrinsic__copy_file, VType_Bool, VType_String, VType_String, VType_Enum_CopyMode);
-    define_instrinsic("move_file", intrinsic__move_file, VType_Bool, VType_String, VType_String);
-    define_instrinsic("delete_file", intrinsic__delete_file, VType_Bool, VType_String);
-    
-    return array_from_pooled_array(arena, list);
+    define_instrinsic("exists", intrinsic__exists, param_bool(inter, "result"), param_string(inter, "path"));
+    define_instrinsic("create_directory", intrinsic__create_directory, param_bool(inter, "success"), param_string(inter, "dst"), param_bool(inter, "src"));
+    define_instrinsic("delete_directory", intrinsic__delete_directory, param_bool(inter, "success"), param_string(inter, "path"));
+    define_instrinsic("copy_directory", intrinsic__copy_directory, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"));
+    define_instrinsic("move_directory", intrinsic__move_directory, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"));
+    define_instrinsic("copy_file", intrinsic__copy_file, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"), VType_Enum_CopyMode);
+    define_instrinsic("move_file", intrinsic__move_file, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"));
+    define_instrinsic("delete_file", intrinsic__delete_file, param_bool(inter, "success"), param_string(inter, "path"));
 }
