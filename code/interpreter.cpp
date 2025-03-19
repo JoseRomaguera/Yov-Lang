@@ -285,32 +285,79 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
     if (node->kind == OpKind_ArrayExpresion)
     {
         auto node0 = (OpNode_ArrayExpresion*)node;
-        Array<Object*> objects = array_make<Object*>(scratch.arena, node0->nodes.count);
+        Array<Object*> objects{};
         
-        foreach(i, objects.count) {
-            objects[i] = interpret_expresion(inter, node0->nodes[i], context);
+        i32 explicit_vtype = -1;
+        
+        if (node0->type->kind == OpKind_ObjectType) {
+            explicit_vtype = interpret_object_type(inter, node0->type);
+            if (explicit_vtype < 0) return inter->nil_obj;
+        }
+        
+        i32 element_vtype = explicit_vtype;
+        if (element_vtype < 0) element_vtype = vtype_from_array_element(inter, context.expected_vtype);
+        
+        if (!node0->is_empty)
+        {
+            objects = array_make<Object*>(scratch.arena, node0->nodes.count);
+            foreach(i, objects.count) {
+                objects[i] = interpret_expresion(inter, node0->nodes[i], expresion_context_make(element_vtype));
+                if (objects[i] == inter->nil_obj) return inter->nil_obj;
+            }
+        }
+        
+        if (element_vtype < 0 && objects.count > 0) element_vtype = objects[0]->vtype;
+        
+        if (element_vtype <= 0) {
+            report_unknown_array_definition(node->code);
+            return inter->nil_obj;
+        }
+        
+        i32 base_vtype = vtype_from_array_base(inter, element_vtype);
+        
+        if (node0->is_empty)
+        {
+            u32 starting_dimensions = 0;
+            
+            if (explicit_vtype >= 0) {
+                decode_vtype(explicit_vtype, NULL, &starting_dimensions);
+            }
+            
+            Array<i64> dimensions = array_make<i64>(scratch.arena, node0->nodes.count + starting_dimensions);
+            
+            foreach(i, node0->nodes.count)
+            {
+                Object* dim = interpret_expresion(inter, node0->nodes[i], expresion_context_make(VType_Int));
+                if (is_unknown(dim)) return inter->nil_obj;
+                
+                if (!is_int(dim)) {
+                    report_dimensions_expects_an_int(node->code);
+                    return inter->nil_obj;
+                }
+                u32 index = starting_dimensions + i;
+                dimensions[index] = get_int(dim);
+                if (dimensions[index] < 0) {
+                    report_dimensions_must_be_positive(node->code);
+                    return inter->nil_obj;
+                }
+            }
+            
+            return obj_alloc_temp_array_multidimensional(inter, base_vtype, dimensions);
         }
         
         if (objects.count == 0) {
-            if (context.expected_vtype <= 0) {
-                return inter->void_obj;
-            }
-            
-            i32 element_vtype = vtype_from_array_element(inter, context.expected_vtype);
             return obj_alloc_temp_array(inter, element_vtype, 0);
         }
         
-        i32 vtype = objects[0]->vtype;
-        
         // Assert same vtype
         for (i32 i = 1; i < objects.count; ++i) {
-            if (objects[i]->vtype != vtype) {
-                report_type_missmatch_array_expr(node->code, string_from_vtype(scratch.arena, inter, vtype), string_from_vtype(scratch.arena, inter, objects[i]->vtype));
+            if (objects[i]->vtype != element_vtype) {
+                report_type_missmatch_array_expr(node->code, string_from_vtype(scratch.arena, inter, element_vtype), string_from_vtype(scratch.arena, inter, objects[i]->vtype));
                 return inter->nil_obj;
             }
         }
         
-        Object* array = obj_alloc_temp_array(inter, vtype, objects.count);
+        Object* array = obj_alloc_temp_array(inter, element_vtype, objects.count);
         foreach(i, objects.count) {
             obj_copy_element_from_object(inter, array, i, objects[i]);
         }
@@ -411,9 +458,7 @@ Object* interpret_assignment_for_object_definition(Interpreter* inter, OpNode_Ob
                 return inter->nil_obj;
             }
             
-            if (node->type->is_array) {
-                vtype = vtype_from_array_dimension(inter, vtype, node->type->array_dimensions.count);
-            }
+            vtype = vtype_from_array_dimension(inter, vtype, node->type->array_dimensions);
         }
     }
     
@@ -421,36 +466,6 @@ Object* interpret_assignment_for_object_definition(Interpreter* inter, OpNode_Ob
     Object* assignment_result = interpret_expresion(inter, assignment, expresion_context_make(vtype));
     
     if (is_unknown(assignment_result)) return inter->nil_obj;
-    
-    if (node->type->is_array)
-    {
-        Array<i64> dimensions = array_make<i64>(scratch.arena, node->type->array_dimensions.count);
-        
-        b8 initialize_array = false;
-        
-        foreach(i, dimensions.count) {
-            Object* dim = interpret_expresion(inter, node->type->array_dimensions[i], expresion_context_make(VType_Int));
-            if (is_unknown(dim)) return inter->nil_obj;
-            
-            if (!is_void(dim) && !is_int(dim)) {
-                report_dimensions_expects_an_int(node->code);
-                return inter->nil_obj;
-            }
-            dimensions[i] = is_int(dim) ? get_int(dim) : 0;
-            if (dimensions[i] < 0) {
-                report_dimensions_must_be_positive(node->code);
-                return inter->nil_obj;
-            }
-            
-            if (dimensions[i] > 0) initialize_array = true;
-        }
-        
-        
-        if (initialize_array) {
-            assert(is_void(assignment_result));
-            assignment_result = obj_alloc_temp_array_multidimensional(inter, vtype_from_array_base(inter, vtype), dimensions);
-        }
-    }
     
     if (is_void(assignment_result))
     {
@@ -835,6 +850,14 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expres
     return call_function(inter, fn, objects, node, is_expresion);
 }
 
+i32 interpret_object_type(Interpreter* inter, OpNode* node0)
+{
+    OpNode_ObjectType* node = (OpNode_ObjectType*)node0;
+    i32 vtype = vtype_from_name(inter, node->name);
+    vtype = vtype_from_array_dimension(inter, vtype, node->array_dimensions);
+    return vtype;
+}
+
 void interpret_return(Interpreter* inter, OpNode* node0)
 {
     SCRATCH();
@@ -1057,9 +1080,7 @@ internal_fn void register_definitions(Interpreter* inter)
                 i32 return_vtype = VType_Void;
                 
                 if (node->return_node->kind == OpKind_ObjectType) {
-                    OpNode_ObjectType* type_node = (OpNode_ObjectType*)node->return_node;
-                    return_vtype = vtype_from_name(inter, type_node->name);
-                    return_vtype = vtype_from_array_dimension(inter, return_vtype, type_node->array_dimensions.count);
+                    return_vtype = interpret_object_type(inter, node->return_node);
                 }
                 
                 if (!valid) continue;
@@ -1200,8 +1221,6 @@ i32 vtype_from_name(Interpreter* inter, String name)
 
 i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension)
 {
-    if (vtype < 0 || vtype >= inter->vtype_table.count) return -1;
-    
     u32 index, dim;
     decode_vtype(vtype, &index, &dim);
     return encode_vtype(index, dim + dimension);

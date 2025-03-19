@@ -56,6 +56,11 @@ ParserState* parser_get_state(Parser* parser) {
     return &parser->state_stack[parser->state_stack.count - 1];
 }
 
+Array<Token> parser_get_tokens_left(Parser* parser) {
+    ParserState* state = parser_get_state(parser);
+    return array_subarray(state->tokens, state->token_index, state->tokens.count - state->token_index);
+}
+
 b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token)
 {
     assert(open_index < tokens.count && close_index < tokens.count);
@@ -236,7 +241,7 @@ internal_fn Array<OpNode*> process_parameters(Parser* parser, Array<Token> token
     
     foreach(i, parameters.count) {
         Array<Token> parameter_tokens = parameters[i];
-        nodes[i] = process_expresion(parser, parameter_tokens);
+        nodes[i] = extract_expresion_from_array(parser, parameter_tokens);
     }
     
     return nodes;
@@ -257,9 +262,19 @@ OpNode* process_function_call(Parser* parser, Array<Token> tokens)
     return node;
 }
 
-OpNode* process_expresion(Parser* parser, Array<Token> tokens)
+OpNode* extract_expresion_from_array(Parser* parser, Array<Token> tokens)
+{
+    parser_push_state(parser, tokens);
+    OpNode* res = extract_expresion(parser);
+    parser_pop_state(parser);
+    return res;
+}
+
+OpNode* extract_expresion(Parser* parser)
 {
     SCRATCH();
+    
+    Array<Token> tokens = parser_get_tokens_left(parser);
     
     if (tokens.count == 0) return alloc_node(parser, OpKind_None, {});
     
@@ -277,21 +292,6 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
         return alloc_node(parser, OpKind_Error, {});
     }
     
-    // Array
-    if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenBrace && tokens[tokens.count - 1].kind == TokenKind_CloseBrace)
-    {
-        b32 couple = check_tokens_are_couple(tokens, 0, tokens.count - 1, TokenKind_OpenBrace, TokenKind_CloseBrace);
-        
-        if (couple) {
-            Array<Token> parameters = array_subarray(tokens, 1, tokens.count - 2);
-            Array<OpNode*> expresions = process_parameters(parser, parameters);
-            
-            auto node = (OpNode_ArrayExpresion*)alloc_node(parser, OpKind_ArrayExpresion, tokens[0].code);
-            node->nodes = expresions;
-            return node;
-        }
-    }
-    
     // Function call
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis) {
         b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
@@ -303,7 +303,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
         b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
         if (couple) {
             Array<Token> indexing_expresion = array_subarray(tokens, 2, tokens.count - 3);
-            OpNode* expresion = process_expresion(parser, indexing_expresion);
+            OpNode* expresion = extract_expresion_from_array(parser, indexing_expresion);
             
             if (expresion->kind == OpKind_None) {
                 report_array_indexing_expects_expresion(tokens[0].code);
@@ -328,7 +328,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
         }
         
         Array<Token> expresion_tokens = array_subarray(tokens, 0, tokens.count - 2);
-        OpNode* expresion = process_expresion(parser, expresion_tokens);
+        OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
         
         auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
         node->expresion = expresion;
@@ -486,7 +486,7 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                     
                     auto node = (OpNode_Sign*)alloc_node(parser, OpKind_Sign, tokens[preferent_operator_index].code);
                     node->op = op;
-                    node->expresion = process_expresion(parser, array_subarray(tokens, 1, tokens.count - 1));
+                    node->expresion = extract_expresion_from_array(parser, array_subarray(tokens, 1, tokens.count - 1));
                     return node;
                 }
                 else
@@ -498,8 +498,8 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                     }
                     else
                     {
-                        OpNode* left_expresion = process_expresion(parser, array_subarray(tokens, 0, preferent_operator_index));
-                        OpNode* right_expresion = process_expresion(parser, array_subarray(tokens, preferent_operator_index + 1, tokens.count - (preferent_operator_index + 1)));
+                        OpNode* left_expresion = extract_expresion_from_array(parser, array_subarray(tokens, 0, preferent_operator_index));
+                        OpNode* right_expresion = extract_expresion_from_array(parser, array_subarray(tokens, preferent_operator_index + 1, tokens.count - (preferent_operator_index + 1)));
                         
                         auto node = (OpNode_Binary*)alloc_node(parser, OpKind_Binary, tokens[0].code);
                         node->left = left_expresion;
@@ -509,6 +509,43 @@ OpNode* process_expresion(Parser* parser, Array<Token> tokens)
                     }
                 }
             }
+        }
+    }
+    
+    // Array Expresions
+    if (tokens.count >= 2 && (tokens[0].kind == TokenKind_OpenBrace || tokens[0].kind == TokenKind_OpenBracket))
+    {
+        b32 is_empty = tokens[0].kind == TokenKind_OpenBracket;
+        
+        TokenKind open_token = is_empty ? TokenKind_OpenBracket : TokenKind_OpenBrace;
+        TokenKind close_token = is_empty ? TokenKind_CloseBracket : TokenKind_CloseBrace;
+        
+        Array<Token> expresions_tokens = extract_tokens_with_depth(parser, open_token, close_token, true);
+        
+        if (expresions_tokens.count >= 2)
+        {
+            OpNode* type_node = NULL;
+            Token arrow = extract_token(parser);
+            
+            if (arrow.kind == TokenKind_Arrow) {
+                type_node = extract_object_type(parser);
+            }
+            else if (arrow.kind != TokenKind_None && arrow.kind != TokenKind_NextSentence) {
+                report_array_expr_expects_an_arrow(starting_token.code);
+                return alloc_node(parser, OpKind_Error, starting_token.code);
+            }
+            
+            if (type_node == NULL) {
+                type_node = alloc_node(parser, OpKind_None, starting_token.code);
+            }
+            
+            Array<OpNode*> expresions = process_parameters(parser, array_subarray(expresions_tokens, 1, expresions_tokens.count - 2));
+            
+            auto node = (OpNode_ArrayExpresion*)alloc_node(parser, OpKind_ArrayExpresion, starting_token.code);
+            node->nodes = expresions;
+            node->type = type_node;
+            node->is_empty = (b8)is_empty;
+            return node;
         }
     }
     
@@ -537,7 +574,7 @@ internal_fn OpNode* extract_if_statement(Parser* parser)
     }
     
     Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 3);
-    OpNode* expresion_node = process_expresion(parser, expresion);
+    OpNode* expresion_node = extract_expresion_from_array(parser, expresion);
     
     auto node = (OpNode_IfStatement*)alloc_node(parser, OpKind_IfStatement, starting_token.code);
     node->expresion = expresion_node;
@@ -577,7 +614,7 @@ internal_fn OpNode* extract_while_statement(Parser* parser)
     }
     
     Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 3);
-    OpNode* expresion_node = process_expresion(parser, expresion);
+    OpNode* expresion_node = extract_expresion_from_array(parser, expresion);
     
     auto node = (OpNode_WhileStatement*)alloc_node(parser, OpKind_WhileStatement, starting_token.code);
     node->expresion = expresion_node;
@@ -662,7 +699,7 @@ internal_fn OpNode* extract_for_statement(Parser* parser)
         auto node = (OpNode_ForeachArrayStatement*)alloc_node(parser, OpKind_ForeachArrayStatement, starting_token.code);
         node->element_name = element_token.value;
         node->index_name = index_name;
-        node->expresion = process_expresion(parser, expresion_tokens);
+        node->expresion = extract_expresion_from_array(parser, expresion_tokens);
         node->content = extract_op(parser);
         return node;
     }
@@ -679,7 +716,7 @@ internal_fn OpNode* extract_for_statement(Parser* parser)
         node->initialize_sentence = extract_op(parser);
         parser_pop_state(parser);
         
-        node->condition_expresion = process_expresion(parser, condition_expresion_tokens);
+        node->condition_expresion = extract_expresion_from_array(parser, condition_expresion_tokens);
         
         parser_push_state(parser, update_sentence_tokens);
         node->update_sentence = extract_op(parser);
@@ -737,7 +774,7 @@ internal_fn OpNode* extract_enum_definition(Parser* parser)
             // TODO(Jose): // TODO(Jose): Unitl: CloseBrace or Comma
             Array<Token> expresion_tokens = extract_tokens_until(parser, false, TokenKind_CloseBrace, TokenKind_Comma);
             
-            OpNode* node = process_expresion(parser, expresion_tokens);
+            OpNode* node = extract_expresion_from_array(parser, expresion_tokens);
             
             if (node->kind == OpKind_Error) return alloc_node(parser, OpKind_Error, starting_token.code);
             if (node->kind == OpKind_None) {
@@ -890,7 +927,7 @@ internal_fn OpNode* extract_variable_assignment(Parser* parser)
     if (sentence.count < 2) return alloc_node(parser, OpKind_Error, starting_token.code);
     
     Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 2);
-    OpNode* value_node = process_expresion(parser, expresion);
+    OpNode* value_node = extract_expresion_from_array(parser, expresion);
     
     if (value_node->kind == OpKind_Error) {
         return alloc_node(parser, OpKind_Error, starting_token.code);
@@ -936,10 +973,10 @@ internal_fn OpNode* extract_array_element_assignment(Parser* parser)
         return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     indexing_tokens = array_subarray(indexing_tokens, 1, indexing_tokens.count - 2);
-    OpNode* indexing_node = process_expresion(parser, indexing_tokens);
+    OpNode* indexing_node = extract_expresion_from_array(parser, indexing_tokens);
     
     Array<Token> value_tokens = array_subarray(sentence, operator_index + 1, sentence.count - (operator_index + 1));
-    OpNode* value_node = process_expresion(parser, value_tokens);
+    OpNode* value_node = extract_expresion_from_array(parser, value_tokens);
     
     if (value_node->kind == OpKind_Error) {
         return alloc_node(parser, OpKind_Error, starting_token.code);
@@ -961,8 +998,7 @@ internal_fn OpNode* extract_array_element_assignment(Parser* parser)
 OpNode* extract_object_type(Parser* parser)
 {
     String name{};
-    b32 is_array = false;
-    Array<OpNode*> array_dimensions{};
+    u32 array_dimensions = 0;
     
     Token starting_token = peek_token(parser);
     
@@ -978,39 +1014,20 @@ OpNode* extract_object_type(Parser* parser)
     
     if (open_bracket.kind == TokenKind_OpenBracket)
     {
-        is_array = true;
-        
         i32 starting_cursor = parser_get_state(parser)->token_index;
-        u32 dimensions = 0;
         
         while (peek_token(parser).kind == TokenKind_OpenBracket) {
             Array<Token> tokens = extract_tokens_with_depth(parser, TokenKind_OpenBracket, TokenKind_CloseBracket, true);
-            if (tokens.count < 2) {
+            if (tokens.count != 2) {
                 report_common_missing_closing_bracket(starting_token.code);
                 return alloc_node(parser, OpKind_Error, starting_token.code);
             }
-            dimensions++;
-        }
-        
-        parser_get_state(parser)->token_index = starting_cursor;
-        
-        // Check array dimensions
-        {
-            array_dimensions = array_make<OpNode*>(parser->ctx->static_arena, dimensions);
-            
-            foreach(i, dimensions)
-            {
-                Array<Token> tokens = extract_tokens_with_depth(parser, TokenKind_OpenBracket, TokenKind_CloseBracket, true);
-                assert(tokens.count >= 2);
-                tokens = array_subarray(tokens, 1, tokens.count - 2);
-                array_dimensions[i] = process_expresion(parser, tokens);
-            }
+            array_dimensions++;
         }
     }
     
     OpNode_ObjectType* node = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
     node->name = name;
-    node->is_array = (b8)is_array;
     node->array_dimensions = array_dimensions;
     return node;
 }
@@ -1056,18 +1073,11 @@ OpNode* extract_object_definition(Parser* parser)
         }
         
         Array<Token> assignment_tokens = extract_tokens_until(parser, false, TokenKind_NextSentence);
-        assignment_node = process_expresion(parser, assignment_tokens);
+        assignment_node = extract_expresion_from_array(parser, assignment_tokens);
         
         if (assignment_node->kind == OpKind_None) {
             report_common_expecting_valid_expresion(starting_token.code);
             return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-        
-        foreach(i, node_type->array_dimensions.count) {
-            if (node_type->array_dimensions[i]->kind != OpKind_None) {
-                report_objdef_redundant_array_dimensions(starting_token.code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
-            }
         }
     }
     else {
@@ -1095,7 +1105,7 @@ internal_fn OpNode* extract_return(Parser* parser)
     assert(return_token.kind == TokenKind_ReturnKeyword);
     
     Array<Token> expresion_tokens = extract_tokens_until(parser, false, TokenKind_NextSentence);
-    OpNode* expresion = process_expresion(parser, expresion_tokens);
+    OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
     
     OpNode_Return* node = (OpNode_Return*)alloc_node(parser, OpKind_Return, return_token.code);
     node->expresion = expresion;

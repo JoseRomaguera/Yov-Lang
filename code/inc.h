@@ -484,11 +484,11 @@ void print_report(Yov* ctx, Report report);
 #define report_expr_syntactic_unknown(_code, _expr_str) report_error(parser->ctx, _code, "Unknown expresion: '%S'", _expr_str);
 #define report_expr_is_empty(_code) report_error(parser->ctx, _code, "Empty expresion: {line}");
 #define report_expr_empty_member(_code) report_error(parser->ctx, _code, "Member is not specified");
+#define report_array_expr_expects_an_arrow(_code) report_error(parser->ctx, _code, "Array expresion expects an arrow");
 #define report_array_indexing_expects_expresion(_code) report_error(parser->ctx, _code, "Array indexing expects an expresion");
 #define report_objdef_expecting_colon(_code) report_error(parser->ctx, _code, "Expecting colon in object definition");
 #define report_objdef_expecting_type_identifier(_code) report_error(parser->ctx, _code, "Expecting type identifier");
 #define report_objdef_expecting_assignment(_code) report_error(parser->ctx, _code, "Expecting an assignment for object definition");
-#define report_objdef_redundant_array_dimensions(_code) report_error(parser->ctx, _code, "Redundant array dimensions definition before assignment");
 #define report_else_not_found_if(_code) report_error(parser->ctx, _code, "'else' is not valid without the corresponding 'if'");
 #define report_for_unknown(_code) report_error(parser->ctx, _code, "Unknown for-statement: {line}");
 #define report_foreach_expecting_identifier(_code) report_error(parser->ctx, _code, "Expecting an identifier for the itarator");
@@ -507,6 +507,7 @@ void print_report(Yov* ctx, Report report);
 #define report_type_missmatch_append(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't append a '%S' into '%S'", _v0, _v1);
 #define report_type_missmatch_array_expr(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch in array expresion, expecting '%S' but found '%S'", _v0, _v1);
 #define report_type_missmatch_assign(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't assign '%S' to '%S'", _v0, _v1);
+#define report_unknown_array_definition(_code) report_error(inter->ctx, _code, "Unknown type for array definition");
 #define report_invalid_binary_op(_code, _v0, _op, _v1) report_error(inter->ctx, _code, "Invalid binary operation: '%S' %S '%S'", _v0, _op, _v1);
 #define report_invalid_signed_op(_code, _op, _v) report_error(inter->ctx, _code, "Invalid signed operation '%S %S'", _op, _v);
 #define report_symbol_not_found(_code, _v) report_error(inter->ctx, _code, "Symbol '%S' not found", _v);
@@ -625,8 +626,7 @@ struct OpNode_Assignment : OpNode {
 
 struct OpNode_ObjectType : OpNode {
     String name;
-    Array<OpNode*> array_dimensions;
-    b8 is_array;
+    u32 array_dimensions;
 };
 
 struct OpNode_ObjectDefinition : OpNode {
@@ -642,6 +642,8 @@ struct OpNode_FunctionCall : OpNode {
 
 struct OpNode_ArrayExpresion : OpNode {
     Array<OpNode*> nodes;
+    OpNode* type;
+    b8 is_empty;
 };
 
 struct OpNode_ArrayElementValue : OpNode {
@@ -716,6 +718,7 @@ struct Parser {
 void parser_push_state(Parser* parser, Array<Token> tokens);
 void parser_pop_state(Parser* parser);
 ParserState* parser_get_state(Parser* parser);
+Array<Token> parser_get_tokens_left(Parser* parser);
 
 
 b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token);
@@ -732,6 +735,8 @@ Array<Token> extract_tokens_with_depth(Parser* parser, TokenKind open_token, Tok
 
 Array<Array<Token>> split_tokens_in_parameters(Arena* arena, Array<Token> tokens);
 
+OpNode* extract_expresion_from_array(Parser* parser, Array<Token> tokens);
+OpNode* extract_expresion(Parser* parser);
 OpNode* extract_op(Parser* parser);
 OpNode* extract_block(Parser* parser);
 OpNode* extract_object_type(Parser* parser);
@@ -740,7 +745,6 @@ OpNode* extract_object_definition(Parser* parser);
 OpNode* generate_ast(Yov* ctx, Array<Token> tokens, b32 is_block);
 
 OpNode* process_function_call(Parser* parser, Array<Token> tokens);
-OpNode* process_expresion(Parser* parser, Array<Token> tokens);
 
 //- INTERPRETER 
 
@@ -964,6 +968,7 @@ inline_fn ExpresionContext expresion_context_make(i32 expected_vtype) {
 
 Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext context);
 Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
+i32 interpret_object_type(Interpreter* inter, OpNode* node0);
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
