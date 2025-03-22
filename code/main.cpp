@@ -77,7 +77,7 @@ void log_ast(OpNode* node, i32 depth)
     if (node->kind == OpKind_WhileStatement) print_info("while-statement");
     if (node->kind == OpKind_ForStatement) print_info("for-statement");
     if (node->kind == OpKind_ForeachArrayStatement) print_info("foreach-statement");
-    if (node->kind == OpKind_VariableAssignment) print_info("variable assignment");
+    if (node->kind == OpKind_Assignment) print_info("assignment");
     if (node->kind == OpKind_FunctionCall) print_info("function call");
     if (node->kind == OpKind_ObjectDefinition) {
         auto node0 = (OpNode_ObjectDefinition*)node;
@@ -103,9 +103,9 @@ void log_ast(OpNode* node, i32 depth)
         auto node0 = (OpNode_Literal*)node;
         print_info("bool literal: %s", node0->bool_literal ? "true" : "false");
     }
-    if (node->kind == OpKind_IdentifierValue) {
-        auto node0 = (OpNode_IdentifierValue*)node;
-        print_info("identifier: %S", node0->identifier);
+    if (node->kind == OpKind_Symbol) {
+        auto node0 = (OpNode_Symbol*)node;
+        print_info("Symbol: %S", node0->identifier);
     }
     if (node->kind == OpKind_MemberValue) {
         auto node0 = (OpNode_MemberValue*)node;
@@ -115,10 +115,6 @@ void log_ast(OpNode* node, i32 depth)
     if (node->kind == OpKind_ArrayElementValue) {
         auto node0 = (OpNode_ArrayElementValue*)node;
         print_info("array element value: %S", node0->identifier);
-    }
-    if (node->kind == OpKind_ArrayElementAssignment) {
-        auto node0 = (OpNode_ArrayElementAssignment*)node;
-        print_info("array element assignment: %S", node0->identifier);
     }
     
     print_info("\n");

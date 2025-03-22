@@ -123,7 +123,7 @@ struct Array {
     T* data;
     u32 count;
     
-    inline T& operator[](u32 index) {
+    inline T& operator[](u64 index) {
         assert(index < count);
         return data[index];
     }
@@ -395,6 +395,7 @@ enum TokenKind {
     TokenKind_WhileKeyword,
     TokenKind_ForKeyword,
     TokenKind_EnumKeyword,
+    TokenKind_StructKeyword,
     TokenKind_ReturnKeyword,
     
     TokenKind_BoolLiteral,
@@ -561,25 +562,25 @@ enum OpKind {
     OpKind_None,
     OpKind_Error,
     OpKind_Block,
+    OpKind_Assignment,
+    OpKind_Symbol,
     OpKind_IfStatement,
     OpKind_WhileStatement,
     OpKind_ForStatement,
     OpKind_ForeachArrayStatement,
-    OpKind_VariableAssignment,
     OpKind_ObjectDefinition,
     OpKind_ObjectType,
     OpKind_FunctionCall,
     OpKind_ArrayExpresion,
     OpKind_ArrayElementValue,
-    OpKind_ArrayElementAssignment,
     OpKind_Binary,
     OpKind_Sign,
     OpKind_IntLiteral,
     OpKind_StringLiteral,
     OpKind_BoolLiteral,
-    OpKind_IdentifierValue,
     OpKind_MemberValue,
     OpKind_EnumDefinition,
+    OpKind_StructDefinition,
     OpKind_FunctionDefinition,
     OpKind_Return,
 };
@@ -591,6 +592,12 @@ struct OpNode {
 
 struct OpNode_Block : OpNode {
     Array<OpNode*> ops;
+};
+
+struct OpNode_Assignment : OpNode {
+    OpNode* destination;
+    OpNode* source;
+    BinaryOperator binary_operator;
 };
 
 struct OpNode_IfStatement : OpNode {
@@ -616,12 +623,6 @@ struct OpNode_ForeachArrayStatement : OpNode {
     String index_name;
     OpNode* expresion;
     OpNode* content;
-};
-
-struct OpNode_Assignment : OpNode {
-    String identifier;
-    OpNode* value;
-    BinaryOperator binary_operator;
 };
 
 struct OpNode_ObjectType : OpNode {
@@ -651,13 +652,6 @@ struct OpNode_ArrayElementValue : OpNode {
     OpNode* expresion;
 };
 
-struct OpNode_ArrayElementAssignment : OpNode {
-    String identifier;
-    OpNode* value;
-    OpNode* indexing_expresion;
-    BinaryOperator binary_operator;
-};
-
 struct OpNode_Binary : OpNode {
     OpNode* left;
     OpNode* right;
@@ -677,7 +671,7 @@ struct OpNode_Literal : OpNode {
     };
 };
 
-struct OpNode_IdentifierValue : OpNode {
+struct OpNode_Symbol : OpNode {
     String identifier;
 };
 
@@ -690,6 +684,10 @@ struct OpNode_EnumDefinition : OpNode {
     String identifier;
     Array<String> names;
     Array<OpNode*> values;
+};
+struct OpNode_StructDefinition : OpNode {
+    String identifier;
+    Array<OpNode_ObjectDefinition*> members;
 };
 struct OpNode_FunctionDefinition : OpNode {
     String identifier;
@@ -765,11 +763,16 @@ struct ObjectMemory_Array {
 struct ObjectMemory_Enum {
     i64 index;
 };
+struct ObjectMemory_Struct {
+    void* data;
+    u64 size;
+};
 
 struct ObjectMemory {
     union {
         ObjectMemory_Int integer;
         ObjectMemory_Enum enum_;
+        ObjectMemory_Struct struct_;
         ObjectMemory_Bool boolean;
         ObjectMemory_String string;
         ObjectMemory_Array array;
@@ -786,6 +789,7 @@ struct Object {
     union {
         ObjectMemory_Int integer;
         ObjectMemory_Enum enum_;
+        ObjectMemory_Struct struct_;
         ObjectMemory_Bool boolean;
         ObjectMemory_String string;
         ObjectMemory_Array array;
@@ -809,6 +813,7 @@ enum VariableKind {
     VariableKind_Primitive,
     VariableKind_Array,
     VariableKind_Enum,
+    VariableKind_Struct,
 };
 
 struct VariableType {
@@ -820,6 +825,11 @@ struct VariableType {
     
     Array<String> enum_names;
     Array<i64> enum_values;
+    
+    Array<String> struct_names;
+    Array<i32> struct_vtypes;
+    Array<u32> struct_strides;
+    u32 struct_stride;
 };
 
 struct FunctionReturn {
@@ -934,6 +944,7 @@ ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype);
 void obj_copy_element_from_element(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src_array, i64 src_index);
 b32 obj_copy_element_from_object(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src);
 void obj_copy_from_element(Interpreter* inter, Object* dst, Object* src_array, i64 src_index);
+void obj_copy_from_struct_member(Interpreter* inter, Object* dst, Object* src_struct, i64 member_index);
 b32 obj_copy(Interpreter* inter, Object* dst, Object* src);
 void obj_set_int(Object* dst, i64 value);
 void obj_set_bool(Object* dst, b32 value);
@@ -1012,6 +1023,9 @@ inline_fn b32 is_array(Object* obj) {
 }
 inline_fn b32 is_enum(Interpreter* inter, i32 vtype) {
     return vtype_get(inter, vtype).kind == VariableKind_Enum;
+}
+inline_fn b32 is_struct(Interpreter* inter, i32 vtype) {
+    return vtype_get(inter, vtype).kind == VariableKind_Struct;
 }
 
 inline_fn i64 get_int(Object* obj) {

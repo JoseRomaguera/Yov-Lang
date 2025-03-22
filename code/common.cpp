@@ -1075,26 +1075,26 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_None) return sizeof(OpNode);
     if (kind == OpKind_Error) return sizeof(OpNode);
     if (kind == OpKind_Block) return sizeof(OpNode_Block);
+    if (kind == OpKind_Assignment) return sizeof(OpNode_Assignment);
+    if (kind == OpKind_Symbol) return sizeof(OpNode_Symbol);
     if (kind == OpKind_IfStatement) return sizeof(OpNode_IfStatement);
     if (kind == OpKind_WhileStatement) return sizeof(OpNode_WhileStatement);
     if (kind == OpKind_ForStatement) return sizeof(OpNode_ForStatement);
     if (kind == OpKind_ForeachArrayStatement) return sizeof(OpNode_ForeachArrayStatement);
-    if (kind == OpKind_VariableAssignment) return sizeof(OpNode_Assignment);
     if (kind == OpKind_ObjectDefinition) return sizeof(OpNode_ObjectDefinition);
     if (kind == OpKind_ObjectType) return sizeof(OpNode_ObjectType);
     if (kind == OpKind_FunctionCall) return sizeof(OpNode_FunctionCall);
     if (kind == OpKind_Return) return sizeof(OpNode_Return);
     if (kind == OpKind_ArrayExpresion) return sizeof(OpNode_ArrayExpresion);
     if (kind == OpKind_ArrayElementValue) return sizeof(OpNode_ArrayElementValue);
-    if (kind == OpKind_ArrayElementAssignment) return sizeof(OpNode_ArrayElementAssignment);
     if (kind == OpKind_Binary) return sizeof(OpNode_Binary);
     if (kind == OpKind_Sign) return sizeof(OpNode_Sign);
     if (kind == OpKind_IntLiteral) return sizeof(OpNode_Literal);
     if (kind == OpKind_StringLiteral) return sizeof(OpNode_Literal);
     if (kind == OpKind_BoolLiteral) return sizeof(OpNode_Literal);
-    if (kind == OpKind_IdentifierValue) return sizeof(OpNode_IdentifierValue);
     if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
     if (kind == OpKind_EnumDefinition) return sizeof(OpNode_EnumDefinition);
+    if (kind == OpKind_StructDefinition) return sizeof(OpNode_StructDefinition);
     if (kind == OpKind_FunctionDefinition) return sizeof(OpNode_FunctionDefinition);
     assert(0);
     return sizeof(OpNode) + KB(4);
@@ -1135,9 +1135,10 @@ Array<OpNode*> get_node_childs(Arena* arena, OpNode* node)
         array_add(&nodes, node0->expresion);
         array_add(&nodes, node0->content);
     }
-    else if (node->kind == OpKind_VariableAssignment) {
+    else if (node->kind == OpKind_Assignment) {
         auto node0 = (OpNode_Assignment*)node;
-        array_add(&nodes, node0->value);
+        array_add(&nodes, node0->destination);
+        array_add(&nodes, node0->source);
     }
     else if (node->kind == OpKind_ObjectDefinition) {
         auto node0 = (OpNode_ObjectDefinition*)node;
@@ -1159,11 +1160,6 @@ Array<OpNode*> get_node_childs(Arena* arena, OpNode* node)
     else if (node->kind == OpKind_ArrayElementValue) {
         auto node0 = (OpNode_ArrayElementValue*)node;
         array_add(&nodes, node0->expresion);
-    }
-    else if (node->kind == OpKind_ArrayElementAssignment) {
-        auto node0 = (OpNode_ArrayElementAssignment*)node;
-        array_add(&nodes, node0->indexing_expresion);
-        array_add(&nodes, node0->value);
     }
     else if (node->kind == OpKind_Binary) {
         auto node0 = (OpNode_Binary*)node;

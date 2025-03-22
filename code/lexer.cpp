@@ -35,6 +35,7 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
         else if (string_equals(STR("while"), token.value)) kind = TokenKind_WhileKeyword;
         else if (string_equals(STR("for"), token.value)) kind = TokenKind_ForKeyword;
         else if (string_equals(STR("enum"), token.value)) kind = TokenKind_EnumKeyword;
+        else if (string_equals(STR("struct"), token.value)) kind = TokenKind_StructKeyword;
         else if (string_equals(STR("return"), token.value)) kind = TokenKind_ReturnKeyword;
         else if (string_equals(STR("true"), token.value)) kind = TokenKind_BoolLiteral;
         else if (string_equals(STR("false"), token.value)) kind = TokenKind_BoolLiteral;

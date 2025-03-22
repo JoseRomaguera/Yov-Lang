@@ -199,8 +199,8 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
         return obj_alloc_temp_string(inter, solve_string_literal(scratch.arena, inter, node0->string_literal, node0->code));
     }
     if (node->kind == OpKind_BoolLiteral) return obj_alloc_temp_bool(inter, ((OpNode_Literal*)node)->bool_literal);
-    if (node->kind == OpKind_IdentifierValue) {
-        auto node0 = (OpNode_IdentifierValue*)node;
+    if (node->kind == OpKind_Symbol) {
+        auto node0 = (OpNode_Symbol*)node;
         Object* obj = find_object(inter, node0->identifier, true);
         
         if (obj == NULL) {
@@ -218,12 +218,12 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
         String member = node0->member;
         assert(member.size);
         
-        if (expresion_node->kind == OpKind_IdentifierValue || expresion_node->kind == OpKind_None)
+        if (expresion_node->kind == OpKind_Symbol || expresion_node->kind == OpKind_None)
         {
             String identifier = {};
             
-            if (expresion_node->kind == OpKind_IdentifierValue)
-                identifier = ((OpNode_IdentifierValue*)expresion_node)->identifier;
+            if (expresion_node->kind == OpKind_Symbol)
+                identifier = ((OpNode_Symbol*)expresion_node)->identifier;
             
             if (identifier.size == 0 && context.expected_vtype > 0) {
                 identifier = string_from_vtype(scratch.arena, inter, context.expected_vtype);
@@ -521,18 +521,17 @@ void interpret_object_definition(Interpreter* inter, OpNode* node0)
     }
 }
 
-void interpret_variable_assignment(Interpreter* inter, OpNode* node0)
+void interpret_assignment(Interpreter* inter, OpNode* node0)
 {
     SCRATCH();
     auto node = (OpNode_Assignment*)node0;
     
-    Object* obj = find_object(inter, node->identifier, true);
-    if (obj == NULL) {
-        report_object_not_found(node->code, node->identifier);
-        return;
-    }
+    Object* obj = interpret_expresion(inter, node->destination, expresion_context_make(-1));
+    if (obj == inter->nil_obj) return;
     
-    OpNode* assignment = node->value;
+    // TODO(Jose): Check if the object is temporal
+    
+    OpNode* assignment = node->source;
     BinaryOperator op = node->binary_operator;
     
     Object* assignment_obj = interpret_expresion(inter, assignment, expresion_context_make(obj->vtype));
@@ -558,50 +557,6 @@ void interpret_variable_assignment(Interpreter* inter, OpNode* node0)
     {
         if (!obj_copy(inter, obj, assignment_obj)) return;
         if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
-    }
-}
-
-void interpret_array_element_assignment(Interpreter* inter, OpNode* node0)
-{
-    SCRATCH();
-    
-    auto node = (OpNode_ArrayElementAssignment*)node0;
-    
-    Object* array = find_object(inter, node->identifier, true);
-    if (array == NULL) {
-        report_object_not_found(node->code, node->identifier);
-        return;
-    }
-    
-    i32 expected_vtype = vtype_from_array_element(inter, array->vtype);
-    Object* indexing_obj = interpret_expresion(inter, node->indexing_expresion, expresion_context_make(expected_vtype));
-    
-    if (!is_int(indexing_obj)) {
-        report_indexing_expects_an_int(node->code);
-        return;
-    }
-    
-    VariableType array_vtype = vtype_get(inter, array->vtype);
-    
-    if (array_vtype.kind != VariableKind_Array) {
-        report_indexing_not_allowed(node->code, string_from_vtype(scratch.arena, inter, array->vtype));
-        return;
-    }
-    
-    if (inter->settings.execute)
-    {
-        i64 index = get_int(indexing_obj);
-        if (index < 0 || index >= array->array.count) {
-            report_indexing_out_of_bounds(node->code);
-            return;
-        }
-        
-        OpNode* assignment = node->value;
-        if (node->binary_operator != BinaryOperator_None) {
-            assert(0);
-            // TODO(Jose): 
-        }
-        interpret_indexed_assignment(inter, array, index, assignment, false);
     }
 }
 
@@ -750,9 +705,9 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     
     Object* array = inter->void_obj;
     
-    if (node->expresion->kind == OpKind_IdentifierValue)
+    if (node->expresion->kind == OpKind_Symbol)
     {
-        OpNode_IdentifierValue* expresion_node = (OpNode_IdentifierValue*)node->expresion;
+        OpNode_Symbol* expresion_node = (OpNode_Symbol*)node->expresion;
         Symbol symbol = find_symbol(inter, expresion_node->identifier);
         
         if (symbol.type == SymbolType_None) {
@@ -903,9 +858,8 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     if (node->kind == OpKind_None) return;
     
     if (node->kind == OpKind_Block) interpret_block(inter, node);
+    else if (node->kind == OpKind_Assignment) interpret_assignment(inter, node);
     else if (node->kind == OpKind_ObjectDefinition) interpret_object_definition(inter, node);
-    else if (node->kind == OpKind_VariableAssignment) interpret_variable_assignment(inter, node);
-    else if (node->kind == OpKind_ArrayElementAssignment) interpret_array_element_assignment(inter, node);
     else if (node->kind == OpKind_IfStatement) interpret_if_statement(inter, node);
     else if (node->kind == OpKind_WhileStatement) interpret_while_statement(inter, node);
     else if (node->kind == OpKind_ForStatement) interpret_for_statement(inter, node);
@@ -913,7 +867,7 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, false);
     else if (node->kind == OpKind_Return) interpret_return(inter, node);
     else if (node->kind == OpKind_Error) {}
-    else if (node->kind == OpKind_EnumDefinition || node->kind == OpKind_FunctionDefinition) {
+    else if (node->kind == OpKind_EnumDefinition || node->kind == OpKind_StructDefinition || node->kind == OpKind_FunctionDefinition) {
         if (parent != inter->root) {
             report_nested_definition(node->code);
         }
@@ -1050,6 +1004,36 @@ internal_fn void register_definitions(Interpreter* inter)
                 }
                 
                 define_enum(inter, node->identifier, node->names, values);
+            }
+            else if (node0->kind == OpKind_StructDefinition)
+            {
+                OpNode_StructDefinition* node = (OpNode_StructDefinition*)node0;
+                
+                Array<i32> vtypes = array_make<i32>(inter->ctx->static_arena, node->members.count);
+                Array<String> names = array_make<String>(inter->ctx->static_arena, node->members.count);
+                Array<u32> strides = array_make<u32>(inter->ctx->static_arena, node->members.count);
+                
+                u32 stride = 0;
+                
+                foreach(i, vtypes.count) {
+                    OpNode_ObjectDefinition* member = node->members[i];
+                    names[i] = member->object_name;
+                    vtypes[i] = interpret_object_type(inter, member->type);
+                    strides[i] = stride;
+                    stride += vtype_get_stride(inter, vtypes[i]);
+                }
+                
+                String name = node->identifier;
+                
+                VariableType t = {};
+                t.name = name;
+                t.kind = VariableKind_Struct;
+                t.vtype = inter->vtype_table.count;
+                t.struct_names = names;
+                t.struct_vtypes = vtypes;
+                t.struct_strides = strides;
+                t.struct_stride = stride;
+                array_add(&inter->vtype_table, t);
             }
             else if (node0->kind == OpKind_FunctionDefinition)
             {
@@ -1254,7 +1238,9 @@ u32 vtype_get_stride(Interpreter* inter, i32 vtype) {
     decode_vtype(vtype, NULL, &dims);
     if (dims > 0) return sizeof(ObjectMemory_Array);
     
-    if (is_enum(inter, vtype)) return sizeof(ObjectMemory_Enum);
+    VariableType type = vtype_get(inter, vtype);
+    if (type.kind == VariableKind_Enum) return sizeof(ObjectMemory_Enum);
+    if (type.kind == VariableKind_Struct) return sizeof(ObjectMemory_Struct);
     
     assert(0);
     return 0;
@@ -1294,12 +1280,26 @@ internal_fn ObjectMemory_Array alloc_array_memory(Interpreter* inter, i64 count,
     return dst;
 }
 
+internal_fn ObjectMemory_Struct alloc_struct_memory(Interpreter* inter, u32 stride)
+{
+    ObjectMemory_Struct dst;
+    dst.size = stride;
+    dst.data = arena_push(inter->ctx->static_arena, stride);
+    return dst;
+}
+
 Object* obj_alloc_temp(Interpreter* inter, i32 vtype)
 {
     Object* obj = arena_push_struct<Object>(inter->ctx->static_arena);
     obj->identifier = STR("TEMP");
     obj->vtype = vtype;
     obj->scope = inter->current_scope;
+    
+    VariableType type = vtype_get(inter, vtype);
+    if (type.kind == VariableKind_Struct) {
+        obj->struct_ = alloc_struct_memory(inter, type.struct_stride);
+    }
+    
     return obj;
 }
 
@@ -1398,6 +1398,14 @@ ObjectMemory obj_copy_data(Interpreter* inter, Object* obj)
 {
     return obj_copy_data(inter, *obj_get_data(obj), obj->vtype);
 }
+
+internal_fn ObjectMemory fixed_size_memory(void* data, u32 stride) {
+    ObjectMemory dst{};
+    assert(stride <= sizeof(dst));
+    memory_copy(&dst, data, stride);
+    return dst;
+}
+
 ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype)
 {
     if (vtype == VType_Int || vtype == VType_Bool) return src;
@@ -1412,7 +1420,32 @@ ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype)
         return res;
     }
     
-    if (is_enum(inter, vtype)) return src;
+    VariableType type = vtype_get(inter, vtype);
+    
+    if (type.kind == VariableKind_Enum) return src;
+    
+    if (type.kind == VariableKind_Struct)
+    {
+        ObjectMemory_Struct dst = alloc_struct_memory(inter, type.struct_stride);
+        
+        u8* src_data = (u8*)src.struct_.data;
+        u8* dst_data = (u8*)dst.data;
+        foreach(i, type.struct_strides.count)
+        {
+            u32 member_stride = type.struct_strides[i];
+            i32 member_vtype = type.struct_vtypes[i];
+            VariableType member_type = vtype_get(inter, member_vtype);
+            
+            ObjectMemory member = fixed_size_memory(src_data + member_stride, type.kind);
+            ObjectMemory member_copy = obj_copy_data(inter, member, member_vtype);
+            
+            memory_copy(dst_data + member_stride, &member_copy, vtype_get_stride(inter, member_vtype));
+        }
+        
+        ObjectMemory res{};
+        res.struct_ = dst;
+        return res;
+    }
     
     if (is_array(vtype))
     {
@@ -1420,10 +1453,12 @@ ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype)
         u32 stride = vtype_get_stride(inter, array_vtype.array_of);
         ObjectMemory_Array dst = alloc_array_memory(inter, src.array.count, stride);
         foreach(i, src.array.count) {
-            ObjectMemory* dst_ptr = (ObjectMemory*)((u8*)dst.data + stride * i);
-            ObjectMemory* src_ptr = (ObjectMemory*)((u8*)src.array.data + stride * i);
-            ObjectMemory src = obj_copy_data(inter, *src_ptr, array_vtype.array_of);
-            memory_copy(dst_ptr, &src, stride);
+            // TODO(Jose): Safe fixed size
+            ObjectMemory element = fixed_size_memory((u8*)src.array.data + stride * i, stride);
+            ObjectMemory element_copy = obj_copy_data(inter, element, array_vtype.array_of);
+            
+            void* dst_ptr = ((u8*)dst.data + stride * i);
+            memory_copy(dst_ptr, &element_copy, stride);
         }
         
         ObjectMemory res{};
@@ -1500,9 +1535,36 @@ void obj_copy_from_element(Interpreter* inter, Object* dst, Object* src_array, i
     
     // TODO(Jose): FREE MEMORY HERE
     
-    ObjectMemory* element_data = (ObjectMemory*)((u8*)src_array->array.data + stride * src_index);
+    ObjectMemory element_data = fixed_size_memory((u8*)src_array->array.data + stride * src_index, stride);
     ObjectMemory* dst_memory = obj_get_data(dst);
-    *dst_memory = obj_copy_data(inter, *element_data, array_type.array_of);
+    *dst_memory = obj_copy_data(inter, element_data, array_type.array_of);
+}
+
+void obj_copy_from_struct_member(Interpreter* inter, Object* dst, Object* src_struct, i64 member_index)
+{
+    VariableType struct_type = vtype_get(inter, src_struct->vtype);
+    
+    if (struct_type.kind != VariableKind_Struct) {
+        assert(0);
+        return;
+    }
+    
+    if (member_index < 0 || member_index >= struct_type.struct_vtypes.count) {
+        assert(0);
+        return;
+    }
+    
+    i32 member_vtype = struct_type.struct_vtypes[member_index];
+    u32 member_stride = struct_type.struct_strides[member_index];
+    VariableType member_type = vtype_get(inter, member_vtype);
+    
+    u32 member_size = vtype_get_stride(inter, member_vtype);
+    
+    // TODO(Jose): FREE MEMORY HERE
+    
+    ObjectMemory member = fixed_size_memory((u8*)src_struct->struct_.data + member_stride, member_size);
+    ObjectMemory* dst_memory = obj_get_data(dst);
+    *dst_memory = obj_copy_data(inter, member, member_vtype);
 }
 
 b32 obj_copy(Interpreter* inter, Object* dst, Object* src)
@@ -1565,7 +1627,7 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw)
         Object* element = obj_alloc_temp(inter, type.array_of);
         foreach(i, obj->array.count) {
             obj_copy_from_element(inter, element, obj, i);
-            append(&builder, string_from_obj(scratch.arena, inter, element));
+            append(&builder, string_from_obj(scratch.arena, inter, element, false));
             if (i < obj->array.count - 1) append(&builder, ", ");
         }
         
@@ -1579,6 +1641,25 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw)
         i64 index = obj->enum_.index;
         if (index < 0 || index >= type.enum_names.count) return STR("?");
         return type.enum_names[(u32)index];
+    }
+    
+    if (type.kind == VariableKind_Struct)
+    {
+        StringBuilder builder = string_builder_make(scratch.arena);
+        
+        append(&builder, STR("{ "));
+        
+        foreach(i, type.struct_vtypes.count)
+        {
+            Object* member = obj_alloc_temp(inter, type.struct_vtypes[i]);
+            obj_copy_from_struct_member(inter, member, obj, i);
+            append(&builder, string_from_obj(scratch.arena, inter, member, false));
+            if (i < type.struct_vtypes.count - 1) append(&builder, ", ");
+        }
+        
+        append(&builder, STR(" }"));
+        
+        return string_from_builder(arena, &builder);
     }
     
     assert(0);
@@ -1753,6 +1834,11 @@ Object* define_object(Interpreter* inter, String identifier, i32 vtype)
     obj->vtype = vtype;
     obj->scope = scope;
     
+    VariableType type = vtype_get(inter, vtype);
+    if (type.kind == VariableKind_Struct) {
+        obj->struct_ = alloc_struct_memory(inter, type.struct_stride);
+    }
+    
     return obj;
 }
 
@@ -1884,6 +1970,19 @@ Object* member_from_object(Interpreter* inter, Object* obj, String member)
                 return obj_alloc_temp_string(inter, STR("?"));
             }
             return obj_alloc_temp_string(inter, obj_type.enum_names[(u32)index]);
+        }
+    }
+    
+    if (obj_type.kind == VariableKind_Struct)
+    {
+        foreach(i, obj_type.struct_names.count)
+        {
+            if (string_equals(member, obj_type.struct_names[i]))
+            {
+                Object* member = obj_alloc_temp(inter, obj_type.struct_vtypes[i]);
+                obj_copy_from_struct_member(inter, member, obj, i);
+                return member;
+            }
         }
     }
     
