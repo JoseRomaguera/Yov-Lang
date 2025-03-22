@@ -123,6 +123,7 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         return array;
     }
     
+    report_invalid_binary_op(code, string_from_vtype(scratch.arena, inter, left_type.vtype), string_from_binary_operator(op), string_from_vtype(scratch.arena, inter, right_type.vtype));
     return inter->nil_obj;
 }
 
@@ -161,21 +162,15 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
         
         Object* result = solve_binary_operation(inter, left, right, op, node->code);
         
-        if (is_valid(result))
-        {
-            if (inter->settings.execute && inter->settings.print_execution) {
-                String left_string = string_from_obj(scratch.arena, inter, left);
-                String right_string = string_from_obj(scratch.arena, inter, right);
-                String result_string = string_from_obj(scratch.arena, inter, result);
-                log_trace(inter->ctx, node->code, "%S %S %S = %S", left_string, string_from_binary_operator(op), right_string, result_string);
-            }
-            return result;
+        if (!is_valid(result)) return inter->nil_obj;
+        
+        if (inter->settings.execute && inter->settings.print_execution) {
+            String left_string = string_from_obj(scratch.arena, inter, left);
+            String right_string = string_from_obj(scratch.arena, inter, right);
+            String result_string = string_from_obj(scratch.arena, inter, result);
+            log_trace(inter->ctx, node->code, "%S %S %S = %S", left_string, string_from_binary_operator(op), right_string, result_string);
         }
-        else
-        {
-            report_invalid_binary_op(node->code, string_from_obj(scratch.arena, inter, left), string_from_binary_operator(op), string_from_obj(scratch.arena, inter, right));
-            return inter->nil_obj;
-        }
+        return result;
     }
     
     if (node->kind == OpKind_Sign)
@@ -524,6 +519,7 @@ void interpret_assignment(Interpreter* inter, OpNode* node0)
     
     if (op != BinaryOperator_None) {
         assignment_obj = solve_binary_operation(inter, obj, assignment_obj, op, assignment->code);
+        if (is_unknown(assignment_obj)) return;
     }
     
     if (assignment_obj->vtype != obj->vtype) {
@@ -791,6 +787,7 @@ i32 interpret_object_type(Interpreter* inter, OpNode* node0)
     OpNode_ObjectType* node = (OpNode_ObjectType*)node0;
     i32 vtype = vtype_from_name(inter, node->name);
     vtype = vtype_from_array_dimension(inter, vtype, node->array_dimensions);
+    if (vtype < 0) report_object_type_not_found(node->code, node->name);
     return vtype;
 }
 
@@ -882,6 +879,70 @@ internal_fn i32 define_enum(Interpreter* inter, String name, Array<String> names
     return t.vtype;
 }
 
+internal_fn Array<OpNode_StructDefinition*> get_struct_definitions(Arena* arena, Interpreter* inter, Array<OpNode*> nodes)
+{
+    SCRATCH(arena);
+    PooledArray<OpNode_StructDefinition*> result = pooled_array_make<OpNode_StructDefinition*>(scratch.arena, 8);
+    
+    foreach(i, nodes.count) {
+        OpNode* node0 = nodes[i];
+        if (node0->kind == OpKind_StructDefinition)
+        {
+            OpNode_StructDefinition* node = (OpNode_StructDefinition*)node0;
+            
+            b32 duplicated = false;
+            
+            foreach(i, result.count) {
+                if (string_equals(result[i]->identifier, node->identifier)) {
+                    duplicated = true;
+                    break;
+                }
+            }
+            
+            if (duplicated) {
+                report_symbol_duplicated(node->code, node->identifier);
+                continue;
+            }
+            
+            array_add(&result, node);
+        }
+    }
+    
+    return array_from_pooled_array(arena, result);
+}
+
+internal_fn Array<String> get_struct_dependencies(Arena* arena, Interpreter* inter, OpNode_StructDefinition* node, Array<OpNode_StructDefinition*> struct_nodes)
+{
+    SCRATCH(arena);
+    PooledArray<String> names = pooled_array_make<String>(scratch.arena, 8);
+    
+    foreach(i, node->members.count) {
+        OpNode_ObjectDefinition* member = node->members[i];
+        i32 member_vtype = vtype_from_name(inter, member->type->name);
+        if (member_vtype >= 0) continue;
+        
+        foreach(j, struct_nodes.count) {
+            OpNode_StructDefinition* struct0 = struct_nodes[j];
+            if (struct0 == node) continue;
+            if (string_equals(member->type->name, struct0->identifier)) {
+                array_add(&names, member->type->name);
+                break;
+            }
+        }
+    }
+    
+    return array_from_pooled_array(arena, names);
+}
+
+internal_fn i32 OpNode_StructDefinition_compare_dependency_index(const void* _0, const void* _1)
+{
+    auto node0 = *(const OpNode_StructDefinition**)_0;
+    auto node1 = *(const OpNode_StructDefinition**)_1;
+    
+    if (node0->dependency_index == node1->dependency_index) return 0;
+    return (node0->dependency_index < node1->dependency_index) ? -1 : 1;
+}
+
 void register_intrinsic_functions(Interpreter* inter);
 
 internal_fn void register_definitions(Interpreter* inter)
@@ -953,42 +1014,93 @@ internal_fn void register_definitions(Interpreter* inter)
     {
         OpNode_Block* block = (OpNode_Block*)inter->root;
         
+        // Enums
         foreach(i, block->ops.count)
         {
             OpNode* node0 = block->ops[i];
+            if (node0->kind != OpKind_EnumDefinition) continue;
             
-            if (node0->kind == OpKind_EnumDefinition)
+            OpNode_EnumDefinition* node = (OpNode_EnumDefinition*)node0;
+            
+            assert(node->values.count == node->names.count);
+            
+            Array<i64> values = array_make<i64>(scratch.arena, node->values.count);
+            foreach(i, values.count)
             {
-                OpNode_EnumDefinition* node = (OpNode_EnumDefinition*)node0;
+                OpNode* value_node = node->values[i];
                 
-                assert(node->values.count == node->names.count);
-                
-                Array<i64> values = array_make<i64>(scratch.arena, node->values.count);
-                foreach(i, values.count)
-                {
-                    OpNode* value_node = node->values[i];
-                    
-                    if (value_node == NULL) {
-                        values[i] = i;
-                        continue;
-                    }
-                    
-                    Object* obj = interpret_expresion(inter, value_node, expresion_context_make(VType_Int));
-                    
-                    if (obj->vtype < 0) continue;
-                    if (obj->vtype != VType_Int) {
-                        report_enum_value_expects_an_int(node->code);
-                        continue;
-                    }
-                    
-                    values[i] = get_int(obj);
+                if (value_node == NULL) {
+                    values[i] = i;
+                    continue;
                 }
                 
-                define_enum(inter, node->identifier, node->names, values);
+                Object* obj = interpret_expresion(inter, value_node, expresion_context_make(VType_Int));
+                
+                if (obj->vtype < 0) continue;
+                if (obj->vtype != VType_Int) {
+                    report_enum_value_expects_an_int(node->code);
+                    continue;
+                }
+                
+                values[i] = get_int(obj);
             }
-            else if (node0->kind == OpKind_StructDefinition)
+            
+            define_enum(inter, node->identifier, node->names, values);
+        }
+        
+        // Structs
+        {
+            Array<OpNode_StructDefinition*> struct_nodes = get_struct_definitions(scratch.arena, inter, block->ops);
+            
+            // Solve struct dependencies
             {
-                OpNode_StructDefinition* node = (OpNode_StructDefinition*)node0;
+                foreach(i, struct_nodes.count) struct_nodes[i]->dependency_index = 0;
+                
+                foreach(i, struct_nodes.count)
+                {
+                    OpNode_StructDefinition* node = struct_nodes[i];
+                    b32 valid = true;
+                    
+                    Array<String> deps0 = get_struct_dependencies(scratch.arena, inter, node, struct_nodes);
+                    
+                    foreach(j, deps0.count)
+                    {
+                        String dep_name = deps0[j];
+                        
+                        OpNode_StructDefinition* node1 = NULL;
+                        foreach(i, struct_nodes.count) {
+                            if (string_equals(struct_nodes[i]->identifier, dep_name)) {
+                                node1 = struct_nodes[i];
+                                break;
+                            }
+                        }
+                        assert(node1 != NULL);
+                        
+                        Array<String> deps1 = get_struct_dependencies(scratch.arena, inter, node1, struct_nodes);
+                        
+                        foreach(i, deps1.count) {
+                            if (string_equals(deps1[i], node->identifier)) {
+                                report_struct_circular_dependency(node->code);
+                                valid = false;
+                                break;
+                            }
+                        }
+                        
+                        if (!valid) break;
+                        
+                        node->dependency_index = MAX(node1->dependency_index + 1, node->dependency_index);
+                    }
+                }
+                
+                array_sort(struct_nodes, OpNode_StructDefinition_compare_dependency_index);
+            }
+            
+            foreach(i, struct_nodes.count)
+            {
+                OpNode_StructDefinition* node = struct_nodes[i];
+                
+                b32 valid = true;
+                String name = node->identifier;
                 
                 Array<i32> vtypes = array_make<i32>(inter->ctx->static_arena, node->members.count);
                 Array<String> names = array_make<String>(inter->ctx->static_arena, node->members.count);
@@ -999,12 +1111,24 @@ internal_fn void register_definitions(Interpreter* inter)
                 foreach(i, vtypes.count) {
                     OpNode_ObjectDefinition* member = node->members[i];
                     names[i] = member->object_name;
+                    
+                    if (string_equals(member->type->name, name)) {
+                        report_struct_recursive(node->code);
+                        valid = false;
+                        continue;
+                    }
+                    
                     vtypes[i] = interpret_object_type(inter, member->type);
+                    if (vtypes[i] < 0) {
+                        valid = false;
+                        continue;
+                    }
+                    
                     strides[i] = stride;
                     stride += vtype_get_size(inter, vtypes[i]);
                 }
                 
-                String name = node->identifier;
+                if (!valid) continue;
                 
                 VariableType t = {};
                 t.name = name;
@@ -1016,47 +1140,53 @@ internal_fn void register_definitions(Interpreter* inter)
                 t.struct_stride = stride;
                 array_add(&inter->vtype_table, t);
             }
-            else if (node0->kind == OpKind_FunctionDefinition)
+        }
+        
+        // Functions
+        foreach(i, block->ops.count)
+        {
+            OpNode* node0 = block->ops[i];
+            if (node0->kind != OpKind_FunctionDefinition) continue;
+            
+            OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)node0;
+            
+            b32 valid = true;
+            
+            Array<ParameterDefinition> parameters = array_make<ParameterDefinition>(inter->ctx->static_arena, node->parameters.count);
+            
+            foreach(i, parameters.count)
             {
-                OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)node0;
+                OpNode_ObjectDefinition* param_node = node->parameters[i];
+                ParameterDefinition* def = &parameters[i];
                 
-                b32 valid = true;
-                
-                Array<ParameterDefinition> parameters = array_make<ParameterDefinition>(inter->ctx->static_arena, node->parameters.count);
-                
-                foreach(i, parameters.count)
-                {
-                    OpNode_ObjectDefinition* param_node = node->parameters[i];
-                    ParameterDefinition* def = &parameters[i];
-                    
-                    Object* assignment_result = interpret_assignment_for_object_definition(inter, param_node);
-                    if (is_unknown(assignment_result) || is_void(assignment_result)) {
-                        valid = false;
-                        continue;
-                    }
-                    
-                    b32 has_default_value = (param_node->assignment->kind != OpKind_None && param_node->assignment->kind != OpKind_Error);
-                    
-                    def->vtype = assignment_result->vtype;
-                    def->name = param_node->object_name;
-                    def->default_value = has_default_value ? assignment_result : inter->nil_obj;
+                Object* assignment_result = interpret_assignment_for_object_definition(inter, param_node);
+                if (is_unknown(assignment_result) || is_void(assignment_result)) {
+                    valid = false;
+                    continue;
                 }
                 
-                i32 return_vtype = VType_Void;
+                b32 has_default_value = (param_node->assignment->kind != OpKind_None && param_node->assignment->kind != OpKind_Error);
                 
-                if (node->return_node->kind == OpKind_ObjectType) {
-                    return_vtype = interpret_object_type(inter, node->return_node);
-                }
-                
-                if (!valid) continue;
-                
-                FunctionDefinition fn{};
-                fn.identifier = node->identifier;
-                fn.return_vtype = return_vtype;
-                fn.parameters = parameters;
-                fn.defined_fn = node->block;
-                array_add(&inter->functions, fn);
+                def->vtype = assignment_result->vtype;
+                def->name = param_node->object_name;
+                def->default_value = has_default_value ? assignment_result : inter->nil_obj;
             }
+            
+            i32 return_vtype = VType_Void;
+            
+            if (node->return_node->kind == OpKind_ObjectType) {
+                return_vtype = interpret_object_type(inter, node->return_node);
+                if (return_vtype < 0) valid = false;
+            }
+            
+            if (!valid) continue;
+            
+            FunctionDefinition fn{};
+            fn.identifier = node->identifier;
+            fn.return_vtype = return_vtype;
+            fn.parameters = parameters;
+            fn.defined_fn = node->block;
+            array_add(&inter->functions, fn);
         }
     }
     
@@ -1211,6 +1341,7 @@ i32 vtype_from_array_base(Interpreter* inter, i32 vtype)
 }
 
 u32 vtype_get_size(Interpreter* inter, i32 vtype) {
+    if (vtype == VType_Void) return 0;
     if (vtype == VType_Int) return sizeof(ObjectMemory_Int);
     if (vtype == VType_Bool) return sizeof(ObjectMemory_Bool);
     if (vtype == VType_String) return sizeof(ObjectMemory_String);

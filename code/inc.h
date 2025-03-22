@@ -512,6 +512,7 @@ void print_report(Yov* ctx, Report report);
 #define report_invalid_binary_op(_code, _v0, _op, _v1) report_error(inter->ctx, _code, "Invalid binary operation: '%S' %S '%S'", _v0, _op, _v1);
 #define report_invalid_signed_op(_code, _op, _v) report_error(inter->ctx, _code, "Invalid signed operation '%S %S'", _op, _v);
 #define report_symbol_not_found(_code, _v) report_error(inter->ctx, _code, "Symbol '%S' not found", _v);
+#define report_symbol_duplicated(_code, _v) report_error(inter->ctx, _code, "Duplicated symbol '%S'", _v);
 #define report_object_not_found(_code, _v) report_error(inter->ctx, _code, "Object '%S' not found", _v);
 #define report_object_type_not_found(_code, _t) report_error(inter->ctx, _code, "Object Type '%S' not found", _t);
 #define report_object_duplicated(_code, _v) report_error(inter->ctx, _code, "Duplicated object '%S'", _v);
@@ -534,6 +535,8 @@ void print_report(Yov* ctx, Report report);
 #define report_expr_semantic_unknown(_code)  report_error(inter->ctx, _code, "Unknown expresion: {line}");
 #define report_for_expects_an_array(_code)  report_error(inter->ctx, _code, "Foreach-Statement expects an array");
 #define report_semantic_unknown_op(_code) report_error(inter->ctx, _code, "Unknown operation: {line}");
+#define report_struct_recursive(_code) report_error(inter->ctx, _code, "Recursive struct definition");
+#define report_struct_circular_dependency(_code) report_error(inter->ctx, _code, "Struct has circular dependency");
 
 //- LANG REPORTS
 
@@ -688,6 +691,7 @@ struct OpNode_EnumDefinition : OpNode {
 struct OpNode_StructDefinition : OpNode {
     String identifier;
     Array<OpNode_ObjectDefinition*> members;
+    u32 dependency_index; // Used in interpreter
 };
 struct OpNode_FunctionDefinition : OpNode {
     String identifier;
