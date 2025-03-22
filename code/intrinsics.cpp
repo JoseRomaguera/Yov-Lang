@@ -67,7 +67,7 @@ internal_fn FunctionReturn intrinsic__set_cd(Interpreter* inter, Array<Object*> 
     }
     
     String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(obj), path));
-    obj_set_string(inter, obj, res);
+    set_string(inter, obj, res);
     
     return { inter->void_obj, RESULT_SUCCESS };;
 }

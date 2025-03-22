@@ -302,50 +302,6 @@ OpNode* extract_expresion(Parser* parser)
         return alloc_node(parser, OpKind_Error, {});
     }
     
-    // Function call
-    if (tokens.count >= 2 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis) {
-        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
-        if (couple) return process_function_call(parser, tokens);
-    }
-    
-    // Array indexing
-    if (tokens.count >= 3 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenBracket && tokens[tokens.count - 1].kind == TokenKind_CloseBracket) {
-        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
-        if (couple) {
-            Array<Token> indexing_expresion = array_subarray(tokens, 2, tokens.count - 3);
-            OpNode* expresion = extract_expresion_from_array(parser, indexing_expresion);
-            
-            if (expresion->kind == OpKind_None) {
-                report_array_indexing_expects_expresion(tokens[0].code);
-                return alloc_node(parser, OpKind_Error, tokens[0].code);
-            }
-            
-            auto node = (OpNode_ArrayElementValue*)alloc_node(parser, OpKind_ArrayElementValue, tokens[0].code);
-            node->identifier = tokens[0].value;
-            node->expresion = expresion;
-            return node;
-        }
-    }
-    
-    // Member access
-    if (tokens.count >= 2 && tokens[tokens.count - 2].kind == TokenKind_Dot && tokens[tokens.count - 1].kind == TokenKind_Identifier)
-    {
-        String member_value = tokens[tokens.count - 1].value;
-        
-        if (member_value.size == 0) {
-            report_expr_empty_member(tokens[0].code);
-            return alloc_node(parser, OpKind_Error, tokens[0].code);
-        }
-        
-        Array<Token> expresion_tokens = array_subarray(tokens, 0, tokens.count - 2);
-        OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
-        
-        auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
-        node->expresion = expresion;
-        node->member = member_value;
-        return node;
-    }
-    
     if (tokens.count == 1)
     {
         Token token = tokens[0];
@@ -522,6 +478,12 @@ OpNode* extract_expresion(Parser* parser)
         }
     }
     
+    // Function call
+    if (tokens.count >= 2 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis) {
+        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        if (couple) return process_function_call(parser, tokens);
+    }
+    
     // Array Expresions
     if (tokens.count >= 2 && (tokens[0].kind == TokenKind_OpenBrace || tokens[0].kind == TokenKind_OpenBracket))
     {
@@ -557,6 +519,63 @@ OpNode* extract_expresion(Parser* parser)
             node->is_empty = (b8)is_empty;
             return node;
         }
+    }
+    
+    // Indexing
+    if (tokens.count >= 3 && tokens[tokens.count - 1].kind == TokenKind_CloseBracket)
+    {
+        u32 starting_token = 0;
+        while (starting_token < tokens.count && tokens[starting_token].kind != TokenKind_OpenBracket)
+            starting_token++;
+        
+        if (starting_token < tokens.count)
+        {
+            b32 couple = check_tokens_are_couple(tokens, starting_token, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
+            
+            if (couple)
+            {
+                Array<Token> value_tokens = array_subarray(tokens, 0, starting_token);
+                Array<Token> indexing_tokens = array_subarray(tokens, starting_token + 1, tokens.count - starting_token - 2);
+                
+                if (value_tokens.count > 0)
+                {
+                    OpNode* value_node = extract_expresion_from_array(parser, value_tokens);
+                    OpNode* index_node = extract_expresion_from_array(parser, indexing_tokens);
+                    
+                    if (index_node->kind == OpKind_None) {
+                        report_array_indexing_expects_expresion(tokens[0].code);
+                        return alloc_node(parser, OpKind_Error, tokens[0].code);
+                    }
+                    
+                    if (value_node->kind == OpKind_Error) return value_node;
+                    if (index_node->kind == OpKind_Error) return index_node;
+                    
+                    auto node = (OpNode_Indexing*)alloc_node(parser, OpKind_Indexing, tokens[0].code);
+                    node->value = value_node;
+                    node->index = index_node;
+                    return node;
+                }
+            }
+        }
+    }
+    
+    // Member access
+    if (tokens.count >= 2 && tokens[tokens.count - 2].kind == TokenKind_Dot && tokens[tokens.count - 1].kind == TokenKind_Identifier)
+    {
+        String member_value = tokens[tokens.count - 1].value;
+        
+        if (member_value.size == 0) {
+            report_expr_empty_member(tokens[0].code);
+            return alloc_node(parser, OpKind_Error, tokens[0].code);
+        }
+        
+        Array<Token> expresion_tokens = array_subarray(tokens, 0, tokens.count - 2);
+        OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
+        
+        auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
+        node->expresion = expresion;
+        node->member = member_value;
+        return node;
     }
     
     String expresion_string = string_from_tokens(scratch.arena, tokens);

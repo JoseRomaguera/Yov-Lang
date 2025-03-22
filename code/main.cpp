@@ -71,50 +71,60 @@ void log_ast(OpNode* node, i32 depth)
     foreach(i, depth) print_info("  ");
     
     if (node->kind == OpKind_Block) print_info("block");
-    if (node->kind == OpKind_Error) print_error("error");
-    if (node->kind == OpKind_None) print_info("none");
-    if (node->kind == OpKind_IfStatement) print_info("if-statement");
-    if (node->kind == OpKind_WhileStatement) print_info("while-statement");
-    if (node->kind == OpKind_ForStatement) print_info("for-statement");
-    if (node->kind == OpKind_ForeachArrayStatement) print_info("foreach-statement");
-    if (node->kind == OpKind_Assignment) print_info("assignment");
-    if (node->kind == OpKind_FunctionCall) print_info("function call");
-    if (node->kind == OpKind_ObjectDefinition) {
+    else if (node->kind == OpKind_Error) print_error("error");
+    else if (node->kind == OpKind_None) print_info("none");
+    else if (node->kind == OpKind_IfStatement) print_info("if-statement");
+    else if (node->kind == OpKind_WhileStatement) print_info("while-statement");
+    else if (node->kind == OpKind_ForStatement) print_info("for-statement");
+    else if (node->kind == OpKind_ForeachArrayStatement) print_info("foreach-statement");
+    else if (node->kind == OpKind_Assignment) print_info("assignment");
+    else if (node->kind == OpKind_FunctionCall) print_info("function call");
+    else if (node->kind == OpKind_ObjectDefinition) {
         auto node0 = (OpNode_ObjectDefinition*)node;
         print_info("objdef: '%S'", node0->object_name);
     }
-    if (node->kind == OpKind_Binary) {
+    else if (node->kind == OpKind_ObjectType) {
+        auto node0 = (OpNode_ObjectType*)node;
+        print_info("type: '%S", node0->name);
+        foreach(i, node0->array_dimensions) print_info("[]");
+        print_info("'");
+    }
+    else if (node->kind == OpKind_Binary) {
         auto node0 = (OpNode_Binary*)node;
         print_info("binary %S", string_from_binary_operator(node0->op));
     }
-    if (node->kind == OpKind_Sign) {
+    else if (node->kind == OpKind_Sign) {
         auto node0 = (OpNode_Sign*)node;
         print_info("sign %S", string_from_binary_operator(node0->op));
     }
-    if (node->kind == OpKind_IntLiteral) {
+    else if (node->kind == OpKind_IntLiteral) {
         auto node0 = (OpNode_Literal*)node;
         print_info("int literal: %u", node0->int_literal);
     }
-    if (node->kind == OpKind_StringLiteral) {
+    else if (node->kind == OpKind_StringLiteral) {
         auto node0 = (OpNode_Literal*)node;
         print_info("str literal: %S", node0->string_literal);
     }
-    if (node->kind == OpKind_BoolLiteral) {
+    else if (node->kind == OpKind_BoolLiteral) {
         auto node0 = (OpNode_Literal*)node;
         print_info("bool literal: %s", node0->bool_literal ? "true" : "false");
     }
-    if (node->kind == OpKind_Symbol) {
+    else if (node->kind == OpKind_Symbol) {
         auto node0 = (OpNode_Symbol*)node;
         print_info("Symbol: %S", node0->identifier);
     }
-    if (node->kind == OpKind_MemberValue) {
+    else if (node->kind == OpKind_MemberValue) {
         auto node0 = (OpNode_MemberValue*)node;
         print_info("member_value: %S", node0->member);
     }
-    if (node->kind == OpKind_ArrayExpresion) { print_info("array expresion"); }
-    if (node->kind == OpKind_ArrayElementValue) {
-        auto node0 = (OpNode_ArrayElementValue*)node;
-        print_info("array element value: %S", node0->identifier);
+    else if (node->kind == OpKind_ArrayExpresion) { print_info("array expresion"); }
+    else if (node->kind == OpKind_Indexing) print_info("indexing");
+    else if (node->kind == OpKind_StructDefinition) {
+        auto node0 = (OpNode_StructDefinition*)node;
+        print_info("struct def: %S", node0->identifier);
+    }
+    else {
+        assert(0);
     }
     
     print_info("\n");
@@ -161,6 +171,12 @@ void yov_run_script(Yov* ctx, b32 trace, b32 user_assert, b32 analyze_only)
     {
         settings.execute = true;
         interpret(ctx, ast, settings);
+    }
+    
+    if (ctx->error_count != 0) {
+        // TODO(Jose): This reports should be considered runtime errors
+        yov_print_reports(ctx);
+        return;
     }
     
 #if DEV

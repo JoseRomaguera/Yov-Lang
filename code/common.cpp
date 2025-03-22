@@ -1077,6 +1077,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_Block) return sizeof(OpNode_Block);
     if (kind == OpKind_Assignment) return sizeof(OpNode_Assignment);
     if (kind == OpKind_Symbol) return sizeof(OpNode_Symbol);
+    if (kind == OpKind_Indexing) return sizeof(OpNode_Indexing);
     if (kind == OpKind_IfStatement) return sizeof(OpNode_IfStatement);
     if (kind == OpKind_WhileStatement) return sizeof(OpNode_WhileStatement);
     if (kind == OpKind_ForStatement) return sizeof(OpNode_ForStatement);
@@ -1086,7 +1087,6 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_FunctionCall) return sizeof(OpNode_FunctionCall);
     if (kind == OpKind_Return) return sizeof(OpNode_Return);
     if (kind == OpKind_ArrayExpresion) return sizeof(OpNode_ArrayExpresion);
-    if (kind == OpKind_ArrayElementValue) return sizeof(OpNode_ArrayElementValue);
     if (kind == OpKind_Binary) return sizeof(OpNode_Binary);
     if (kind == OpKind_Sign) return sizeof(OpNode_Sign);
     if (kind == OpKind_IntLiteral) return sizeof(OpNode_Literal);
@@ -1157,9 +1157,10 @@ Array<OpNode*> get_node_childs(Arena* arena, OpNode* node)
         foreach(i, exps.count)
             array_add(&nodes, exps[i]);
     }
-    else if (node->kind == OpKind_ArrayElementValue) {
-        auto node0 = (OpNode_ArrayElementValue*)node;
-        array_add(&nodes, node0->expresion);
+    else if (node->kind == OpKind_Indexing) {
+        auto node0 = (OpNode_Indexing*)node;
+        array_add(&nodes, node0->value);
+        array_add(&nodes, node0->index);
     }
     else if (node->kind == OpKind_Binary) {
         auto node0 = (OpNode_Binary*)node;
@@ -1174,6 +1175,19 @@ Array<OpNode*> get_node_childs(Arena* arena, OpNode* node)
         auto node0 = (OpNode_MemberValue*)node;
         array_add(&nodes, node0->expresion);
     }
+    else if (node->kind == OpKind_ObjectType) {}
+    else if (node->kind == OpKind_IntLiteral) {}
+    else if (node->kind == OpKind_StringLiteral) {}
+    else if (node->kind == OpKind_BoolLiteral) {}
+    else if (node->kind == OpKind_Symbol) {}
+    else if (node->kind == OpKind_StructDefinition) {
+        auto node0 = (OpNode_StructDefinition*)node;
+        foreach(i, node0->members.count) array_add(&nodes, (OpNode*)node0->members[i]);
+    }
+    else if (node->kind == OpKind_FunctionDefinition) {}
+    else if (node->kind == OpKind_EnumDefinition) {}
+    else if (node->kind == OpKind_None) {}
+    else if (node->kind == OpKind_Error) {}
     else {
         assert(0);
     }

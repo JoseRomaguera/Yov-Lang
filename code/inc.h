@@ -564,6 +564,7 @@ enum OpKind {
     OpKind_Block,
     OpKind_Assignment,
     OpKind_Symbol,
+    OpKind_Indexing,
     OpKind_IfStatement,
     OpKind_WhileStatement,
     OpKind_ForStatement,
@@ -572,7 +573,6 @@ enum OpKind {
     OpKind_ObjectType,
     OpKind_FunctionCall,
     OpKind_ArrayExpresion,
-    OpKind_ArrayElementValue,
     OpKind_Binary,
     OpKind_Sign,
     OpKind_IntLiteral,
@@ -598,6 +598,11 @@ struct OpNode_Assignment : OpNode {
     OpNode* destination;
     OpNode* source;
     BinaryOperator binary_operator;
+};
+
+struct OpNode_Indexing : OpNode {
+    OpNode* value;
+    OpNode* index;
 };
 
 struct OpNode_IfStatement : OpNode {
@@ -645,11 +650,6 @@ struct OpNode_ArrayExpresion : OpNode {
     Array<OpNode*> nodes;
     OpNode* type;
     b8 is_empty;
-};
-
-struct OpNode_ArrayElementValue : OpNode {
-    String identifier;
-    OpNode* expresion;
 };
 
 struct OpNode_Binary : OpNode {
@@ -753,30 +753,15 @@ struct ObjectMemory_Bool {
     b32 value;
 };
 struct ObjectMemory_String {
-    char* data;
     u64 size;
+    char* data;
 };
 struct ObjectMemory_Array {
-    void* data;
     i64 count;
+    void* data;
 };
 struct ObjectMemory_Enum {
     i64 index;
-};
-struct ObjectMemory_Struct {
-    void* data;
-    u64 size;
-};
-
-struct ObjectMemory {
-    union {
-        ObjectMemory_Int integer;
-        ObjectMemory_Enum enum_;
-        ObjectMemory_Struct struct_;
-        ObjectMemory_Bool boolean;
-        ObjectMemory_String string;
-        ObjectMemory_Array array;
-    };
 };
 
 struct Scope;
@@ -785,15 +770,7 @@ struct Object {
     String identifier;
     i32 vtype;
     Scope* scope;
-    
-    union {
-        ObjectMemory_Int integer;
-        ObjectMemory_Enum enum_;
-        ObjectMemory_Struct struct_;
-        ObjectMemory_Bool boolean;
-        ObjectMemory_String string;
-        ObjectMemory_Array array;
-    };
+    RawBuffer memory;
 };
 
 #define VType_Unknown -1
@@ -923,11 +900,14 @@ i32 vtype_from_name(Interpreter* inter, String name);
 i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension);
 i32 vtype_from_array_element(Interpreter* inter, i32 vtype);
 i32 vtype_from_array_base(Interpreter* inter, i32 vtype);
-u32 vtype_get_stride(Interpreter* inter, i32 vtype);
+u32 vtype_get_size(Interpreter* inter, i32 vtype);
 i32 encode_vtype(u32 index, u32 dimensions);
 void decode_vtype(i32 vtype, u32* _index, u32* _dimensions);
 
-Object* obj_alloc_temp(Interpreter* inter, i32 vtype);
+RawBuffer obj_memory_alloc_empty(Interpreter* inter, i32 vtype);
+void* obj_memory_dynamic_alloc(Interpreter* inter, u64 size);
+
+Object* obj_alloc_temp(Interpreter* inter, i32 vtype, RawBuffer memory);
 
 Object* obj_alloc_temp_int(Interpreter* inter, i64 value);
 Object* obj_alloc_temp_bool(Interpreter* inter, b32 value);
@@ -937,20 +917,16 @@ Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vt
 Object* obj_alloc_temp_enum(Interpreter* inter, i32 vtype, i64 index);
 Object* obj_alloc_temp_array_from_enum(Interpreter* inter, i32 enum_vtype);
 
-ObjectMemory* obj_get_data(Object* obj);
-ObjectMemory obj_copy_data(Interpreter* inter, Object* obj);
-ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype);
+RawBuffer obj_copy_data(Interpreter* inter, Object* obj);
+void obj_copy_data(Interpreter* inter, RawBuffer dst, RawBuffer src, i32 vtype);
 
-void obj_copy_element_from_element(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src_array, i64 src_index);
-b32 obj_copy_element_from_object(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src);
-void obj_copy_from_element(Interpreter* inter, Object* dst, Object* src_array, i64 src_index);
-void obj_copy_from_struct_member(Interpreter* inter, Object* dst, Object* src_struct, i64 member_index);
+RawBuffer obj_get_element_memory(Interpreter* inter, Object* obj, i64 index);
+RawBuffer obj_get_element_memory(Interpreter* inter, RawBuffer memory, i32 vtype, i64 index);
+
 b32 obj_copy(Interpreter* inter, Object* dst, Object* src);
-void obj_set_int(Object* dst, i64 value);
-void obj_set_bool(Object* dst, b32 value);
-void obj_set_string(Interpreter* inter, Object* dst, String value);
 
 String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);
+String string_from_obj_memory(Arena* arena, Interpreter* inter, RawBuffer memory, i32 vtype, b32 raw = true);
 String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype);
 
 Scope* alloc_scope(Interpreter* inter, ScopeType type);
@@ -987,75 +963,42 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
 b32 interpretion_failed(Interpreter* inter);
 b32 skip_ops(Interpreter* inter);
 
-inline_fn b32 is_valid(const Object* obj) {
-    if (obj == NULL) return false;
-    return obj->vtype > 0;
-}
-inline_fn b32 is_unknown(const Object* obj) {
-    if (obj == NULL) return true;
-    return obj->vtype < 0;
-}
+b32 is_valid(const Object* obj);
+b32 is_unknown(const Object* obj);
 
-inline_fn b32 is_void(const Object* obj) {
-    if (obj == NULL) return false;
-    return obj->vtype == VType_Void;
-}
-inline_fn b32 is_int(const Object* obj) {
-    if (obj == NULL) return false;
-    return obj->vtype == VType_Int;
-}
-inline_fn b32 is_bool(const Object* obj) {
-    if (obj == NULL) return false;
-    return obj->vtype == VType_Bool;
-}
-inline_fn b32 is_string(const Object* obj) {
-    if (obj == NULL) return false;
-    return obj->vtype == VType_String;
-}
-inline_fn b32 is_array(i32 vtype) {
-    u32 dims;
-    decode_vtype(vtype, NULL, &dims);
-    return dims > 0;
-}
-inline_fn b32 is_array(Object* obj) {
-    if (obj == NULL) return false;
-    return is_array(obj->vtype);
-}
-inline_fn b32 is_enum(Interpreter* inter, i32 vtype) {
-    return vtype_get(inter, vtype).kind == VariableKind_Enum;
-}
-inline_fn b32 is_struct(Interpreter* inter, i32 vtype) {
-    return vtype_get(inter, vtype).kind == VariableKind_Struct;
-}
+b32 is_void(const Object* obj);
+b32 is_int(const Object* obj);
+b32 is_bool(const Object* obj);
+b32 is_string(const Object* obj);
+b32 is_array(i32 vtype);
+b32 is_array(Object* obj);
+b32 is_enum(Interpreter* inter, i32 vtype);
+b32 is_enum(Interpreter* inter, Object* obj);
+b32 is_struct(Interpreter* inter, i32 vtype);
 
-inline_fn i64 get_int(Object* obj) {
-    assert(is_int(obj));
-    return obj->integer.value;
-}
-inline_fn b32 get_bool(Object* obj) {
-    assert(is_bool(obj));
-    return obj->boolean.value;
-}
-inline_fn String get_string(Object* obj) {
-    assert(is_string(obj));
-    String str;
-    str.data = obj->string.data;
-    str.size = obj->string.size;
-    return str;
-}
+i64 get_int(Object* obj);
+i64 get_int(RawBuffer memory);
+b32 get_bool(Object* obj);
+b32 get_bool(RawBuffer memory);
+i64 get_enum_index(Interpreter* inter, Object* obj);
+i64 get_enum_index(Interpreter* inter, RawBuffer memory);
+String get_string(Object* obj);
+String get_string(RawBuffer memory);
+
+void set_int(Object* obj, i64 value);
+void set_bool(Object* obj, b32 value);
+void set_enum_index(Interpreter* inter, Object* obj, i64 value);
+void set_string(Interpreter* inter, Object* obj, String value);
+
+i64 get_array_count(Object* obj);
+void* get_array_data(Object* obj);
+void resize_array(Interpreter* inter, ObjectMemory_Array* array, i64 count, i32 stride);
+
 
 enum CopyMode {
     CopyMode_NoOverride,
     CopyMode_Override,
 };
 inline_fn CopyMode get_enum_CopyMode(Interpreter* inter, Object* obj) {
-    assert(is_enum(inter, obj->vtype));
-    return (CopyMode)obj->enum_.index;
-}
-
-template<typename T>
-inline_fn T& get_array_element(Object* obj) {
-    
-    String* v = (String*)obj->data;
-    return *v;
+    return (CopyMode)get_enum_index(inter, obj);
 }

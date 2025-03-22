@@ -61,27 +61,32 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
     
     if (is_enum(inter, left->vtype) && is_enum(inter, right->vtype)) {
         if (op == BinaryOperator_Equals) {
-            return obj_alloc_temp_bool(inter, left->enum_.index == right->enum_.index);
+            return obj_alloc_temp_bool(inter, get_enum_index(inter, left) == get_enum_index(inter, right));
         }
         else if (op == BinaryOperator_NotEquals) {
-            return obj_alloc_temp_bool(inter, left->enum_.index != right->enum_.index);
+            return obj_alloc_temp_bool(inter, get_enum_index(inter, left) != get_enum_index(inter, right));
         }
     }
     
     if (left_type.array_of == right_type.array_of && left_type.kind == VariableKind_Array && right_type.kind == VariableKind_Array)
     {
-        VariableType array_of = vtype_get(inter, left_type.array_of);
+        i32 element_vtype = left_type.array_of;
+        VariableType element_type = vtype_get(inter, element_vtype);
         
-        i64 left_count = left->array.count;
-        i64 right_count = right->array.count;
+        i64 left_count = get_array_count(left);
+        i64 right_count = get_array_count(right);
         
         if (op == BinaryOperator_Addition) {
-            Object* array = obj_alloc_temp_array(inter, array_of.vtype, left_count + right_count);
+            Object* array = obj_alloc_temp_array(inter, element_vtype, left_count + right_count);
             for (i64 i = 0; i < left_count; ++i) {
-                obj_copy_element_from_element(inter, array, i, left, i);
+                RawBuffer dst = obj_get_element_memory(inter, array, i);
+                RawBuffer src = obj_get_element_memory(inter, left, i);
+                obj_copy_data(inter, dst, src, element_vtype);
             }
             for (i64 i = 0; i < right_count; ++i) {
-                obj_copy_element_from_element(inter, array, left_count + i, right, i);
+                RawBuffer dst = obj_get_element_memory(inter, array, left_count + i);
+                RawBuffer src = obj_get_element_memory(inter, right, i);
+                obj_copy_data(inter, dst, src, element_vtype);
             }
             return array;
         }
@@ -100,16 +105,20 @@ internal_fn Object* solve_binary_operation(Interpreter* inter, Object* left, Obj
         Object* array_src = (left_type.kind == VariableKind_Array) ? left : right;
         Object* element = (left_type.kind == VariableKind_Array) ? right : left;
         
-        Object* array = obj_alloc_temp_array(inter, element_type.vtype, array_src->array.count + 1);
+        i64 array_src_count = get_array_count(array_src);
+        Object* array = obj_alloc_temp_array(inter, element_type.vtype, array_src_count + 1);
         
         i64 array_offset = (left_type.kind == VariableKind_Array) ? 0 : 1;
         
-        for (i64 i = 0; i < array_src->array.count; ++i) {
-            obj_copy_element_from_element(inter, array, i + array_offset, array_src, i);
+        for (i64 i = 0; i < array_src_count; ++i) {
+            RawBuffer dst = obj_get_element_memory(inter, array, i + array_offset);
+            RawBuffer src = obj_get_element_memory(inter, array_src, i);
+            obj_copy_data(inter, dst, src, element_type.vtype);
         }
         
-        i64 element_offset = (left_type.kind == VariableKind_Array) ? array_src->array.count : 0;
-        obj_copy_element_from_object(inter, array, element_offset, element);
+        i64 element_offset = (left_type.kind == VariableKind_Array) ? array_src_count : 0;
+        RawBuffer dst = obj_get_element_memory(inter, array, element_offset);
+        obj_copy_data(inter, dst, element->memory, element_type.vtype);
         
         return array;
     }
@@ -359,85 +368,56 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
         
         Object* array = obj_alloc_temp_array(inter, element_vtype, objects.count);
         foreach(i, objects.count) {
-            obj_copy_element_from_object(inter, array, i, objects[i]);
+            RawBuffer dst = obj_get_element_memory(inter, array, i);
+            obj_copy_data(inter, dst, objects[i]->memory, element_vtype);
         }
         
         return array;
     }
     
-    if (node->kind == OpKind_ArrayElementValue)
+    if (node->kind == OpKind_Indexing)
     {
-        auto node0 = (OpNode_ArrayElementValue*)node;
-        Object* indexing_obj = interpret_expresion(inter, node0->expresion, context);
-        Object* array = find_object(inter, node0->identifier, true);
+        auto node0 = (OpNode_Indexing*)node;
+        Object* value_obj = interpret_expresion(inter, node0->value, context);
+        Object* index_obj = interpret_expresion(inter, node0->index, context);
         
-        if (array == NULL) {
-            report_object_not_found(node->code, node0->identifier);
-            return inter->nil_obj;
-        }
+        if (value_obj == inter->nil_obj) return inter->nil_obj;
+        if (index_obj == inter->nil_obj) return inter->nil_obj;
         
-        if (!is_int(indexing_obj)) {
+        if (!is_int(index_obj)) {
             report_indexing_expects_an_int(node->code);
             return inter->nil_obj;
         }
         
-        VariableType array_vtype = vtype_get(inter, array->vtype);
+        VariableType type = vtype_get(inter, value_obj->vtype);
         
-        if (array_vtype.kind != VariableKind_Array) {
-            report_indexing_not_allowed(node->code, string_from_vtype(scratch.arena, inter, array->vtype));
-            return inter->nil_obj;
-        }
-        
-        Object* obj = obj_alloc_temp(inter, array_vtype.array_of);
-        
-        if (inter->settings.execute)
+        if (type.kind == VariableKind_Array)
         {
-            i64 index = get_int(indexing_obj);
-            if (index < 0 || index >= array->array.count) {
-                report_indexing_out_of_bounds(node->code);
-                return inter->nil_obj;
+            i64 index = get_int(index_obj);
+            b32 out_of_bounds = index < 0 || index >= get_array_count(value_obj);
+            
+            RawBuffer memory{};
+            
+            if (out_of_bounds) {
+                if (inter->settings.execute) {
+                    report_indexing_out_of_bounds(node->code);
+                    return inter->nil_obj;
+                }
+            }
+            else {
+                memory = obj_get_element_memory(inter, value_obj, index);
             }
             
-            obj_copy_from_element(inter, obj, array, index);
+            Object* obj = obj_alloc_temp(inter, type.array_of, memory);
             return obj;
         }
-        else {
-            return obj;
-        }
+        
+        report_indexing_not_allowed(node->code, string_from_vtype(scratch.arena, inter, type.vtype));
+        return inter->nil_obj;
     }
     
     report_expr_semantic_unknown(node->code);
     return inter->nil_obj;
-}
-
-void interpret_indexed_assignment(Interpreter* inter, Object* array, i64 index, OpNode* assignment, b32 assert_assignment)
-{
-    SCRATCH();
-    assert(inter->settings.execute);
-    
-    VariableType array_type = vtype_get(inter, array->vtype);
-    
-    if (array_type.kind != VariableKind_Array) {
-        assert(0);
-        return;
-    }
-    
-    b32 no_assignment = assignment->kind != OpKind_None && assignment->kind != OpKind_Error;
-    
-    if (!no_assignment) {
-        assert(0);
-        return;
-    }
-    
-    i32 expected_vtype = vtype_from_array_element(inter, array->vtype);
-    Object* assignment_result = interpret_expresion(inter, assignment, expresion_context_make(expected_vtype));
-    
-    if (!obj_copy_element_from_object(inter, array, index, assignment_result)) {
-        report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, assignment_result->vtype), string_from_vtype(scratch.arena, inter, array->vtype));
-        return;
-    }
-    
-    if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S[%l] = %S"), array->identifier, index, string_from_obj(scratch.arena, inter, array));
 }
 
 Object* interpret_assignment_for_object_definition(Interpreter* inter, OpNode_ObjectDefinition* node)
@@ -474,7 +454,7 @@ Object* interpret_assignment_for_object_definition(Interpreter* inter, OpNode_Ob
             return inter->nil_obj;
         }
         
-        assignment_result = obj_alloc_temp(inter, vtype);
+        assignment_result = obj_alloc_temp(inter, vtype, {});
     }
     else
     {
@@ -745,14 +725,15 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     Object* index = NULL;
     if (node->index_name.size > 0) index = define_object(inter, node->index_name, VType_Int);
     
-    for (i64 i = 0; i < array->array.count; ++i)
+    i64 count = get_array_count(array);
+    for (i64 i = 0; i < count; ++i)
     {
         if (inter->settings.execute)
         {
-            obj_copy_from_element(inter, element, array, i);
+            obj_copy_data(inter, element->memory, obj_get_element_memory(inter, array, i), element->vtype);
             
             if (index != NULL) {
-                obj_set_int(index, i);
+                set_int(index, i);
             }
             
             if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_obj(scratch.arena, inter, element));
@@ -761,7 +742,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
             interpret_op(inter, node, node->content);
             pop_scope(inter);
             
-            obj_copy_element_from_object(inter, array, i, element);
+            obj_copy_data(inter, obj_get_element_memory(inter, array, i), element->memory, element->vtype);
         }
         else
         {
@@ -1020,7 +1001,7 @@ internal_fn void register_definitions(Interpreter* inter)
                     names[i] = member->object_name;
                     vtypes[i] = interpret_object_type(inter, member->type);
                     strides[i] = stride;
-                    stride += vtype_get_stride(inter, vtypes[i]);
+                    stride += vtype_get_size(inter, vtypes[i]);
                 }
                 
                 String name = node->identifier;
@@ -1092,22 +1073,22 @@ internal_fn void define_globals(Interpreter* inter)
     Object* obj;
     
     obj = define_object(inter, STR("context_script_dir"), VType_String);
-    obj_set_string(inter, obj, inter->ctx->script_dir);
+    set_string(inter, obj, inter->ctx->script_dir);
     
     obj = define_object(inter, STR("context_caller_dir"), VType_String);
-    obj_set_string(inter, obj, inter->ctx->caller_dir);
+    set_string(inter, obj, inter->ctx->caller_dir);
     
     inter->cd_obj = define_object(inter, STR("cd"), VType_String);
-    obj_set_string(inter, inter->cd_obj, inter->ctx->script_dir);
+    set_string(inter, inter->cd_obj, inter->ctx->script_dir);
     
     obj = define_object(inter, STR("yov_major"), VType_Int);
-    obj_set_int(obj, YOV_MAJOR_VERSION);
+    set_int(obj, YOV_MAJOR_VERSION);
     obj = define_object(inter, STR("yov_minor"), VType_Int);
-    obj_set_int(obj, YOV_MINOR_VERSION);
+    set_int(obj, YOV_MINOR_VERSION);
     obj = define_object(inter, STR("yov_revision"), VType_Int);
-    obj_set_int(obj, YOV_REVISION_VERSION);
+    set_int(obj, YOV_REVISION_VERSION);
     obj = define_object(inter, STR("yov_version"), VType_String);
-    obj_set_string(inter, obj, YOV_VERSION);
+    set_string(inter, obj, YOV_VERSION);
     
     // Args
     {
@@ -1115,7 +1096,7 @@ internal_fn void define_globals(Interpreter* inter)
         Object* array = obj_alloc_temp_array(inter, VType_String, args.count);
         foreach(i, args.count) {
             Object* element = obj_alloc_temp_string(inter, args[i].name);
-            obj_copy_element_from_object(inter, array, i, element);
+            obj_copy_data(inter, obj_get_element_memory(inter, array, i), element->memory, VType_String);
         }
         
         obj = define_object(inter, STR("context_args"), VType_StringArray);
@@ -1229,7 +1210,7 @@ i32 vtype_from_array_base(Interpreter* inter, i32 vtype)
     return index;
 }
 
-u32 vtype_get_stride(Interpreter* inter, i32 vtype) {
+u32 vtype_get_size(Interpreter* inter, i32 vtype) {
     if (vtype == VType_Int) return sizeof(ObjectMemory_Int);
     if (vtype == VType_Bool) return sizeof(ObjectMemory_Bool);
     if (vtype == VType_String) return sizeof(ObjectMemory_String);
@@ -1240,7 +1221,7 @@ u32 vtype_get_stride(Interpreter* inter, i32 vtype) {
     
     VariableType type = vtype_get(inter, vtype);
     if (type.kind == VariableKind_Enum) return sizeof(ObjectMemory_Enum);
-    if (type.kind == VariableKind_Struct) return sizeof(ObjectMemory_Struct);
+    if (type.kind == VariableKind_Struct) return type.struct_stride;
     
     assert(0);
     return 0;
@@ -1263,74 +1244,61 @@ void decode_vtype(i32 vtype, u32* _index, u32* _dimensions) {
     }
 }
 
-internal_fn ObjectMemory_String alloc_string_memory(Interpreter* inter, String value)
-{
-    ObjectMemory_String dst;
-    dst.size = value.size;
-    dst.data = (char*)arena_push(inter->ctx->static_arena, value.size);
-    memory_copy(dst.data, value.data, value.size);
-    return dst;
+RawBuffer obj_memory_alloc_empty(Interpreter* inter, i32 vtype) {
+    u32 size = vtype_get_size(inter, vtype);
+    RawBuffer buffer;
+    buffer.data = arena_push(inter->ctx->static_arena, size);
+    buffer.size = size;
+    return buffer;
 }
 
-internal_fn ObjectMemory_Array alloc_array_memory(Interpreter* inter, i64 count, i32 stride)
-{
-    ObjectMemory_Array dst;
-    dst.count = count;
-    dst.data = arena_push(inter->ctx->static_arena, count * stride);
-    return dst;
+void* obj_memory_dynamic_alloc(Interpreter* inter, u64 size) {
+    return arena_push(inter->ctx->static_arena, size);
 }
 
-internal_fn ObjectMemory_Struct alloc_struct_memory(Interpreter* inter, u32 stride)
+Object* obj_alloc_temp(Interpreter* inter, i32 vtype, RawBuffer memory)
 {
-    ObjectMemory_Struct dst;
-    dst.size = stride;
-    dst.data = arena_push(inter->ctx->static_arena, stride);
-    return dst;
-}
-
-Object* obj_alloc_temp(Interpreter* inter, i32 vtype)
-{
+    if (vtype < 0) return inter->nil_obj;
+    if (vtype == VType_Void) return inter->void_obj;
+    
     Object* obj = arena_push_struct<Object>(inter->ctx->static_arena);
     obj->identifier = STR("TEMP");
     obj->vtype = vtype;
     obj->scope = inter->current_scope;
-    
-    VariableType type = vtype_get(inter, vtype);
-    if (type.kind == VariableKind_Struct) {
-        obj->struct_ = alloc_struct_memory(inter, type.struct_stride);
-    }
-    
+    obj->memory = memory;
+    if (obj->memory.size == 0) obj->memory = obj_memory_alloc_empty(inter, vtype);
     return obj;
 }
 
 Object* obj_alloc_temp_int(Interpreter* inter, i64 value)
 {
-    Object* obj = obj_alloc_temp(inter, VType_Int);
-    obj->integer.value = value;
+    Object* obj = obj_alloc_temp(inter, VType_Int, {});
+    set_int(obj, value);
     return obj;
 }
 
 Object* obj_alloc_temp_bool(Interpreter* inter, b32 value)
 {
-    Object* obj = obj_alloc_temp(inter, VType_Bool);
-    obj->boolean.value = value;
+    Object* obj = obj_alloc_temp(inter, VType_Bool, {});
+    set_bool(obj, value);
     return obj;
 }
 
 Object* obj_alloc_temp_string(Interpreter* inter, String value)
 {
-    Object* obj = obj_alloc_temp(inter, VType_String);
-    obj_set_string(inter, obj, value);
+    Object* obj = obj_alloc_temp(inter, VType_String, {});
+    set_string(inter, obj, value);
     return obj;
 }
 
 Object* obj_alloc_temp_array(Interpreter* inter, i32 element_vtype, i64 count)
 {
     i32 vtype = vtype_from_array_dimension(inter, element_vtype, 1);
-    Object* obj = obj_alloc_temp(inter, vtype);
+    Object* obj = obj_alloc_temp(inter, vtype, {});
+    ObjectMemory_Array* array = (ObjectMemory_Array*)obj->memory.data;
     
-    u32 stride = vtype_get_stride(inter, element_vtype);
-    obj->array = alloc_array_memory(inter, count, stride);
+    u32 stride = vtype_get_size(inter, element_vtype);
+    resize_array(inter, array, count, stride);
     return obj;
 }
 
@@ -1340,8 +1308,9 @@ ObjectMemory_Array alloc_multidimensional_array_memory(Interpreter* inter, i32 e
     i32 array_of = vtype_from_array_element(inter, vtype);
     
     i64 count = dimensions[dimensions.count - 1];
-    u32 stride = vtype_get_stride(inter, array_of);
-    ObjectMemory_Array mem = alloc_array_memory(inter, count, stride);
+    u32 stride = vtype_get_size(inter, array_of);
+    ObjectMemory_Array mem{};
+    resize_array(inter, &mem, count, stride);
     
     if (dimensions.count > 1)
     {
@@ -1359,17 +1328,18 @@ ObjectMemory_Array alloc_multidimensional_array_memory(Interpreter* inter, i32 e
 Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions)
 {
     i32 vtype = vtype_from_array_dimension(inter, element_vtype, dimensions.count);
-    Object* obj = obj_alloc_temp(inter, vtype);
+    Object* obj = obj_alloc_temp(inter, vtype, {});
+    ObjectMemory_Array* array = (ObjectMemory_Array*)obj->memory.data;
     
     i32 array_of = vtype_from_array_element(inter, vtype);
-    obj->array = alloc_multidimensional_array_memory(inter, element_vtype, dimensions);
+    *array = alloc_multidimensional_array_memory(inter, element_vtype, dimensions);
     return obj;
 }
 
 Object* obj_alloc_temp_enum(Interpreter* inter, i32 vtype, i64 index)
 {
-    Object* obj = obj_alloc_temp(inter, vtype);
-    obj->enum_.index = index;
+    Object* obj = obj_alloc_temp(inter, vtype, {});
+    set_enum_index(inter, obj, index);
     return obj;
 }
 
@@ -1383,240 +1353,143 @@ Object* obj_alloc_temp_array_from_enum(Interpreter* inter, i32 enum_vtype)
     }
     
     Object* obj = obj_alloc_temp_array(inter, enum_vtype, enum_type.enum_values.count);
-    ObjectMemory_Enum* data = (ObjectMemory_Enum*)obj->array.data;
+    ObjectMemory_Enum* data = (ObjectMemory_Enum*)get_array_data(obj);
     foreach(i, enum_type.enum_values.count) {
         data[i].index = i;
     }
     return obj;
 }
 
-ObjectMemory* obj_get_data(Object* obj) {
-    return (ObjectMemory*)&obj->integer;
-}
-
-ObjectMemory obj_copy_data(Interpreter* inter, Object* obj)
-{
-    return obj_copy_data(inter, *obj_get_data(obj), obj->vtype);
-}
-
-internal_fn ObjectMemory fixed_size_memory(void* data, u32 stride) {
-    ObjectMemory dst{};
-    assert(stride <= sizeof(dst));
-    memory_copy(&dst, data, stride);
+RawBuffer obj_copy_data(Interpreter* inter, Object* obj) {
+    RawBuffer dst = obj_memory_alloc_empty(inter, obj->vtype);
+    obj_copy_data(inter, dst, obj->memory, obj->vtype);
     return dst;
 }
 
-ObjectMemory obj_copy_data(Interpreter* inter, ObjectMemory src, i32 vtype)
+void obj_copy_data(Interpreter* inter, RawBuffer dst, RawBuffer src, i32 vtype)
 {
-    if (vtype == VType_Int || vtype == VType_Bool) return src;
+    assert(vtype_get_size(inter, vtype) == src.size);
+    assert(dst.size == src.size);
     
-    if (vtype == VType_String) {
-        String str;
-        str.data = src.string.data;
-        str.size = src.string.size;
-        
-        ObjectMemory res{};
-        res.string = alloc_string_memory(inter, str);
-        return res;
-    }
+    // TODO(Jose): FREE DYNAMIC MEMORY FROM dst
+    memory_copy(dst.data, src.data, src.size);
     
     VariableType type = vtype_get(inter, vtype);
     
-    if (type.kind == VariableKind_Enum) return src;
-    
-    if (type.kind == VariableKind_Struct)
+    if (vtype == VType_String)
     {
-        ObjectMemory_Struct dst = alloc_struct_memory(inter, type.struct_stride);
+        ObjectMemory_String* src_mem = (ObjectMemory_String*)src.data;
+        ObjectMemory_String* dst_mem = (ObjectMemory_String*)dst.data;
         
-        u8* src_data = (u8*)src.struct_.data;
-        u8* dst_data = (u8*)dst.data;
+        dst_mem->data = (char*)obj_memory_dynamic_alloc(inter, dst_mem->size);
+        memory_copy(dst_mem->data, src_mem->data, dst_mem->size);
+    }
+    else if (type.kind == VariableKind_Struct)
+    {
+        u8* src_mem = (u8*)src.data;
+        u8* dst_mem = (u8*)dst.data;
+        
         foreach(i, type.struct_strides.count)
         {
             u32 member_stride = type.struct_strides[i];
             i32 member_vtype = type.struct_vtypes[i];
             VariableType member_type = vtype_get(inter, member_vtype);
+            u32 member_size = vtype_get_size(inter, member_vtype);
             
-            ObjectMemory member = fixed_size_memory(src_data + member_stride, type.kind);
-            ObjectMemory member_copy = obj_copy_data(inter, member, member_vtype);
+            RawBuffer src_member = { src_mem + member_stride, (u64)member_size };
+            RawBuffer dst_member = { dst_mem + member_stride, (u64)member_size };
+            obj_copy_data(inter, dst_member, src_member, member_vtype);
+        }
+    }
+    else if (type.kind == VariableKind_Array)
+    {
+        ObjectMemory_Array* src_mem = (ObjectMemory_Array*)src.data;
+        ObjectMemory_Array* dst_mem = (ObjectMemory_Array*)dst.data;
+        
+        i32 element_vtype = type.array_of;
+        u32 element_size = vtype_get_size(inter, element_vtype);
+        dst_mem->data = obj_memory_dynamic_alloc(inter, dst_mem->count * element_size);
+        
+        foreach(i, src_mem->count)
+        {
+            u64 element_stride = i * element_size;
             
-            memory_copy(dst_data + member_stride, &member_copy, vtype_get_stride(inter, member_vtype));
+            RawBuffer src_element = { (u8*)src_mem->data + element_stride, (u64)element_size };
+            RawBuffer dst_element = { (u8*)dst_mem->data + element_stride, (u64)element_size };
+            obj_copy_data(inter, dst_element, src_element, element_vtype);
+        }
+    }
+}
+
+RawBuffer obj_get_element_memory(Interpreter* inter, RawBuffer memory, i32 vtype, i64 index)
+{
+    VariableType type = vtype_get(inter, vtype);
+    
+    if (type.kind == VariableKind_Array)
+    {
+        ObjectMemory_Array* mem = (ObjectMemory_Array*)memory.data;
+        
+        if (index < 0 || index >= mem->count) {
+            assert(0);
+            return {};
         }
         
-        ObjectMemory res{};
-        res.struct_ = dst;
-        return res;
+        i32 element_vtype = type.array_of;
+        u32 element_size = vtype_get_size(inter, element_vtype);
+        u64 element_stride = element_size * index;
+        
+        RawBuffer element = { (u8*)mem->data + element_stride, (u64)element_size };
+        return element;
     }
     
-    if (is_array(vtype))
+    if (type.kind == VariableKind_Struct)
     {
-        VariableType array_vtype = vtype_get(inter, vtype);
-        u32 stride = vtype_get_stride(inter, array_vtype.array_of);
-        ObjectMemory_Array dst = alloc_array_memory(inter, src.array.count, stride);
-        foreach(i, src.array.count) {
-            // TODO(Jose): Safe fixed size
-            ObjectMemory element = fixed_size_memory((u8*)src.array.data + stride * i, stride);
-            ObjectMemory element_copy = obj_copy_data(inter, element, array_vtype.array_of);
-            
-            void* dst_ptr = ((u8*)dst.data + stride * i);
-            memory_copy(dst_ptr, &element_copy, stride);
+        if (index < 0 || index >= type.struct_vtypes.count) {
+            assert(0);
+            return {};
         }
         
-        ObjectMemory res{};
-        res.array = dst;
-        return res;
+        i32 member_vtype = type.struct_vtypes[index];
+        u32 member_stride = type.struct_strides[index];
+        u32 member_size = vtype_get_size(inter, member_vtype);
+        
+        RawBuffer member = { (u8*)memory.data + member_stride, (u64)member_size };
+        return member;
     }
     
     assert(0);
     return {};
 }
 
-void obj_copy_element_from_element(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src_array, i64 src_index)
-{
-    if (!is_array(dst_array) || !is_array(src_array)) {
-        assert(0);
-        return;
-    }
-    
-    if (dst_array->vtype != src_array->vtype) {
-        assert(0);
-        return;
-    }
-    
-    VariableType array_type = vtype_get(inter, dst_array->vtype);
-    u32 stride = vtype_get_stride(inter, array_type.array_of);
-    
-    // TODO(Jose): FREE MEMORY HERE
-    
-    void* dst_data = (u8*)dst_array->array.data + stride * dst_index;
-    ObjectMemory* src_data = (ObjectMemory*)((u8*)src_array->array.data + stride * src_index);
-    ObjectMemory res = obj_copy_data(inter, *src_data, array_type.array_of);
-    memory_copy(dst_data, &res, stride);
-}
-
-b32 obj_copy_element_from_object(Interpreter* inter, Object* dst_array, i64 dst_index, Object* src)
-{
-    if (!is_array(dst_array)) {
-        assert(0);
-        return false;
-    }
-    
-    VariableType array_type = vtype_get(inter, dst_array->vtype);
-    
-    if (array_type.array_of != src->vtype) {
-        assert(0);
-        return false;
-    }
-    
-    u32 stride = vtype_get_stride(inter, array_type.array_of);
-    
-    // TODO(Jose): FREE MEMORY HERE
-    
-    void* dst_data = (u8*)dst_array->array.data + stride * dst_index;
-    ObjectMemory res = obj_copy_data(inter, src);
-    memory_copy(dst_data, &res, stride);
-    return true;
-}
-
-void obj_copy_from_element(Interpreter* inter, Object* dst, Object* src_array, i64 src_index)
-{
-    if (!is_array(src_array)) {
-        assert(0);
-        return;
-    }
-    
-    VariableType array_type = vtype_get(inter, src_array->vtype);
-    
-    if (array_type.array_of != dst->vtype) {
-        assert(0);
-        return;
-    }
-    
-    u32 stride = vtype_get_stride(inter, array_type.array_of);
-    
-    // TODO(Jose): FREE MEMORY HERE
-    
-    ObjectMemory element_data = fixed_size_memory((u8*)src_array->array.data + stride * src_index, stride);
-    ObjectMemory* dst_memory = obj_get_data(dst);
-    *dst_memory = obj_copy_data(inter, element_data, array_type.array_of);
-}
-
-void obj_copy_from_struct_member(Interpreter* inter, Object* dst, Object* src_struct, i64 member_index)
-{
-    VariableType struct_type = vtype_get(inter, src_struct->vtype);
-    
-    if (struct_type.kind != VariableKind_Struct) {
-        assert(0);
-        return;
-    }
-    
-    if (member_index < 0 || member_index >= struct_type.struct_vtypes.count) {
-        assert(0);
-        return;
-    }
-    
-    i32 member_vtype = struct_type.struct_vtypes[member_index];
-    u32 member_stride = struct_type.struct_strides[member_index];
-    VariableType member_type = vtype_get(inter, member_vtype);
-    
-    u32 member_size = vtype_get_stride(inter, member_vtype);
-    
-    // TODO(Jose): FREE MEMORY HERE
-    
-    ObjectMemory member = fixed_size_memory((u8*)src_struct->struct_.data + member_stride, member_size);
-    ObjectMemory* dst_memory = obj_get_data(dst);
-    *dst_memory = obj_copy_data(inter, member, member_vtype);
+RawBuffer obj_get_element_memory(Interpreter* inter, Object* obj, i64 index) {
+    return obj_get_element_memory(inter, obj->memory, obj->vtype, index);
 }
 
 b32 obj_copy(Interpreter* inter, Object* dst, Object* src)
 {
     if (dst->vtype != src->vtype) return false;
-    
-    ObjectMemory* dst_memory = obj_get_data(dst);
-    *dst_memory = obj_copy_data(inter, src);
-    
+    obj_copy_data(inter, dst->memory, src->memory, dst->vtype);
     return true;
 }
 
-void obj_set_int(Object* dst, i64 value)
-{
-    if (dst->vtype != VType_Int) {
-        assert(0);
-        return;
-    }
-    dst->integer.value = value;
+String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw) {
+    return string_from_obj_memory(arena, inter, obj->memory, obj->vtype, raw);
 }
 
-void obj_set_bool(Object* dst, b32 value)
-{
-    if (dst->vtype != VType_Bool) {
-        assert(0);
-        return;
-    }
-    dst->boolean.value = value;
-}
-
-void obj_set_string(Interpreter* inter, Object* dst, String value)
-{
-    // TODO(Jose): FREE MEMORY HERE
-    
-    dst->string = alloc_string_memory(inter, value);
-}
-
-
-String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw)
+String string_from_obj_memory(Arena* arena, Interpreter* inter, RawBuffer memory, i32 vtype, b32 raw)
 {
     SCRATCH(arena);
     
-    if (is_string(obj)) {
-        if (raw) return get_string(obj);
-        return string_format(arena, "\"%S\"", get_string(obj));
+    if (vtype == VType_String) {
+        if (raw) return get_string(memory);
+        return string_format(arena, "\"%S\"", get_string(memory));
     }
-    if (is_int(obj)) { return string_format(arena, "%l", get_int(obj)); }
-    if (is_bool(obj)) { return STR(get_bool(obj) ? "true" : "false"); }
-    if (obj->vtype == VType_Void) { return STR("void"); }
-    if (obj->vtype == VType_Unknown) { return STR("unknown"); }
+    if (vtype == VType_Int) { return string_format(arena, "%l", get_int(memory)); }
+    if (vtype == VType_Bool) { return STR(get_bool(memory) ? "true" : "false"); }
+    if (vtype == VType_Void) { return STR("void"); }
+    if (vtype == VType_Unknown) { return STR("unknown"); }
     
-    VariableType type = vtype_get(inter, obj->vtype);
+    VariableType type = vtype_get(inter, vtype);
     
     if (type.kind == VariableKind_Array)
     {
@@ -1624,11 +1497,13 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw)
         
         append(&builder, STR("{ "));
         
-        Object* element = obj_alloc_temp(inter, type.array_of);
-        foreach(i, obj->array.count) {
-            obj_copy_from_element(inter, element, obj, i);
-            append(&builder, string_from_obj(scratch.arena, inter, element, false));
-            if (i < obj->array.count - 1) append(&builder, ", ");
+        assert(memory.size == sizeof(ObjectMemory_Array));
+        ObjectMemory_Array* array = (ObjectMemory_Array*)memory.data;
+        
+        foreach(i, array->count) {
+            RawBuffer element_memory = obj_get_element_memory(inter, memory, vtype, i);
+            append(&builder, string_from_obj_memory(scratch.arena, inter, element_memory, type.array_of, false));
+            if (i < array->count - 1) append(&builder, ", ");
         }
         
         append(&builder, STR(" }"));
@@ -1638,7 +1513,7 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw)
     
     if (type.kind == VariableKind_Enum)
     {
-        i64 index = obj->enum_.index;
+        i64 index = get_enum_index(inter, memory);
         if (index < 0 || index >= type.enum_names.count) return STR("?");
         return type.enum_names[(u32)index];
     }
@@ -1651,9 +1526,9 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw)
         
         foreach(i, type.struct_vtypes.count)
         {
-            Object* member = obj_alloc_temp(inter, type.struct_vtypes[i]);
-            obj_copy_from_struct_member(inter, member, obj, i);
-            append(&builder, string_from_obj(scratch.arena, inter, member, false));
+            i32 member_vtype = type.struct_vtypes[i];
+            RawBuffer member_memory = obj_get_element_memory(inter, memory, vtype, i);
+            append(&builder, string_from_obj_memory(scratch.arena, inter, member_memory, member_vtype, false));
             if (i < type.struct_vtypes.count - 1) append(&builder, ", ");
         }
         
@@ -1833,11 +1708,7 @@ Object* define_object(Interpreter* inter, String identifier, i32 vtype)
     obj->identifier = identifier;
     obj->vtype = vtype;
     obj->scope = scope;
-    
-    VariableType type = vtype_get(inter, vtype);
-    if (type.kind == VariableKind_Struct) {
-        obj->struct_ = alloc_struct_memory(inter, type.struct_stride);
-    }
+    obj->memory = obj_memory_alloc_empty(inter, vtype);
     
     return obj;
 }
@@ -1892,7 +1763,7 @@ Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*>
     b32 is_intrinsic = fn->intrinsic_fn != NULL;
     
     if (is_intrinsic && !inter->settings.execute) {
-        return obj_alloc_temp(inter, fn->return_vtype);
+        return obj_alloc_temp(inter, fn->return_vtype, {});
     }
     
     FunctionReturn ret{};
@@ -1948,24 +1819,23 @@ Object* member_from_object(Interpreter* inter, Object* obj, String member)
     if (obj_type.kind == VariableKind_Array)
     {
         if (string_equals(member, STR("count"))) {
-            return obj_alloc_temp_int(inter, obj->array.count);
+            return obj_alloc_temp_int(inter, get_array_count(obj));
         }
     }
     
     if (obj_type.kind == VariableKind_Enum)
     {
+        i64 index = get_enum_index(inter, obj);
         if (string_equals(member, STR("index"))) {
-            return obj_alloc_temp_int(inter, obj->enum_.index);
+            return obj_alloc_temp_int(inter, index);
         }
         if (string_equals(member, STR("value"))) {
-            i64 index = obj->enum_.index;
             if (index < 0 || index >= obj_type.enum_values.count) {
                 return obj_alloc_temp_string(inter, STR("?"));
             }
             return obj_alloc_temp_int(inter, obj_type.enum_values[(u32)index]);
         }
         if (string_equals(member, STR("name"))) {
-            i64 index = obj->enum_.index;
             if (index < 0 || index >= obj_type.enum_names.count) {
                 return obj_alloc_temp_string(inter, STR("?"));
             }
@@ -1979,8 +1849,8 @@ Object* member_from_object(Interpreter* inter, Object* obj, String member)
         {
             if (string_equals(member, obj_type.struct_names[i]))
             {
-                Object* member = obj_alloc_temp(inter, obj_type.struct_vtypes[i]);
-                obj_copy_from_struct_member(inter, member, obj, i);
+                RawBuffer member_memory = obj_get_element_memory(inter, obj, i);
+                Object* member = obj_alloc_temp(inter, obj_type.struct_vtypes[i], member_memory);
                 return member;
             }
         }
@@ -2099,4 +1969,173 @@ b32 skip_ops(Interpreter* inter)
     Scope* returnable_scope = get_returnable_scope(inter);
     if (inter->settings.execute && returnable_scope->expected_return_vtype > 0 && returnable_scope->return_obj != inter->void_obj) return true;
     return false;
+}
+
+b32 is_valid(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype > 0;
+}
+b32 is_unknown(const Object* obj) {
+    if (obj == NULL) return true;
+    return obj->vtype < 0;
+}
+
+b32 is_void(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_Void;
+}
+b32 is_int(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_Int;
+}
+b32 is_bool(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_Bool;
+}
+b32 is_string(const Object* obj) {
+    if (obj == NULL) return false;
+    return obj->vtype == VType_String;
+}
+b32 is_array(i32 vtype) {
+    u32 dims;
+    decode_vtype(vtype, NULL, &dims);
+    return dims > 0;
+}
+b32 is_array(Object* obj) {
+    if (obj == NULL) return false;
+    return is_array(obj->vtype);
+}
+b32 is_enum(Interpreter* inter, i32 vtype) {
+    return vtype_get(inter, vtype).kind == VariableKind_Enum;
+}
+b32 is_enum(Interpreter* inter, Object* obj) {
+    if (obj == NULL) return false;
+    return is_enum(inter, obj->vtype);
+}
+b32 is_struct(Interpreter* inter, i32 vtype) {
+    return vtype_get(inter, vtype).kind == VariableKind_Struct;
+}
+
+i64 get_int(Object* obj) {
+    assert(is_int(obj));
+    return get_int(obj->memory);
+}
+i64 get_int(RawBuffer memory) {
+    if (memory.size != sizeof(ObjectMemory_Int)) {
+        assert(0);
+        return 0;
+    }
+    return ((ObjectMemory_Int*)memory.data)->value;
+}
+
+b32 get_bool(Object* obj) {
+    assert(is_bool(obj));
+    return get_bool(obj->memory);
+}
+b32 get_bool(RawBuffer memory) {
+    if (memory.size != sizeof(ObjectMemory_Bool)) {
+        assert(0);
+        return false;
+    }
+    return ((ObjectMemory_Bool*)memory.data)->value;
+}
+
+i64 get_enum_index(Interpreter* inter, Object* obj) {
+    assert(is_enum(inter, obj));
+    return get_enum_index(inter, obj->memory);
+}
+i64 get_enum_index(Interpreter* inter, RawBuffer memory) {
+    if (memory.size != sizeof(ObjectMemory_Enum)) {
+        assert(0);
+        return 0;
+    }
+    return ((ObjectMemory_Enum*)memory.data)->index;
+}
+
+String get_string(Object* obj) {
+    assert(is_string(obj));
+    return get_string(obj->memory);
+}
+String get_string(RawBuffer memory) {
+    if (memory.size != sizeof(ObjectMemory_String)) {
+        assert(0);
+        return {};
+    }
+    ObjectMemory_String* mem = (ObjectMemory_String*)memory.data;
+    String str;
+    str.size = mem->size;
+    str.data = mem->data;
+    return str;
+}
+
+void set_int(Object* obj, i64 value)
+{
+    assert(is_int(obj));
+    if (obj->memory.size != sizeof(ObjectMemory_Int)) {
+        assert(0);
+        return;
+    }
+    ObjectMemory_Int* mem = (ObjectMemory_Int*)obj->memory.data;
+    mem->value = value;
+}
+
+void set_bool(Object* obj, b32 value)
+{
+    assert(is_bool(obj));
+    if (obj->memory.size != sizeof(ObjectMemory_Bool)) {
+        assert(0);
+        return;
+    }
+    ObjectMemory_Bool* mem = (ObjectMemory_Bool*)obj->memory.data;
+    mem->value = value;
+}
+void set_enum_index(Interpreter* inter, Object* obj, i64 value)
+{
+    assert(is_enum(inter, obj));
+    if (obj->memory.size != sizeof(ObjectMemory_Enum)) {
+        assert(0);
+        return;
+    }
+    ObjectMemory_Enum* mem = (ObjectMemory_Enum*)obj->memory.data;
+    mem->index = value;
+}
+
+void set_string(Interpreter* inter, Object* obj, String value)
+{
+    // TODO(Jose): HANDLE DYNAMIC MEMORY
+    
+    ObjectMemory_String dst;
+    dst.size = value.size;
+    dst.data = (char*)obj_memory_dynamic_alloc(inter, value.size);
+    memory_copy(dst.data, value.data, value.size);
+    
+    assert(sizeof(dst) == obj->memory.size);
+    memory_copy(obj->memory.data, &dst, obj->memory.size);
+}
+
+i64 get_array_count(Object* obj) {
+    assert(is_array(obj));
+    if (obj->memory.size != sizeof(ObjectMemory_Array)) {
+        assert(0);
+        return 0;
+    }
+    ObjectMemory_Array* mem = (ObjectMemory_Array*)obj->memory.data;
+    return mem->count;
+}
+
+void* get_array_data(Object* obj) {
+    assert(is_array(obj));
+    if (obj->memory.size != sizeof(ObjectMemory_Array)) {
+        assert(0);
+        return 0;
+    }
+    ObjectMemory_Array* mem = (ObjectMemory_Array*)obj->memory.data;
+    return mem->data;
+}
+
+void resize_array(Interpreter* inter, ObjectMemory_Array* array, i64 count, i32 stride)
+{
+    // TODO(Jose): HANDLE DYNAMIC MEMORY
+    array->count = count;
+    array->data = obj_memory_dynamic_alloc(inter, count * stride);
 }
