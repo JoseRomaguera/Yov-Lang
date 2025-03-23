@@ -526,6 +526,7 @@ void print_report(Yov* ctx, Report report);
 #define report_function_wrong_parameter_type(_code, _f, _t, _c) report_error(inter->ctx, _code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
 #define report_function_wrong_return_type(_code, _t) report_error(inter->ctx, _code, "Expected a '%S' as a return", _t);
 #define report_function_no_return(_code, _f) report_error(inter->ctx, _code, "Not all paths of '%S' have a return", _f);
+#define report_symbol_not_invokable(_code, _v) report_error(inter->ctx, _code, "Not invokable symbol '%S'", _v);
 #define report_indexing_expects_an_int(_code) report_error(inter->ctx, _code, "Indexing expects an Int");
 #define report_indexing_not_allowed(_code, _t) report_error(inter->ctx, _code, "Indexing not allowed for a '%S'", _t);
 #define report_indexing_out_of_bounds(_code) report_error(inter->ctx, _code, "Index out of bounds");
@@ -537,6 +538,7 @@ void print_report(Yov* ctx, Report report);
 #define report_semantic_unknown_op(_code) report_error(inter->ctx, _code, "Unknown operation: {line}");
 #define report_struct_recursive(_code) report_error(inter->ctx, _code, "Recursive struct definition");
 #define report_struct_circular_dependency(_code) report_error(inter->ctx, _code, "Struct has circular dependency");
+#define report_struct_implicit_member_type(_code) report_error(inter->ctx, _code, "Implicit member type is not allowed in structs");
 
 //- LANG REPORTS
 
@@ -810,6 +812,7 @@ struct VariableType {
     Array<String> struct_names;
     Array<i32> struct_vtypes;
     Array<u32> struct_strides;
+    Array<OpNode*> struct_initialize_expresions;
     u32 struct_stride;
 };
 
@@ -917,7 +920,7 @@ Object* obj_alloc_temp_int(Interpreter* inter, i64 value);
 Object* obj_alloc_temp_bool(Interpreter* inter, b32 value);
 Object* obj_alloc_temp_string(Interpreter* inter, String value);
 Object* obj_alloc_temp_array(Interpreter* inter, i32 element_vtype, i64 count);
-Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions);
+Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions, b32 initialize_elements);
 Object* obj_alloc_temp_enum(Interpreter* inter, i32 vtype, i64 index);
 Object* obj_alloc_temp_array_from_enum(Interpreter* inter, i32 enum_vtype);
 
@@ -960,6 +963,7 @@ inline_fn ExpresionContext expresion_context_make(i32 expected_vtype) {
 Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext context);
 Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
 i32 interpret_object_type(Interpreter* inter, OpNode* node0);
+void interpret_object_initialize(Interpreter* inter, RawBuffer buffer, i32 vtype, OpNode* expresion);
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);

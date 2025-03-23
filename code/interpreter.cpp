@@ -346,7 +346,8 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
                 }
             }
             
-            return obj_alloc_temp_array_multidimensional(inter, base_vtype, dimensions);
+            Object* obj = obj_alloc_temp_array_multidimensional(inter, base_vtype, dimensions, true);
+            return obj;
         }
         
         if (objects.count == 0) {
@@ -450,6 +451,7 @@ Object* interpret_assignment_for_object_definition(Interpreter* inter, OpNode_Ob
         }
         
         assignment_result = obj_alloc_temp(inter, vtype, {});
+        interpret_object_initialize(inter, assignment_result->memory, assignment_result->vtype, NULL);
     }
     else
     {
@@ -473,9 +475,9 @@ void interpret_object_definition(Interpreter* inter, OpNode* node0)
     
     auto node = (OpNode_ObjectDefinition*)node0;
     String identifier = node->object_name;
-    Object* obj = find_object(inter, identifier, false);
-    if (obj != NULL) {
-        report_object_duplicated(node->code, identifier);
+    
+    if (find_symbol(inter, identifier).type != SymbolType_None) {
+        report_symbol_duplicated(node->code, identifier);
         return;
     }
     
@@ -483,7 +485,7 @@ void interpret_object_definition(Interpreter* inter, OpNode* node0)
     if (is_unknown(assignment_result)) return;
     if (is_void(assignment_result)) return;
     
-    obj = define_object(inter, identifier, assignment_result->vtype);
+    Object* obj = define_object(inter, identifier, assignment_result->vtype);
     
     if (inter->settings.execute)
     {
@@ -762,24 +764,46 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expres
     SCRATCH();
     auto node = (OpNode_FunctionCall*)node0;
     
-    FunctionDefinition* fn = find_function(inter, node->identifier);
+    Symbol symbol = find_symbol(inter, node->identifier);
     
-    if (fn == NULL) {
-        report_function_not_found(node->code, node->identifier);
-        return inter->nil_obj;
+    if (symbol.type == SymbolType_Function)
+    {
+        FunctionDefinition* fn = symbol.function;
+        
+        if (fn == NULL) {
+            report_function_not_found(node->code, node->identifier);
+            return inter->nil_obj;
+        }
+        
+        Array<Object*> objects = array_make<Object*>(scratch.arena, node->parameters.count);
+        
+        foreach(i, objects.count) {
+            i32 expected_vtype = -1;
+            if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
+            objects[i] = interpret_expresion(inter, node->parameters[i], expresion_context_make(expected_vtype));
+        }
+        
+        if (skip_ops(inter)) return inter->nil_obj;
+        
+        return call_function(inter, fn, objects, node, is_expresion);
     }
     
-    Array<Object*> objects = array_make<Object*>(scratch.arena, node->parameters.count);
-    
-    foreach(i, objects.count) {
-        i32 expected_vtype = -1;
-        if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
-        objects[i] = interpret_expresion(inter, node->parameters[i], expresion_context_make(expected_vtype));
+    if (symbol.type == SymbolType_Type)
+    {
+        VariableType type = vtype_get(inter, symbol.vtype);
+        
+        Object* obj = obj_alloc_temp(inter, symbol.vtype, {});
+        interpret_object_initialize(inter, obj->memory, obj->vtype, NULL);
+        return obj;
     }
     
-    if (skip_ops(inter)) return inter->nil_obj;
-    
-    return call_function(inter, fn, objects, node, is_expresion);
+    if (symbol.type == SymbolType_None) {
+        report_symbol_not_found(node->code, node->identifier);
+    }
+    else {
+        report_symbol_not_invokable(node->code, node->identifier);
+    }
+    return inter->nil_obj;
 }
 
 i32 interpret_object_type(Interpreter* inter, OpNode* node0)
@@ -789,6 +813,65 @@ i32 interpret_object_type(Interpreter* inter, OpNode* node0)
     vtype = vtype_from_array_dimension(inter, vtype, node->array_dimensions);
     if (vtype < 0) report_object_type_not_found(node->code, node->name);
     return vtype;
+}
+
+void interpret_object_initialize(Interpreter* inter, RawBuffer buffer, i32 vtype, OpNode* expresion)
+{
+    SCRATCH();
+    
+    // TODO(Jose): FREE MEMORY?
+    memory_zero(buffer.data, buffer.size);
+    
+    if (expresion == NULL || expresion->kind == OpKind_None) 
+    {
+        VariableType type = vtype_get(inter, vtype);
+        
+        if (type.kind == VariableKind_Struct)
+        {
+            u8* data = (u8*)buffer.data;
+            
+            foreach(i, type.struct_vtypes.count)
+            {
+                i32 member_vtype = type.struct_vtypes[i];
+                u32 member_stride = type.struct_strides[i];
+                OpNode* member_initialize_expresion = type.struct_initialize_expresions[i];
+                u32 member_size = vtype_get_size(inter, member_vtype);
+                
+                RawBuffer member_buffer = { data + member_stride, member_size };
+                interpret_object_initialize(inter, member_buffer, member_vtype, member_initialize_expresion);
+            }
+        }
+        else if (type.kind == VariableKind_Array)
+        {
+            ObjectMemory_Array* array = (ObjectMemory_Array*)buffer.data;
+            
+            i32 element_vtype = type.array_of;
+            u32 element_size = vtype_get_size(inter, element_vtype);
+            
+            u8* data = (u8*)array->data;
+            
+            foreach(i, array->count)
+            {
+                u32 element_stride = element_size * i;
+                RawBuffer element_buffer = { data + element_stride, element_size };
+                interpret_object_initialize(inter, element_buffer, element_vtype, NULL);
+            }
+        }
+    }
+    else
+    {
+        Object* obj = interpret_expresion(inter, expresion, expresion_context_make(vtype));
+        if (obj == inter->nil_obj) return;
+        if (obj == inter->void_obj) return;
+        
+        if (obj->vtype != vtype) {
+            report_type_missmatch_assign(expresion->code, string_from_vtype(scratch.arena, inter, obj->vtype), string_from_vtype(scratch.arena, inter, vtype));
+            return;
+        }
+        
+        assert(buffer.size == obj->memory.size);
+        memory_copy(buffer.data, obj->memory.data, buffer.size);
+    }
 }
 
 void interpret_return(Interpreter* inter, OpNode* node0)
@@ -1024,12 +1107,21 @@ internal_fn void register_definitions(Interpreter* inter)
             
             assert(node->values.count == node->names.count);
             
+            b32 valid = true;
+            
+            String name = node->identifier;
+            
+            if (find_symbol(inter, name).type != SymbolType_None) {
+                report_symbol_duplicated(node->code, name);
+                valid = false;
+            }
+            
             Array<i64> values = array_make<i64>(scratch.arena, node->values.count);
             foreach(i, values.count)
             {
                 OpNode* value_node = node->values[i];
                 
-                if (value_node == NULL) {
+                if (value_node == NULL || value_node->kind == OpKind_None) {
                     values[i] = i;
                     continue;
                 }
@@ -1039,13 +1131,16 @@ internal_fn void register_definitions(Interpreter* inter)
                 if (obj->vtype < 0) continue;
                 if (obj->vtype != VType_Int) {
                     report_enum_value_expects_an_int(node->code);
+                    valid = false;
                     continue;
                 }
                 
                 values[i] = get_int(obj);
             }
             
-            define_enum(inter, node->identifier, node->names, values);
+            if (!valid) continue;
+            
+            define_enum(inter, name, node->names, values);
         }
         
         // Structs
@@ -1102,9 +1197,15 @@ internal_fn void register_definitions(Interpreter* inter)
                 b32 valid = true;
                 String name = node->identifier;
                 
+                if (find_symbol(inter, name).type != SymbolType_None) {
+                    report_symbol_duplicated(node->code, name);
+                    valid = false;
+                }
+                
                 Array<i32> vtypes = array_make<i32>(inter->ctx->static_arena, node->members.count);
                 Array<String> names = array_make<String>(inter->ctx->static_arena, node->members.count);
                 Array<u32> strides = array_make<u32>(inter->ctx->static_arena, node->members.count);
+                Array<OpNode*> initialize_expresions = array_make<OpNode*>(inter->ctx->static_arena, node->members.count);
                 
                 u32 stride = 0;
                 
@@ -1118,11 +1219,19 @@ internal_fn void register_definitions(Interpreter* inter)
                         continue;
                     }
                     
+                    if (member->type->name.size == 0) {
+                        report_struct_implicit_member_type(node->code);
+                        valid = false;
+                        continue;
+                    }
+                    
                     vtypes[i] = interpret_object_type(inter, member->type);
                     if (vtypes[i] < 0) {
                         valid = false;
                         continue;
                     }
+                    
+                    initialize_expresions[i] = member->assignment;
                     
                     strides[i] = stride;
                     stride += vtype_get_size(inter, vtypes[i]);
@@ -1138,6 +1247,7 @@ internal_fn void register_definitions(Interpreter* inter)
                 t.struct_vtypes = vtypes;
                 t.struct_strides = strides;
                 t.struct_stride = stride;
+                t.struct_initialize_expresions = initialize_expresions;
                 array_add(&inter->vtype_table, t);
             }
         }
@@ -1151,6 +1261,11 @@ internal_fn void register_definitions(Interpreter* inter)
             OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)node0;
             
             b32 valid = true;
+            
+            if (find_symbol(inter, node->identifier).type != SymbolType_None) {
+                report_symbol_duplicated(node->code, node->identifier);
+                valid = false;
+            }
             
             Array<ParameterDefinition> parameters = array_make<ParameterDefinition>(inter->ctx->static_arena, node->parameters.count);
             
@@ -1187,6 +1302,16 @@ internal_fn void register_definitions(Interpreter* inter)
             fn.parameters = parameters;
             fn.defined_fn = node->block;
             array_add(&inter->functions, fn);
+        }
+    }
+    
+    // Analyze initialize expresions
+    if (!inter->settings.execute)
+    {
+        for (i32 vtype = VType_Void + 1; vtype < inter->vtype_table.count; vtype++)
+        {
+            RawBuffer memory = obj_memory_alloc_empty(inter, vtype);
+            interpret_object_initialize(inter, memory, vtype, NULL);
         }
     }
     
@@ -1375,7 +1500,8 @@ void decode_vtype(i32 vtype, u32* _index, u32* _dimensions) {
     }
 }
 
-RawBuffer obj_memory_alloc_empty(Interpreter* inter, i32 vtype) {
+RawBuffer obj_memory_alloc_empty(Interpreter* inter, i32 vtype)
+{
     u32 size = vtype_get_size(inter, vtype);
     RawBuffer buffer;
     buffer.data = arena_push(inter->ctx->static_arena, size);
@@ -1433,7 +1559,7 @@ Object* obj_alloc_temp_array(Interpreter* inter, i32 element_vtype, i64 count)
     return obj;
 }
 
-ObjectMemory_Array alloc_multidimensional_array_memory(Interpreter* inter, i32 element_vtype, Array<i64> dimensions)
+ObjectMemory_Array alloc_multidimensional_array_memory(Interpreter* inter, i32 element_vtype, Array<i64> dimensions, b32 initialize_elements)
 {
     i32 vtype = vtype_from_array_dimension(inter, element_vtype, dimensions.count);
     i32 array_of = vtype_from_array_element(inter, vtype);
@@ -1443,12 +1569,20 @@ ObjectMemory_Array alloc_multidimensional_array_memory(Interpreter* inter, i32 e
     ObjectMemory_Array mem{};
     resize_array(inter, &mem, count, stride);
     
+    if (initialize_elements) {
+        u8* data = (u8*)mem.data;
+        foreach(i, count) {
+            RawBuffer element = { data + i * stride, stride };
+            interpret_object_initialize(inter, element, array_of, NULL);
+        }
+    }
+    
     if (dimensions.count > 1)
     {
         ObjectMemory_Array* elements = (ObjectMemory_Array*)mem.data;
         for (i64 i = 0; i < count; ++i) {
             ObjectMemory_Array* element = elements + i;
-            *element = alloc_multidimensional_array_memory(inter, element_vtype, array_subarray(dimensions, 0, dimensions.count - 1));
+            *element = alloc_multidimensional_array_memory(inter, element_vtype, array_subarray(dimensions, 0, dimensions.count - 1), initialize_elements);
         }
     }
     
@@ -1456,14 +1590,14 @@ ObjectMemory_Array alloc_multidimensional_array_memory(Interpreter* inter, i32 e
 }
 
 
-Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions)
+Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions, b32 initialize_elements)
 {
     i32 vtype = vtype_from_array_dimension(inter, element_vtype, dimensions.count);
     Object* obj = obj_alloc_temp(inter, vtype, {});
     ObjectMemory_Array* array = (ObjectMemory_Array*)obj->memory.data;
     
     i32 array_of = vtype_from_array_element(inter, vtype);
-    *array = alloc_multidimensional_array_memory(inter, element_vtype, dimensions);
+    *array = alloc_multidimensional_array_memory(inter, element_vtype, dimensions, initialize_elements);
     return obj;
 }
 

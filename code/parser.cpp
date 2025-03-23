@@ -418,10 +418,9 @@ OpNode* extract_expresion(Parser* parser)
                 }
             }
             
-            if (preference == i32_max) continue;
+            if (preference == i32_max || braces_depth != 0) continue;
             
             preference += parenthesis_depth * depth_mult;
-            preference += braces_depth * depth_mult;
             
             if (preference < min_preference) {
                 min_preference = preference;
@@ -1070,7 +1069,7 @@ OpNode* extract_object_definition(Parser* parser)
         return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
-    OpNode_ObjectType* node_type = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
+    OpNode_ObjectType* node_type = NULL;
     
     Token type_or_assignment_token = peek_token(parser);
     
@@ -1109,6 +1108,10 @@ OpNode* extract_object_definition(Parser* parser)
     else {
         assignment_node = alloc_node(parser, OpKind_None, starting_token.code);
     }
+    
+    if (node_type == NULL) node_type = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
+    
+    skip_tokens_before_op(parser);
     
     auto node = (OpNode_ObjectDefinition*)alloc_node(parser, OpKind_ObjectDefinition, starting_token.code);
     node->assignment = assignment_node;
