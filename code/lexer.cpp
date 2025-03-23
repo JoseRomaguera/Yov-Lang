@@ -37,6 +37,7 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
         else if (string_equals(STR("enum"), token.value)) kind = TokenKind_EnumKeyword;
         else if (string_equals(STR("struct"), token.value)) kind = TokenKind_StructKeyword;
         else if (string_equals(STR("return"), token.value)) kind = TokenKind_ReturnKeyword;
+        else if (string_equals(STR("import"), token.value)) kind = TokenKind_ImportKeyword;
         else if (string_equals(STR("true"), token.value)) kind = TokenKind_BoolLiteral;
         else if (string_equals(STR("false"), token.value)) kind = TokenKind_BoolLiteral;
     }
@@ -250,13 +251,13 @@ inline_fn Token extract_next_token(Lexer* lexer)
     return extract_token(lexer, TokenKind_Error, 1);
 }
 
-Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens)
+Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens, i32 script_id)
 {
     Lexer* lexer = arena_push_struct<Lexer>(ctx->temp_arena);
     lexer->ctx = ctx;
     lexer->tokens = pooled_array_make<Token>(lexer->ctx->temp_arena, 1024);
     lexer->text = text;
-    lexer->script_id = 0;
+    lexer->script_id = script_id;
     
     lexer->code_line = 1;
     lexer->code_column = 0;

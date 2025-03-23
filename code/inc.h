@@ -397,6 +397,7 @@ enum TokenKind {
     TokenKind_EnumKeyword,
     TokenKind_StructKeyword,
     TokenKind_ReturnKeyword,
+    TokenKind_ImportKeyword,
     
     TokenKind_BoolLiteral,
 };
@@ -425,6 +426,8 @@ void print_ex(Severity severity, String str, ...);
 
 #define print_separator() print_ex(Severity_Info, STR("=========================\n"))
 
+struct OpNode;
+
 struct Report {
     String text;
     CodeLocation code;
@@ -435,15 +438,21 @@ struct ProgramArg {
     String value;
 };
 
+struct YovScript {
+    String path;
+    String name;
+    String dir;
+    String text;
+    OpNode* ast;
+};
+
 struct Yov {
     Arena* static_arena;
     Arena* temp_arena;
     
-    String script_name;
-    String script_dir;
-    String script_path;
-    String script_text;
+    String main_script_path;
     
+    PooledArray<YovScript> scripts;
     String caller_dir;
     
     Array<ProgramArg> args;
@@ -455,7 +464,10 @@ struct Yov {
 Yov* yov_initialize(Arena* arena, String script_path);
 void yov_shutdown(Yov* ctx);
 
-String yov_get_script_path(Yov* ctx, i32 script_id);
+i32 yov_add_script(Yov* ctx, String path, String text);
+void yov_fill_script(Yov* ctx, i32 script_id, OpNode* ast);
+
+YovScript* yov_get_script(Yov* ctx, i32 script_id);
 String yov_get_line_sample(Arena* arena, Yov* ctx, CodeLocation code);
 
 b32 generate_program_args(Yov* ctx, Array<String> raw_args);
@@ -499,12 +511,15 @@ void print_report(Yov* ctx, Report report);
 #define report_assign_operator_not_found(_code) report_error(parser->ctx, _code, "Operator not found for an assignment");
 #define report_enumdef_expecting_comma_separated_identifier(_code) report_error(parser->ctx, _code, "Expecting comma separated identifier for enum values");
 #define report_expecting_object_definition(_code) report_error(parser->ctx, _code, "Expecting an object definition");
+#define report_expecting_string_literal(_code) report_error(parser->ctx, _code, "Expecting string literal");
+#define report_expecting_semicolon(_code) report_error(parser->ctx, _code, "Expecting semicolon");
 
 //- SEMANTIC REPORTS
 
 #define report_zero_division(_code) report_error(inter->ctx, _code, "Divided by zero");
 #define report_right_path_cant_be_absolute(_code) report_error(inter->ctx, _code, "Right path can't be absolute");
 #define report_nested_definition(_code) report_error(inter->ctx, _code, "This definition can't be nested");
+#define report_unsupported_operations(_code) report_error(inter->ctx, _code, "Unsupported operations outside main script");
 #define report_type_missmatch_append(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't append a '%S' into '%S'", _v0, _v1);
 #define report_type_missmatch_array_expr(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch in array expresion, expecting '%S' but found '%S'", _v0, _v1);
 #define report_type_missmatch_assign(_code, _v0, _v1) report_error(inter->ctx, _code, "Type missmatch, can't assign '%S' to '%S'", _v0, _v1);
@@ -559,7 +574,7 @@ struct Lexer {
     u32 code_line;
 };
 
-Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens);
+Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens, i32 script_id);
 
 //- AST 
 
@@ -588,6 +603,7 @@ enum OpKind {
     OpKind_StructDefinition,
     OpKind_FunctionDefinition,
     OpKind_Return,
+    OpKind_Import,
 };
 
 struct OpNode {
@@ -706,6 +722,10 @@ struct OpNode_Return : OpNode {
     OpNode* expresion;
 };
 
+struct OpNode_Import : OpNode {
+    String path;
+};
+
 u32 get_node_size(OpKind kind);
 Array<OpNode*> get_node_childs(Arena* arena, OpNode* node);
 
@@ -747,6 +767,9 @@ OpNode* extract_object_type(Parser* parser);
 OpNode* extract_object_definition(Parser* parser);
 
 OpNode* generate_ast(Yov* ctx, Array<Token> tokens, b32 is_block);
+
+Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast);
+void resolve_imports(Yov* ctx, OpNode* ast);
 
 OpNode* process_function_call(Parser* parser, Array<Token> tokens);
 
@@ -863,7 +886,7 @@ struct InterpreterSettings {
     // TODO(Jose): b8 ignore_errors; // Ignore errors on execution and keep running
 };
 
-void interpret(Yov* ctx, OpNode* block, InterpreterSettings settings);
+void interpret(Yov* ctx, InterpreterSettings settings);
 
 enum ScopeType {
     ScopeType_Global,

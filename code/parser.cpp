@@ -25,6 +25,7 @@ internal_fn OpKind op_kind_from_tokens(Parser* parser)
     if (t0.kind == TokenKind_WhileKeyword) return OpKind_WhileStatement;
     if (t0.kind == TokenKind_ForKeyword) return OpKind_ForStatement;
     if (t0.kind == TokenKind_ReturnKeyword) return OpKind_Return;
+    if (t0.kind == TokenKind_ImportKeyword) return OpKind_Import;
     
     if (t0.kind == TokenKind_OpenBrace) return OpKind_Block;
     
@@ -1141,6 +1142,31 @@ internal_fn OpNode* extract_return(Parser* parser)
     return node;
 }
 
+internal_fn OpNode* extract_import(Parser* parser)
+{
+    Token import_token = extract_token(parser);
+    assert(import_token.kind == TokenKind_ImportKeyword);
+    
+    Token literal_token = extract_token(parser);
+    
+    if (literal_token.kind != TokenKind_StringLiteral) {
+        report_expecting_string_literal(import_token.code);
+        return alloc_node(parser, OpKind_Error, import_token.code);
+    }
+    
+    Token semicolon_token = peek_token(parser);
+    
+    if (semicolon_token.kind != TokenKind_NextSentence) {
+        report_expecting_semicolon(import_token.code);
+        return alloc_node(parser, OpKind_Error, import_token.code);
+    }
+    skip_tokens(parser, 1);
+    
+    OpNode_Import* node = (OpNode_Import*)alloc_node(parser, OpKind_Import, import_token.code);
+    node->path = literal_token.value;
+    return node;
+}
+
 OpNode* extract_block(Parser* parser)
 {
     SCRATCH();
@@ -1218,6 +1244,7 @@ OpNode* extract_op(Parser* parser)
         if (kind == OpKind_FunctionCall) node = extract_function_call(parser);
         if (kind == OpKind_ObjectDefinition) node = extract_object_definition(parser);
         if (kind == OpKind_Return) node = extract_return(parser);
+        if (kind == OpKind_Import) node = extract_import(parser);
         if (kind == OpKind_Block) node = extract_block(parser);
         assert(node != NULL);
         if (node == NULL) return NULL;
@@ -1240,4 +1267,84 @@ OpNode* generate_ast(Yov* ctx, Array<Token> tokens, b32 is_block) {
     parser_push_state(parser, tokens);
     if (is_block) return extract_block(parser);
     else return extract_op(parser);
+}
+
+internal_fn String resolve_import_path(Arena* arena, Yov* ctx, String caller_script_dir, String path)
+{
+    SCRATCH(arena);
+    path = path_resolve(scratch.arena, path);
+    
+    if (!os_path_is_absolute(path)) {
+        path = path_append(scratch.arena, caller_script_dir, path);
+    }
+    
+    return string_copy(arena, path);
+}
+
+Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast)
+{
+    SCRATCH(arena);
+    
+    if (ast->kind != OpKind_Block) return {};
+    OpNode_Block* node = (OpNode_Block*)ast;
+    
+    PooledArray<OpNode_Import*> to_resolve = pooled_array_make<OpNode_Import*>(scratch.arena, 8);
+    
+    foreach(i, node->ops.count) {
+        OpNode* import0 = node->ops[i];
+        if (import0->kind != OpKind_Import) continue;
+        OpNode_Import* import = (OpNode_Import*)import0;
+        array_add(&to_resolve, import);
+    }
+    
+    return array_from_pooled_array(arena, to_resolve);
+}
+
+void resolve_imports(Yov* ctx, OpNode* ast)
+{
+    SCRATCH();
+    
+    PooledArray<OpNode_Import*> to_resolve = pooled_array_make<OpNode_Import*>(scratch.arena, 8);
+    
+    {
+        Array<OpNode_Import*> imports = get_imports(scratch.arena, ast);
+        foreach(i, imports.count) array_add(&to_resolve, imports[i]);
+    }
+    
+    while (to_resolve.count)
+    {
+        OpNode_Import* import = to_resolve[to_resolve.count - 1];
+        array_erase(&to_resolve, to_resolve.count - 1);
+        
+        YovScript* caller_script = yov_get_script(ctx, import->code.script_id);
+        
+        String path = resolve_import_path(scratch.arena, ctx, caller_script->dir, import->path);
+        
+        b32 imported = false;
+        
+        for (auto it = pooled_array_make_iterator(&ctx->scripts); it.valid; ++it) {
+            if (string_equals(it.value->path, path)) {
+                imported = true;
+                break;
+            }
+        }
+        
+        if (imported) continue;
+        
+        RawBuffer raw_file;
+        if (!os_read_entire_file(ctx->static_arena, path, &raw_file)) {
+            report_error(ctx, import->code, "File '%S' not found", path);
+            continue;
+        }
+        
+        String script_text = STR(raw_file);
+        i32 script_id = yov_add_script(ctx, path, script_text);
+        Array<Token> tokens = generate_tokens(ctx, script_text, true, script_id);
+        OpNode* ast = generate_ast(ctx, tokens, true);
+        yov_fill_script(ctx, script_id, ast);
+        
+        Array<OpNode_Import*> imports = get_imports(scratch.arena, ast);
+        foreach(i, imports.count) array_add(&to_resolve, imports[i]);
+    }
+    
 }

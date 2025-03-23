@@ -141,15 +141,19 @@ void log_ast(OpNode* node, i32 depth)
 void yov_run_script(Yov* ctx, b32 trace, b32 user_assert, b32 analyze_only)
 {
     RawBuffer raw_file;
-    if (!os_read_entire_file(ctx->static_arena, ctx->script_path, &raw_file)) {
-        print_error("File '%S' not found\n", ctx->script_path);
+    if (!os_read_entire_file(ctx->static_arena, ctx->main_script_path, &raw_file)) {
+        print_error("File '%S' not found\n", ctx->main_script_path);
         return;
     }
     
-    ctx->script_text = STR(raw_file);
+    String script_text = STR(raw_file);
+    i32 script_id = yov_add_script(ctx, ctx->main_script_path, script_text);
     
-    Array<Token> tokens = generate_tokens(ctx, ctx->script_text, true);
+    Array<Token> tokens = generate_tokens(ctx, script_text, true, script_id);
     OpNode* ast = generate_ast(ctx, tokens, true);
+    yov_fill_script(ctx, script_id, ast);
+    
+    resolve_imports(ctx, ast);
     
     InterpreterSettings settings{};
     settings.print_execution = (b8)trace;
@@ -158,7 +162,7 @@ void yov_run_script(Yov* ctx, b32 trace, b32 user_assert, b32 analyze_only)
     // Semantic analysis of all the AST before execution
     {
         settings.execute = false;
-        interpret(ctx, ast, settings);
+        interpret(ctx, settings);
     }
     
     if (ctx->error_count != 0) {
@@ -170,7 +174,7 @@ void yov_run_script(Yov* ctx, b32 trace, b32 user_assert, b32 analyze_only)
     if (!analyze_only)
     {
         settings.execute = true;
-        interpret(ctx, ast, settings);
+        interpret(ctx, settings);
     }
     
     if (ctx->error_count != 0) {

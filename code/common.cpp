@@ -1096,6 +1096,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_EnumDefinition) return sizeof(OpNode_EnumDefinition);
     if (kind == OpKind_StructDefinition) return sizeof(OpNode_StructDefinition);
     if (kind == OpKind_FunctionDefinition) return sizeof(OpNode_FunctionDefinition);
+    if (kind == OpKind_Import) return sizeof(OpNode_Import);
     assert(0);
     return sizeof(OpNode) + KB(4);
 }
@@ -1216,6 +1217,7 @@ Yov* yov_initialize(Arena* arena, String script_path)
     ctx->static_arena = arena;
     ctx->temp_arena = arena_alloc(GB(32), 8);
     
+    ctx->scripts = pooled_array_make<YovScript>(arena, 8);
     ctx->reports = pooled_array_make<Report>(arena, 32);
     
     // Paths
@@ -1223,19 +1225,8 @@ Yov* yov_initialize(Arena* arena, String script_path)
         ctx->caller_dir = os_get_working_path(ctx->static_arena);
         
         if (!os_path_is_absolute(script_path)) script_path = path_append(scratch.arena, ctx->caller_dir, script_path);
-        ctx->script_path = string_copy(ctx->static_arena, script_path);
-        
-        ctx->script_name = path_get_last_element(ctx->script_path);
-        ctx->script_dir = path_resolve(ctx->static_arena, path_append(scratch.arena, ctx->script_path, STR("..")));
+        ctx->main_script_path = string_copy(ctx->static_arena, script_path);
     }
-    
-#if DEV && 0
-    print_info("Caller dir = %S\n", ctx->caller_dir);
-    print_info("Script path = %S\n", ctx->script_path);
-    print_info("Script name = %S\n", ctx->script_name);
-    print_info("Script dir = %S\n", ctx->script_dir);
-    print_info("\n------------------------------\n\n");
-#endif
     
     return ctx;
 }
@@ -1246,15 +1237,43 @@ void yov_shutdown(Yov* ctx)
     arena_free(ctx->temp_arena);
 }
 
-String yov_get_script_path(Yov* ctx, i32 script_id)
+i32 yov_add_script(Yov* ctx, String path, String text)
 {
-    assert(script_id == 0);
-    return ctx->script_path;
+    SCRATCH();
+    assert(os_path_is_absolute(path));
+    
+    path = string_copy(ctx->static_arena, path);
+    
+    YovScript script{};
+    script.path = path;
+    script.name = path_get_last_element(path);
+    script.dir = path_resolve(ctx->static_arena, path_append(scratch.arena, path, STR("..")));;
+    script.text = text;
+    
+    i32 id = ctx->scripts.count;
+    array_add(&ctx->scripts, script);
+    return id;
+}
+
+
+void yov_fill_script(Yov* ctx, i32 script_id, OpNode* ast) {
+    YovScript* script = yov_get_script(ctx, script_id);
+    script->ast = ast;
+}
+
+YovScript* yov_get_script(Yov* ctx, i32 script_id)
+{
+    if (script_id < 0 || script_id >= ctx->scripts.count) {
+        assert(0);
+        return NULL;
+    }
+    
+    return &ctx->scripts[script_id];
 }
 
 String yov_get_line_sample(Arena* arena, Yov* ctx, CodeLocation code)
 {
-    String text = ctx->script_text;
+    String text = yov_get_script(ctx, code.script_id)->text;
     u64 starting_cursor = code.start_line_offset;
     
     u64 cursor = starting_cursor;
@@ -1344,7 +1363,7 @@ void yov_print_reports(Yov* ctx)
 
 void print_report(Yov* ctx, Report report)
 {
-    String path = yov_get_script_path(ctx, report.code.script_id);
+    String path = yov_get_script(ctx, report.code.script_id)->path;
     print(Severity_Error, "%S(%u): %S\n", path, (u32)report.code.line, report.text);
 }
 
