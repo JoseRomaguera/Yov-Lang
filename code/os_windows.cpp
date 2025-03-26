@@ -12,17 +12,18 @@
 #include <shellapi.h>
 
 struct Windows {
-    u32 page_size;
     HANDLE console_handle;
-} windows;
+};
 
 internal_fn void set_console_text_color(Severity severity)
 {
+    Windows* windows = (Windows*)yov->os.internal;
+    
     CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
     WORD saved_attributes;
     
     // Save current attributes
-    GetConsoleScreenBufferInfo(windows.console_handle, &consoleInfo);
+    GetConsoleScreenBufferInfo(windows->console_handle, &consoleInfo);
     saved_attributes = consoleInfo.wAttributes;
     
     i32 att;
@@ -40,16 +41,22 @@ internal_fn void set_console_text_color(Severity severity)
         att = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
     }
     
-    SetConsoleTextAttribute(windows.console_handle, (WORD)att);
+    SetConsoleTextAttribute(windows->console_handle, (WORD)att);
+}
+
+void os_setup_memory_info()
+{
+    SYSTEM_INFO system_info;
+    GetSystemInfo(&system_info);
+    yov->os.page_size = system_info.dwAllocationGranularity;
 }
 
 void os_initialize()
 {
-    SYSTEM_INFO system_info;
-    GetSystemInfo(&system_info);
-    windows.page_size = system_info.dwAllocationGranularity;
+    yov->os.internal = arena_push_struct<Windows>(yov->static_arena);
+    Windows* windows = (Windows*)yov->os.internal;
     
-    windows.console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    windows->console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
 }
 
 void os_shutdown()
@@ -60,24 +67,17 @@ void os_shutdown()
 void os_print(Severity severity, String text)
 {
     SCRATCH();
+    Windows* windows = (Windows*)yov->os.internal;
     
     set_console_text_color(severity);
     
     String text0 = string_copy(scratch.arena, text);
     
     DWORD written;
-    //WriteConsoleA(windows.console_handle, text0.data, (u32)text0.size, &written, NULL);
-    WriteFile(windows.console_handle, text0.data, (u32)text0.size, &written, NULL);
-    FlushFileBuffers(windows.console_handle);
+    //WriteConsoleA(windows->console_handle, text0.data, (u32)text0.size, &written, NULL);
+    WriteFile(windows->console_handle, text0.data, (u32)text0.size, &written, NULL);
+    FlushFileBuffers(windows->console_handle);
     OutputDebugStringA(text0.data);
-}
-
-u64 os_get_page_size() {
-    return windows.page_size;
-}
-
-u32 os_pages_from_bytes(u64 bytes) {
-    return (u32)u64_divide_high(bytes, windows.page_size);
 }
 
 void* os_allocate_heap(u64 size) {
@@ -90,14 +90,14 @@ void os_free_heap(void* address) {
 
 void* os_reserve_virtual_memory(u32 pages, b32 commit)
 {
-    u64 bytes = (u64)pages * os_get_page_size();
+    u64 bytes = (u64)pages * yov->os.page_size;
     u32 flags = MEM_RESERVE;
     if (commit) flags |= MEM_COMMIT;
     return VirtualAlloc(NULL, bytes, flags, PAGE_READWRITE);
 }
 void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count)
 {
-    u64 page_size = os_get_page_size();
+    u64 page_size = yov->os.page_size;
     u64 byte_offset = (u64)page_offset * page_size;
     u8* ptr = (u8*)address + byte_offset;
     u64 bytes = (u64)page_count * page_size;
@@ -164,6 +164,27 @@ b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result)
     
     *result = buffer;
     return true;
+}
+
+Result os_write_entire_file(String path, RawBuffer data)
+{
+    SCRATCH();
+    String path0 = string_copy(scratch.arena, path);
+    HANDLE file = CreateFile(path0.data, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    
+    Result res{};
+    
+    if (file == INVALID_HANDLE_VALUE) {
+        res.message = string_from_last_error();
+        return res;
+    }
+    
+    WriteFile(file, data.data, (DWORD)data.size, NULL, NULL);
+    
+    CloseHandle(file);
+    
+    res.success = true;
+    return res;
 }
 
 Result os_copy_file(String dst_path, String src_path, b32 override)

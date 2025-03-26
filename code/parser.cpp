@@ -236,7 +236,7 @@ Array<Array<Token>> split_tokens_in_parameters(Arena* arena, Array<Token> tokens
 internal_fn OpNode* alloc_node(Parser* parser, OpKind kind, CodeLocation code)
 {
     u32 node_size = get_node_size(kind);
-    OpNode* node = (OpNode*)arena_push(parser->ctx->static_arena, node_size);
+    OpNode* node = (OpNode*)arena_push(yov->static_arena, node_size);
     node->kind = kind;
     node->code = code;
     return node;
@@ -248,7 +248,7 @@ internal_fn Array<OpNode*> process_parameters(Parser* parser, Array<Token> token
     if (tokens.count == 0) return {};
     
     Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, tokens);
-    Array<OpNode*> nodes = array_make<OpNode*>(parser->ctx->static_arena, parameters.count);
+    Array<OpNode*> nodes = array_make<OpNode*>(yov->static_arena, parameters.count);
     
     foreach(i, parameters.count) {
         Array<Token> parameter_tokens = parameters[i];
@@ -828,8 +828,8 @@ internal_fn OpNode* extract_enum_definition(Parser* parser)
     
     OpNode_EnumDefinition* node = (OpNode_EnumDefinition*)alloc_node(parser, OpKind_EnumDefinition, starting_token.code);
     node->identifier = identifier_token.value;
-    node->names = array_from_pooled_array(parser->ctx->static_arena, names);
-    node->values = array_from_pooled_array(parser->ctx->static_arena, values);
+    node->names = array_from_pooled_array(yov->static_arena, names);
+    node->values = array_from_pooled_array(yov->static_arena, values);
     return node;
 }
 
@@ -876,7 +876,7 @@ internal_fn OpNode* extract_struct_definition(Parser* parser)
     
     OpNode_StructDefinition* node = (OpNode_StructDefinition*)alloc_node(parser, OpKind_StructDefinition, starting_token.code);
     node->identifier = identifier_token.value;
-    node->members = array_from_pooled_array(parser->ctx->static_arena, members);
+    node->members = array_from_pooled_array(yov->static_arena, members);
     return node;
 }
 
@@ -910,7 +910,7 @@ internal_fn OpNode* extract_function_definition(Parser* parser)
         parameter_tokens = array_subarray(parameter_tokens, 1, parameter_tokens.count - 2);
         
         Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, parameter_tokens);
-        params = array_make<OpNode_ObjectDefinition*>(parser->ctx->static_arena, parameters.count);
+        params = array_make<OpNode_ObjectDefinition*>(yov->static_arena, parameters.count);
         
         u32 param_index = 0;
         b32 valid = true;
@@ -956,34 +956,44 @@ internal_fn OpNode* extract_function_definition(Parser* parser)
     }
     else return_node = alloc_node(parser, OpKind_None, starting_token.code);
     
-    if (peek_token(parser).kind != TokenKind_OpenBrace) {
+    Token start_block_token = peek_token(parser);
+    
+    OpNode* block = NULL;
+    
+    if (start_block_token.kind == TokenKind_NextSentence) {
+        block = alloc_node(parser, OpKind_None, start_block_token.code);
+    }
+    else if (start_block_token.kind == TokenKind_OpenBrace)
+    {
+        Array<Token> block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
+        
+        if (block_tokens.count < 2) {
+            report_common_missing_closing_brace(starting_token.code);
+            return alloc_node(parser, OpKind_Error, starting_token.code);
+        }
+        
+        if (block_tokens.count == 2) {
+            block = alloc_node(parser, OpKind_Block, block_tokens[0].code);
+        }
+        else {
+            block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
+            
+            parser_push_state(parser, block_tokens);
+            block = extract_block(parser);
+            parser_pop_state(parser);
+            
+            if (block->kind != OpKind_Block) {
+                report_common_missing_block(block_tokens[0].code);
+                return alloc_node(parser, OpKind_Error, starting_token.code);
+            }
+        }
+    }
+    else {
         report_common_missing_opening_brace(starting_token.code);
         return alloc_node(parser, OpKind_Error, starting_token.code);
     }
     
-    Array<Token> block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
     
-    if (block_tokens.count < 2) {
-        report_common_missing_closing_brace(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    OpNode_Block* block;
-    if (block_tokens.count == 2) {
-        block = (OpNode_Block*)alloc_node(parser, OpKind_Block, block_tokens[0].code);
-    }
-    else {
-        block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
-        
-        parser_push_state(parser, block_tokens);
-        block = (OpNode_Block*)extract_block(parser);
-        parser_pop_state(parser);
-        
-        if (block->kind != OpKind_Block) {
-            report_common_missing_block(block_tokens[0].code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-    }
     
     OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)alloc_node(parser, OpKind_FunctionDefinition, starting_token.code);
     node->identifier = identifier_token.value;
@@ -1204,7 +1214,7 @@ OpNode* extract_block(Parser* parser)
         array_add(&ops, node);
     }
     
-    block_node->ops = array_from_pooled_array(parser->ctx->static_arena, ops);
+    block_node->ops = array_from_pooled_array(yov->static_arena, ops);
     
     parser_pop_state(parser);
     
@@ -1259,26 +1269,13 @@ OpNode* extract_op(Parser* parser)
     return NULL;
 }
 
-OpNode* generate_ast(Yov* ctx, Array<Token> tokens, b32 is_block) {
-    Parser* parser = arena_push_struct<Parser>(ctx->temp_arena);
-    parser->ctx = ctx;
-    parser->state_stack = pooled_array_make<ParserState>(ctx->temp_arena, 8);
+OpNode* generate_ast(Array<Token> tokens, b32 is_block) {
+    Parser* parser = arena_push_struct<Parser>(yov->temp_arena);
+    parser->state_stack = pooled_array_make<ParserState>(yov->temp_arena, 8);
     
     parser_push_state(parser, tokens);
     if (is_block) return extract_block(parser);
     else return extract_op(parser);
-}
-
-internal_fn String resolve_import_path(Arena* arena, Yov* ctx, String caller_script_dir, String path)
-{
-    SCRATCH(arena);
-    path = path_resolve(scratch.arena, path);
-    
-    if (!os_path_is_absolute(path)) {
-        path = path_append(scratch.arena, caller_script_dir, path);
-    }
-    
-    return string_copy(arena, path);
 }
 
 Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast)
@@ -1300,51 +1297,80 @@ Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast)
     return array_from_pooled_array(arena, to_resolve);
 }
 
-void resolve_imports(Yov* ctx, OpNode* ast)
+void log_ast(OpNode* node, i32 depth)
 {
     SCRATCH();
     
-    PooledArray<OpNode_Import*> to_resolve = pooled_array_make<OpNode_Import*>(scratch.arena, 8);
+    if (node == NULL) return;
     
-    {
-        Array<OpNode_Import*> imports = get_imports(scratch.arena, ast);
-        foreach(i, imports.count) array_add(&to_resolve, imports[i]);
+    foreach(i, depth) print_info("  ");
+    
+    if (node->kind == OpKind_Block) print_info("block");
+    else if (node->kind == OpKind_Error) print_error("error");
+    else if (node->kind == OpKind_None) print_info("none");
+    else if (node->kind == OpKind_IfStatement) print_info("if-statement");
+    else if (node->kind == OpKind_WhileStatement) print_info("while-statement");
+    else if (node->kind == OpKind_ForStatement) print_info("for-statement");
+    else if (node->kind == OpKind_ForeachArrayStatement) print_info("foreach-statement");
+    else if (node->kind == OpKind_Assignment) print_info("assignment");
+    else if (node->kind == OpKind_FunctionCall) print_info("function call");
+    else if (node->kind == OpKind_ObjectDefinition) {
+        auto node0 = (OpNode_ObjectDefinition*)node;
+        print_info("objdef: '%S'", node0->object_name);
+    }
+    else if (node->kind == OpKind_ObjectType) {
+        auto node0 = (OpNode_ObjectType*)node;
+        print_info("type: '%S", node0->name);
+        foreach(i, node0->array_dimensions) print_info("[]");
+        print_info("'");
+    }
+    else if (node->kind == OpKind_Binary) {
+        auto node0 = (OpNode_Binary*)node;
+        print_info("binary %S", string_from_binary_operator(node0->op));
+    }
+    else if (node->kind == OpKind_Sign) {
+        auto node0 = (OpNode_Sign*)node;
+        print_info("sign %S", string_from_binary_operator(node0->op));
+    }
+    else if (node->kind == OpKind_IntLiteral) {
+        auto node0 = (OpNode_Literal*)node;
+        print_info("int literal: %u", node0->int_literal);
+    }
+    else if (node->kind == OpKind_StringLiteral) {
+        auto node0 = (OpNode_Literal*)node;
+        print_info("str literal: %S", node0->string_literal);
+    }
+    else if (node->kind == OpKind_BoolLiteral) {
+        auto node0 = (OpNode_Literal*)node;
+        print_info("bool literal: %s", node0->bool_literal ? "true" : "false");
+    }
+    else if (node->kind == OpKind_Symbol) {
+        auto node0 = (OpNode_Symbol*)node;
+        print_info("Symbol: %S", node0->identifier);
+    }
+    else if (node->kind == OpKind_MemberValue) {
+        auto node0 = (OpNode_MemberValue*)node;
+        print_info("member_value: %S", node0->member);
+    }
+    else if (node->kind == OpKind_ArrayExpresion) { print_info("array expresion"); }
+    else if (node->kind == OpKind_Indexing) print_info("indexing");
+    else if (node->kind == OpKind_StructDefinition) {
+        auto node0 = (OpNode_StructDefinition*)node;
+        print_info("struct def: %S", node0->identifier);
+    }
+    else if (node->kind == OpKind_EnumDefinition) {
+        auto node0 = (OpNode_EnumDefinition*)node;
+        print_info("enum def: %S", node0->identifier);
+    }
+    else {
+        assert(0);
     }
     
-    while (to_resolve.count)
-    {
-        OpNode_Import* import = to_resolve[to_resolve.count - 1];
-        array_erase(&to_resolve, to_resolve.count - 1);
-        
-        YovScript* caller_script = yov_get_script(ctx, import->code.script_id);
-        
-        String path = resolve_import_path(scratch.arena, ctx, caller_script->dir, import->path);
-        
-        b32 imported = false;
-        
-        for (auto it = pooled_array_make_iterator(&ctx->scripts); it.valid; ++it) {
-            if (string_equals(it.value->path, path)) {
-                imported = true;
-                break;
-            }
-        }
-        
-        if (imported) continue;
-        
-        RawBuffer raw_file;
-        if (!os_read_entire_file(ctx->static_arena, path, &raw_file)) {
-            report_error(ctx, import->code, "File '%S' not found", path);
-            continue;
-        }
-        
-        String script_text = STR(raw_file);
-        i32 script_id = yov_add_script(ctx, path, script_text);
-        Array<Token> tokens = generate_tokens(ctx, script_text, true, script_id);
-        OpNode* ast = generate_ast(ctx, tokens, true);
-        yov_fill_script(ctx, script_id, ast);
-        
-        Array<OpNode_Import*> imports = get_imports(scratch.arena, ast);
-        foreach(i, imports.count) array_add(&to_resolve, imports[i]);
-    }
+    print_info("\n");
     
+    Array<OpNode*> childs = get_node_childs(scratch.arena, node);
+    
+    foreach(i, childs.count) {
+        log_ast(childs[i], depth + 1);
+    }
 }

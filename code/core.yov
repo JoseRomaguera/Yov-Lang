@@ -1,0 +1,68 @@
+
+ParamInfo :: struct {
+    name: String;
+    type: String;
+}
+
+StructInfo :: struct {
+    name: String;
+    members: ParamInfo[];
+}
+
+Context :: struct {
+    cd: String;
+    script_dir: String;
+    caller_dir: String;
+    args: String[];
+    
+    structs: StructInfo[];
+}
+
+YovInfo :: struct {
+    version: String;
+    major: Int;
+    minor: Int;
+    revision: Int;
+}
+
+CopyMode :: enum {
+    NoOverride,
+    Override,
+}
+
+// Core
+print       :: (text: String);
+println     :: (text: String);
+call        :: (command: String);
+call_exe    :: (exe_name: String, arguments: String[]);
+// call_script :: (script_name: String, arguments: String[]);
+exit        :: ();
+set_cd      :: (cd: String);
+
+// Utils
+path_resolve :: (path: String) -> String;
+
+// Yov
+yov_require     :: (major: Int, minor: Int);
+yov_require_min :: (major: Int, minor: Int);
+yov_require_max :: (major: Int, minor: Int);
+
+// Args
+arg_int    :: (name: String, default: Int) -> Int;
+arg_bool   :: (name: String, default: Bool) -> Bool;
+arg_string :: (name: String, default: String) -> String;
+arg_flag   :: (name: String) -> Bool;
+arg_exists :: (name: String) -> Bool;
+
+// User
+ask_yesno :: (text: String) -> Bool;
+
+// File System
+exists           :: (path: String) -> Bool;
+create_directory :: (path: String, recursive: String) -> Bool;
+delete_directory :: (path: String) -> Bool;
+copy_directory   :: (dst: String, src: String) -> Bool;
+move_directory   :: (dst: String, src: String) -> Bool;
+copy_file        :: (dst: String, src: String, mode: CopyMode) -> Bool;
+move_file        :: (dst: String, src: String) -> Bool;
+delete_file      :: (path: String) -> Bool;

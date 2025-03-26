@@ -71,7 +71,7 @@ Arena* arena_alloc(u64 capacity, u32 alignment)
 {
     alignment = MAX(alignment, 1);
     Arena* arena = (Arena*)os_allocate_heap(sizeof(Arena));
-    arena->reserved_pages = os_pages_from_bytes(capacity);
+    arena->reserved_pages = pages_from_bytes(capacity);
     arena->memory = os_reserve_virtual_memory(arena->reserved_pages, false);
     arena->alignment = alignment;
     return arena;
@@ -88,7 +88,7 @@ void* arena_push(Arena* arena, u64 size)
     u64 position = arena->memory_position;
     position = u64_divide_high(position, arena->alignment) * arena->alignment;
     
-    u64 page_size = os_get_page_size();
+    u64 page_size = yov->os.page_size;
     u64 commited_size = (u64)arena->commited_pages * page_size;
     u64 reserved_size = (u64)arena->reserved_pages * page_size;
     
@@ -100,10 +100,11 @@ void* arena_push(Arena* arena, u64 size)
     
     if (end_position > commited_size)
     {
-        u32 commited_pages_needed = os_pages_from_bytes(end_position);
+        u32 commited_pages_needed = pages_from_bytes(end_position);
         u32 page_count = commited_pages_needed - arena->commited_pages;
-        page_count = MAX(page_count, os_pages_from_bytes(KB(200)));
+        page_count = MAX(page_count, pages_from_bytes(KB(200)));
         os_commit_virtual_memory(arena->memory, arena->commited_pages, page_count);
+        arena->commited_pages += page_count;
     }
     
     arena->memory_position = end_position;
@@ -118,28 +119,26 @@ void arena_pop_to(Arena* arena, u64 position)
     memory_zero((u8*)arena->memory + arena->memory_position, bytes_poped);
 }
 
-Arena* scratch_arenas[2];
-
 void initialize_scratch_arenas()
 {
-    foreach(i, array_count(scratch_arenas)) {
-        scratch_arenas[i] = arena_alloc(GB(16), 8);
+    foreach(i, array_count(yov->scratch_arenas)) {
+        yov->scratch_arenas[i] = arena_alloc(GB(16), 8);
     }
 }
 
 void shutdown_scratch_arenas() {
-    foreach(i, array_count(scratch_arenas)) arena_free(scratch_arenas[i]);
+    foreach(i, array_count(yov->scratch_arenas)) arena_free(yov->scratch_arenas[i]);
 }
 
 ScratchArena arena_create_scratch(Arena* conflict0, Arena* conflict1)
 {
     u32 index = 0;
-    while (scratch_arenas[index] == conflict0 || scratch_arenas[index] == conflict1) index++;
+    while (yov->scratch_arenas[index] == conflict0 || yov->scratch_arenas[index] == conflict1) index++;
     
-    assert(index < array_count(scratch_arenas));
+    assert(index < array_count(yov->scratch_arenas));
     
     ScratchArena scratch;
-    scratch.arena = scratch_arenas[index];
+    scratch.arena = yov->scratch_arenas[index];
     scratch.start_position = scratch.arena->memory_position;
     return scratch;
 }
@@ -156,6 +155,10 @@ u64 u64_divide_high(u64 n0, u64 n1)
     u64 res = n0 / n1;
     if (n0 % n1 != 0) res++;
     return res;
+}
+
+u32 pages_from_bytes(u64 bytes) {
+    return (u32)u64_divide_high(bytes, yov->os.page_size);
 }
 
 //- CSTRING 
@@ -812,6 +815,17 @@ inline_fn void _string_builder_push_buffer(StringBuilder* builder) {
     builder->buffer_pos = 0;
 }
 
+void appendf_ex(StringBuilder* builder, String str, ...)
+{
+    SCRATCH(builder->arena);
+    va_list args;
+	va_start(args, str);
+    String result = string_format_with_args(scratch.arena, str, args);
+    va_end(args);
+    
+    append(builder, result);
+}
+
 void append(StringBuilder* builder, String str)
 {
     if (str.size == 0) return;
@@ -1071,6 +1085,52 @@ String string_from_tokens(Arena* arena, Array<Token> tokens)
     return string_copy(arena, res);
 }
 
+String debug_info_from_token(Arena* arena, Token token)
+{
+    if (token.kind == TokenKind_Separator) return STR("separator");
+    if (token.kind == TokenKind_Identifier) return string_format(arena, "identifier: %S", token.value);
+    if (token.kind == TokenKind_IfKeyword) return STR("if");
+    if (token.kind == TokenKind_ElseKeyword) return STR("else");
+    if (token.kind == TokenKind_WhileKeyword) return STR("while");
+    if (token.kind == TokenKind_ForKeyword) return STR("for");
+    if (token.kind == TokenKind_EnumKeyword) return STR("enum");
+    if (token.kind == TokenKind_IntLiteral) return string_format(arena, "Int Literal: %S", token.value);
+    if (token.kind == TokenKind_BoolLiteral) { return string_format(arena, "Bool Literal: %S", token.value); }
+    if (token.kind == TokenKind_StringLiteral) { return string_format(arena, "String Literal: %S", token.value); }
+    if (token.kind == TokenKind_Comment) { return string_format(arena, "Comment: %S", token.value); }
+    if (token.kind == TokenKind_Comma) return STR(STR(","));
+    if (token.kind == TokenKind_Dot) return STR(STR("."));
+    if (token.kind == TokenKind_Colon) return STR(STR(":"));
+    if (token.kind == TokenKind_OpenBrace) return STR(STR("{"));
+    if (token.kind == TokenKind_CloseBrace) return STR(STR("}"));
+    if (token.kind == TokenKind_OpenBracket) return STR(STR("["));
+    if (token.kind == TokenKind_CloseBracket) return STR(STR("]"));
+    if (token.kind == TokenKind_OpenParenthesis) return STR(STR("("));
+    if (token.kind == TokenKind_CloseParenthesis) return STR(STR(")"));
+    if (token.kind == TokenKind_Assignment) {
+        if (token.binary_operator == BinaryOperator_None) return STR("=");
+        return string_format(arena, "%S=", string_from_binary_operator(token.binary_operator));
+    }
+    if (token.kind == TokenKind_BinaryOperator) return string_format(arena, "%S", string_from_binary_operator(token.binary_operator));
+    if (token.kind == TokenKind_OpenString) return STR("Open String");
+    if (token.kind == TokenKind_NextLine) return STR("Next Line");
+    if (token.kind == TokenKind_CloseString) return STR("Close String");
+    if (token.kind == TokenKind_NextSentence) return STR(";");
+    if (token.kind == TokenKind_Error) return STR("Error");
+    if (token.kind == TokenKind_None) return STR("None");
+    
+    return STR("?");
+}
+
+void log_tokens(Array<Token> tokens)
+{
+    SCRATCH();
+    foreach(i, tokens.count) {
+        String str = debug_info_from_token(scratch.arena, tokens[i]);
+        print_info("-> %S\n", str);
+    }
+}
+
 u32 get_node_size(OpKind kind) {
     if (kind == OpKind_None) return sizeof(OpNode);
     if (kind == OpKind_Error) return sizeof(OpNode);
@@ -1209,71 +1269,196 @@ void print_ex(Severity severity, String str, ...)
     os_print(severity, result);
 }
 
-Yov* yov_initialize(Arena* arena, String script_path)
+Yov* yov;
+
+void yov_initialize()
 {
-    SCRATCH(arena);
+    yov = (Yov*)os_allocate_heap(sizeof(Yov));
     
-    Yov* ctx = arena_push_struct<Yov>(arena);
-    ctx->static_arena = arena;
-    ctx->temp_arena = arena_alloc(GB(32), 8);
+    os_setup_memory_info();
     
-    ctx->scripts = pooled_array_make<YovScript>(arena, 8);
-    ctx->reports = pooled_array_make<Report>(arena, 32);
+    yov->static_arena = arena_alloc(GB(32), 8);
+    yov->temp_arena = arena_alloc(GB(32), 8);
+    initialize_scratch_arenas();
     
-    // Paths
+    os_initialize();
+    
+    yov->scripts = pooled_array_make<YovScript>(yov->static_arena, 8);
+    yov->reports = pooled_array_make<Report>(yov->static_arena, 32);
+    
+    yov->caller_dir = os_get_working_path(yov->static_arena);
+}
+
+void yov_shutdown()
+{
+    if (yov == NULL) return;
+    
+#if DEV
+    if (1)
     {
-        ctx->caller_dir = os_get_working_path(ctx->static_arena);
+        SCRATCH();
         
-        if (!os_path_is_absolute(script_path)) script_path = path_append(scratch.arena, ctx->caller_dir, script_path);
-        ctx->main_script_path = string_copy(ctx->static_arena, script_path);
+        print_separator();
+        
+        u64 committed_static_memory = yov->static_arena->commited_pages * yov->os.page_size;
+        u64 committed_temp_memory = yov->temp_arena->commited_pages * yov->os.page_size;
+        u64 committed_total_memory = committed_static_memory + committed_temp_memory;
+        
+        u64 used_static_memory = yov->static_arena->memory_position;
+        u64 used_temp_memory = yov->temp_arena->memory_position;
+        u64 used_total_memory = used_static_memory + used_temp_memory;
+        
+        print_info("Committed Static Memory: %S\n", string_from_memory(scratch.arena, committed_static_memory));
+        print_info("Committed Temp Memory: %S\n", string_from_memory(scratch.arena, committed_temp_memory));
+        print_info("Committed Total Memory: %S\n", string_from_memory(scratch.arena, committed_total_memory));
+        print_info("\n");
+        print_info("Used Static Memory: %S\n", string_from_memory(scratch.arena, used_static_memory));
+        print_info("Used Temp Memory: %S\n", string_from_memory(scratch.arena, used_temp_memory));
+        print_info("Used Total Memory: %S\n", string_from_memory(scratch.arena, used_total_memory));
+        
+        if (0) {
+            print_info(STR("\n// TOKENS\n"));
+            // TODO(Jose): log_tokens(tokens);
+            print_info("\n\n");
+        }
+        if (0) {
+            print_info(STR("// AST\n"));
+            // TODO(Jose): log_ast(ast, 0);
+            print_info("\n\n");
+        }
     }
     
-    return ctx;
+    os_console_wait();
+#endif
+    
+    shutdown_scratch_arenas();
+    os_shutdown();
+    
+    arena_free(yov->temp_arena);
+    arena_free(yov->static_arena);
+    yov = NULL;
 }
 
-void yov_shutdown(Yov* ctx)
+void yov_run()
 {
-    if (ctx == NULL) return;
-    arena_free(ctx->temp_arena);
+    b32 run = yov_read_args();
+    
+    if (!run || yov->error_count > 0) {
+        yov_print_reports();
+        return;
+    }
+    
+    i32 main_script_id = yov_import_script(yov->main_script_path);
+    
+    if (main_script_id < 0) {
+        yov_print_reports();
+        return;
+    }
+    
+    InterpreterSettings settings{};
+    settings.print_execution = yov->settings.trace;
+    settings.user_assertion = yov->settings.user_assert;
+    
+    // Semantic analysis of all the AST before execution
+    {
+        settings.execute = false;
+        interpret(settings);
+    }
+    
+    if (yov->error_count != 0) {
+        yov_print_reports();
+        return;
+    }
+    
+    // Execute
+    if (!yov->settings.analyze_only) {
+        settings.execute = true;
+        interpret(settings);
+    }
+    
+    if (yov->error_count != 0) {
+        // TODO(Jose): This reports should be considered runtime errors
+        yov_print_reports();
+        return;
+    }
 }
 
-i32 yov_add_script(Yov* ctx, String path, String text)
+internal_fn String resolve_import_path(Arena* arena, Yov* yov, String caller_script_dir, String path)
+{
+    SCRATCH(arena);
+    path = path_resolve(scratch.arena, path);
+    
+    if (!os_path_is_absolute(path)) {
+        path = path_append(scratch.arena, caller_script_dir, path);
+    }
+    
+    return string_copy(arena, path);
+}
+
+i32 yov_import_script(String path)
 {
     SCRATCH();
     assert(os_path_is_absolute(path));
     
-    path = string_copy(ctx->static_arena, path);
+    RawBuffer raw_file;
+    if (!os_read_entire_file(yov->static_arena, path, &raw_file)) {
+        report_error(NO_CODE, "File '%S' not found\n", path);
+        return -1;
+    }
     
-    YovScript script{};
-    script.path = path;
-    script.name = path_get_last_element(path);
-    script.dir = path_resolve(ctx->static_arena, path_append(scratch.arena, path, STR("..")));;
-    script.text = text;
+    path = string_copy(yov->static_arena, path);
     
-    i32 id = ctx->scripts.count;
-    array_add(&ctx->scripts, script);
-    return id;
+    i32 script_id = yov->scripts.count;
+    YovScript* script = array_add(&yov->scripts);
+    
+    script->path = path;
+    script->name = path_get_last_element(path);
+    script->dir = path_resolve(yov->static_arena, path_append(scratch.arena, path, STR("..")));;
+    script->text = STR(raw_file);
+    
+    script->tokens = generate_tokens(script->text, true, script_id);
+    script->ast = generate_ast(script->tokens, true);
+    
+    Array<OpNode_Import*> imports = get_imports(scratch.arena, script->ast);
+    
+    foreach(i, imports.count)
+    {
+        OpNode_Import* import = imports[i];
+        
+        String import_path = resolve_import_path(scratch.arena, yov, script->dir, import->path);
+        
+        b32 imported = false;
+        for (auto it = pooled_array_make_iterator(&yov->scripts); it.valid; ++it) {
+            if (string_equals(it.value->path, import_path)) {
+                imported = true;
+                break;
+            }
+        }
+        if (imported) continue;
+        
+        yov_import_script(import_path);
+    }
+    
+    return script_id;
 }
 
-
-void yov_fill_script(Yov* ctx, i32 script_id, OpNode* ast) {
-    YovScript* script = yov_get_script(ctx, script_id);
-    script->ast = ast;
-}
-
-YovScript* yov_get_script(Yov* ctx, i32 script_id)
+YovScript* yov_get_script(i32 script_id)
 {
-    if (script_id < 0 || script_id >= ctx->scripts.count) {
+    if (script_id < 0) return NULL;
+    
+    if (script_id >= yov->scripts.count) {
         assert(0);
         return NULL;
     }
     
-    return &ctx->scripts[script_id];
+    return &yov->scripts[script_id];
 }
 
-String yov_get_line_sample(Arena* arena, Yov* ctx, CodeLocation code)
+String yov_get_line_sample(Arena* arena, CodeLocation code)
 {
-    String text = yov_get_script(ctx, code.script_id)->text;
+    if (code.script_id < 0) return {};
+    
+    String text = yov_get_script(code.script_id)->text;
     u64 starting_cursor = code.start_line_offset;
     
     u64 cursor = starting_cursor;
@@ -1290,10 +1475,12 @@ String yov_get_line_sample(Arena* arena, Yov* ctx, CodeLocation code)
     return string_format(arena, "'%S'", sample);
 }
 
-b32 generate_program_args(Yov* ctx, Array<String> raw_args)
+internal_fn b32 generate_program_args(Array<String> raw_args)
 {
     SCRATCH();
-    ctx->args = array_make<ProgramArg>(ctx->static_arena, raw_args.count);
+    yov->args = array_make<ProgramArg>(yov->static_arena, raw_args.count);
+    
+    b32 success = true;
     
     foreach(i, raw_args.count)
     {
@@ -1311,17 +1498,63 @@ b32 generate_program_args(Yov* ctx, Array<String> raw_args)
             arg.value = split[1];
         }
         else {
-            print_error("Invalid arg '%S', expected format: name=value\n", raw);
-            return false;
+            report_error(NO_CODE, "Invalid arg '%S', expected format: name=value\n", raw);
+            success = false;
+            arg.name = STR("?");
+            arg.value = STR("0");
         }
         
-        ctx->args[i] = arg;
+        yov->args[i] = arg;
     }
+    
+    return success;
+}
+
+b32 yov_read_args()
+{
+    Array<String> args = os_get_args(yov->static_arena);
+    
+    if (args.count <= 0) {
+        report_error(NO_CODE, "Script not specified");
+        return false;
+    }
+    
+    if (args.count == 1 && string_equals(args[0], STR("help"))) {
+        print_info("TODO\n");
+        return false;
+    }
+    
+    if (args.count == 1 && string_equals(args[0], STR("version"))) {
+        print_info(YOV_VERSION);
+        return false;
+    }
+    
+    i32 script_args_start_index = args.count;
+    for (i32 i = 1; i < args.count; ++i) {
+        String arg = args[i];
+        
+        if (string_equals(arg, STR("/"))) {
+            script_args_start_index = i + 1;
+            break;
+        }
+        
+        if (string_equals(arg, STR("analyze"))) yov->settings.analyze_only = true;
+        else if (string_equals(arg, STR("trace"))) yov->settings.trace = true;
+        else if (string_equals(arg, STR("user_assert"))) yov->settings.user_assert = true;
+        else {
+            report_error(NO_CODE, "Unknown interpreter argument '%S'\n", arg);
+        }
+    }
+    
+    Array<String> script_args = array_subarray(args, script_args_start_index, args.count - script_args_start_index);
+    generate_program_args(script_args);
+    
+    yov->main_script_path = args[0];
     
     return true;
 }
 
-void report_error_ex(Yov* ctx, CodeLocation code, String text, ...)
+void report_error_ex(CodeLocation code, String text, ...)
 {
     SCRATCH();
     
@@ -1330,15 +1563,15 @@ void report_error_ex(Yov* ctx, CodeLocation code, String text, ...)
     String formatted_text = string_format_with_args(scratch.arena, text, args);
     va_end(args);
     
-    String line_sample = yov_get_line_sample(scratch.arena, ctx, code);
+    String line_sample = yov_get_line_sample(scratch.arena, code);
     formatted_text = string_replace(scratch.arena, formatted_text, STR("{line}"), line_sample);
     
     Report report;
-    report.text = string_copy(ctx->static_arena, formatted_text);
+    report.text = string_copy(yov->static_arena, formatted_text);
     report.code = code;
-    array_add(&ctx->reports, report);
+    array_add(&yov->reports, report);
     
-    ctx->error_count++;
+    yov->error_count++;
 }
 
 internal_fn i32 report_compare(const void* _0, const void* _1)
@@ -1350,20 +1583,22 @@ internal_fn i32 report_compare(const void* _0, const void* _1)
     return (r0->code.offset < r1->code.offset) ? -1 : 1;
 }
 
-void yov_print_reports(Yov* ctx)
+void yov_print_reports()
 {
     SCRATCH();
-    Array<Report> reports = array_from_pooled_array(scratch.arena, ctx->reports);
+    Array<Report> reports = array_from_pooled_array(scratch.arena, yov->reports);
     array_sort(reports, report_compare);
     
     foreach(i, reports.count) {
-        print_report(ctx, reports[i]);
+        print_report(reports[i]);
     }
 }
 
-void print_report(Yov* ctx, Report report)
+void print_report(Report report)
 {
-    String path = yov_get_script(ctx, report.code.script_id)->path;
-    print(Severity_Error, "%S(%u): %S\n", path, (u32)report.code.line, report.text);
+    YovScript* script = yov_get_script(report.code.script_id);
+    
+    if (script == NULL) print(Severity_Error, "%S\n", report.text);
+    else print(Severity_Error, "%S(%u): %S\n", script->path, (u32)report.code.line, report.text);
 }
 

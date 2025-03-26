@@ -91,7 +91,7 @@ internal_fn FunctionReturn intrinsic__yov_require(Interpreter* inter, Array<Obje
     b32 res = major == YOV_MAJOR_VERSION && minor == YOV_MINOR_VERSION;
     
     if (!res) {
-        report_error(inter->ctx, code, "Require version: Yov v%u.%u", major, minor);
+        report_error(code, "Require version: Yov v%u.%u", major, minor);
     }
     
     return { inter->void_obj, RESULT_SUCCESS };
@@ -107,7 +107,7 @@ internal_fn FunctionReturn intrinsic__yov_require_min(Interpreter* inter, Array<
     else if (major == YOV_MAJOR_VERSION && minor > YOV_MINOR_VERSION) res = false;
     
     if (!res) {
-        report_error(inter->ctx, code, "Require minimum version: Yov v%u.%u", major, minor);
+        report_error(code, "Require minimum version: Yov v%u.%u", major, minor);
     }
     
     return { inter->void_obj, RESULT_SUCCESS };
@@ -123,7 +123,7 @@ internal_fn FunctionReturn intrinsic__yov_require_max(Interpreter* inter, Array<
     else if (major == YOV_MAJOR_VERSION && minor >= YOV_MINOR_VERSION) res = true;
     
     if (!res) {
-        report_error(inter->ctx, code, "Require maximum version: Yov v%u.%u", major, minor);
+        report_error(code, "Require maximum version: Yov v%u.%u", major, minor);
     }
     
     return { inter->void_obj, RESULT_SUCCESS };
@@ -132,8 +132,8 @@ internal_fn FunctionReturn intrinsic__yov_require_max(Interpreter* inter, Array<
 //- ARGS 
 
 internal_fn ProgramArg* find_arg(Interpreter* inter, String name) {
-    foreach(i, inter->ctx->args.count) {
-        ProgramArg* arg = &inter->ctx->args[i];
+    foreach(i, yov->args.count) {
+        ProgramArg* arg = &yov->args[i];
         if (string_equals(arg->name, name)) return arg;
     }
     return NULL;
@@ -365,94 +365,47 @@ internal_fn FunctionReturn intrinsic__delete_file(Interpreter* inter, Array<Obje
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
-FunctionDefinition make_intrinsic_function(Arena* arena, String identifier, ParameterDefinition return_def, Array<ParameterDefinition> parameters, IntrinsicFunction* intrinsic)
+#define INTR(name, fn) { STR(name), fn }
+
+Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
 {
-    if (parameters.count == 1 && parameters[0].vtype == VType_Void) {
-        parameters = {};
-    }
+    IntrinsicDefinition table[] = {
+        // Core
+        INTR("print", intrinsic__print),
+        INTR("println", intrinsic__println),
+        INTR("call", intrinsic__call),
+        INTR("call_exe", intrinsic__call_exe),
+        INTR("exit", intrinsic__exit),
+        INTR("set_cd", intrinsic__set_cd),
+        
+        // Utils
+        INTR("path_resolve", intrinsic__path_resolve),
+        
+        // Yov
+        INTR("yov_require", intrinsic__yov_require),
+        INTR("yov_require_min", intrinsic__yov_require_min),
+        INTR("yov_require_max", intrinsic__yov_require_max),
+        
+        // Args
+        INTR("arg_int", intrinsic__arg_int),
+        INTR("arg_bool", intrinsic__arg_bool),
+        INTR("arg_string", intrinsic__arg_string),
+        INTR("arg_flag", intrinsic__arg_flag),
+        INTR("arg_exists", intrinsic__arg_exists),
+        
+        // User
+        INTR("ask_yesno", intrinsic__ask_yesno),
+        
+        // File System
+        INTR("exists", intrinsic__exists),
+        INTR("create_directory", intrinsic__create_directory),
+        INTR("delete_directory", intrinsic__delete_directory),
+        INTR("copy_directory", intrinsic__copy_directory),
+        INTR("move_directory", intrinsic__move_directory),
+        INTR("copy_file", intrinsic__copy_file),
+        INTR("move_file", intrinsic__move_file),
+        INTR("delete_file", intrinsic__delete_file),
+    };
     
-    FunctionDefinition fn{};
-    fn.identifier = identifier;
-    fn.return_vtype = return_def.vtype;
-    fn.parameters = array_copy(arena, parameters);
-    fn.intrinsic_fn = intrinsic;
-    return fn;
-}
-
-ParameterDefinition param_void(Interpreter* inter) {
-    ParameterDefinition def{};
-    def.vtype = VType_Void;
-    def.default_value = inter->nil_obj;
-    return def;
-}
-
-ParameterDefinition param_string(Interpreter* inter, const char* name) {
-    ParameterDefinition def{};
-    def.vtype = VType_String;
-    def.name = STR(name);
-    def.default_value = inter->nil_obj; // TODO(Jose): 
-    return def;
-}
-
-ParameterDefinition param_int(Interpreter* inter, const char* name) {
-    ParameterDefinition def{};
-    def.vtype = VType_Int;
-    def.name = STR(name);
-    def.default_value = inter->nil_obj; // TODO(Jose): 
-    return def;
-}
-
-ParameterDefinition param_bool(Interpreter* inter, const char* name) {
-    ParameterDefinition def{};
-    def.vtype = VType_Bool;
-    def.name = STR(name);
-    def.default_value = inter->nil_obj; // TODO(Jose): 
-    return def;
-}
-
-#define define_instrinsic(_name, _fn, _return, ...) do { \
-ParameterDefinition params[] = { __VA_ARGS__ }; \
-array_add(&inter->functions, make_intrinsic_function(arena, STR(_name), _return, array_make(params, array_count(params)), _fn)); \
-} while (0)
-
-void register_intrinsic_functions(Interpreter* inter)
-{
-    Arena* arena = inter->ctx->static_arena;
-    
-    // Core
-    define_instrinsic("print", intrinsic__print, param_void(inter), param_string(inter, "text"));
-    define_instrinsic("println", intrinsic__println, param_void(inter), param_string(inter, "text"));
-    define_instrinsic("call", intrinsic__call, param_int(inter, "return_code"), param_string(inter, "command"));
-    define_instrinsic("call_exe", intrinsic__call_exe, param_int(inter, "return_code"), param_string(inter, "exe_name"), param_string(inter, "arguments"));
-    // TODO(Jose): define_instrinsic("call_script", intrinsic__call_script, param_void(inter), param_string(inter, ""), param_string(inter, ""));
-    define_instrinsic("exit", intrinsic__exit, param_void(inter), param_void(inter));
-    define_instrinsic("set_cd", intrinsic__set_cd, param_void(inter), param_string(inter, "cd"));
-    
-    // Utils
-    define_instrinsic("path_resolve", intrinsic__path_resolve, param_string(inter, "result"), param_string(inter, "path"));
-    
-    // Yov
-    define_instrinsic("yov_require", intrinsic__yov_require, param_void(inter), param_int(inter, "major"), param_int(inter, "minor"));
-    define_instrinsic("yov_require_min", intrinsic__yov_require_min, param_void(inter), param_int(inter, "major"), param_int(inter, "minor"));
-    define_instrinsic("yov_require_max", intrinsic__yov_require_max, param_void(inter), param_int(inter, "major"), param_int(inter, "minor"));
-    
-    // Args
-    define_instrinsic("arg_int", intrinsic__arg_int, param_int(inter, "result"), param_string(inter, "name"), param_int(inter, "default"));
-    define_instrinsic("arg_bool", intrinsic__arg_bool, param_bool(inter, "result"), param_string(inter, "name"), param_bool(inter, "default"));
-    define_instrinsic("arg_string", intrinsic__arg_string, param_string(inter, "result"), param_string(inter, "name"), param_string(inter, "default"));
-    define_instrinsic("arg_flag", intrinsic__arg_flag, param_bool(inter, "result"), param_string(inter, "name"));
-    define_instrinsic("arg_exists", intrinsic__arg_exists, param_bool(inter, "result"), param_string(inter, "name"));
-    
-    // User
-    define_instrinsic("ask_yesno", intrinsic__ask_yesno, param_bool(inter, "result"), param_string(inter, "text"));
-    
-    // File System
-    define_instrinsic("exists", intrinsic__exists, param_bool(inter, "result"), param_string(inter, "path"));
-    define_instrinsic("create_directory", intrinsic__create_directory, param_bool(inter, "success"), param_string(inter, "dst"), param_bool(inter, "src"));
-    define_instrinsic("delete_directory", intrinsic__delete_directory, param_bool(inter, "success"), param_string(inter, "path"));
-    define_instrinsic("copy_directory", intrinsic__copy_directory, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"));
-    define_instrinsic("move_directory", intrinsic__move_directory, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"));
-    define_instrinsic("copy_file", intrinsic__copy_file, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"), VType_Enum_CopyMode);
-    define_instrinsic("move_file", intrinsic__move_file, param_bool(inter, "success"), param_string(inter, "dst"), param_string(inter, "src"));
-    define_instrinsic("delete_file", intrinsic__delete_file, param_bool(inter, "success"), param_string(inter, "path"));
+    return array_copy(arena, array_make(table, array_count(table)));
 }

@@ -168,7 +168,7 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
             String left_string = string_from_obj(scratch.arena, inter, left);
             String right_string = string_from_obj(scratch.arena, inter, right);
             String result_string = string_from_obj(scratch.arena, inter, result);
-            log_trace(inter->ctx, node->code, "%S %S %S = %S", left_string, string_from_binary_operator(op), right_string, result_string);
+            log_trace(node->code, "%S %S %S = %S", left_string, string_from_binary_operator(op), right_string, result_string);
         }
         return result;
     }
@@ -186,7 +186,7 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
             if (inter->settings.execute && inter->settings.print_execution) {
                 String expresion_string = string_from_obj(scratch.arena, inter, expresion);
                 String result_string = string_from_obj(scratch.arena, inter, result);
-                log_trace(inter->ctx, node->code, STR("%S %S = %S"), string_from_binary_operator(op), expresion_string, result_string);
+                log_trace(node->code, STR("%S %S = %S"), string_from_binary_operator(op), expresion_string, result_string);
             }
             
             return result;
@@ -489,11 +489,11 @@ void interpret_object_definition(Interpreter* inter, OpNode* node0)
     
     if (inter->settings.execute)
     {
-        if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("%S %S"), string_from_vtype(scratch.arena, inter, obj->vtype), obj->identifier);
+        if (inter->settings.print_execution) log_trace(node->code, STR("%S %S"), string_from_vtype(scratch.arena, inter, obj->vtype), obj->identifier);
         
         if (is_valid(assignment_result)) {
             if (!obj_copy(inter, obj, assignment_result)) return;
-            if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
+            if (inter->settings.print_execution) log_trace(assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
         }
     }
 }
@@ -534,7 +534,7 @@ void interpret_assignment(Interpreter* inter, OpNode* node0)
     if (inter->settings.execute)
     {
         if (!obj_copy(inter, obj, assignment_obj)) return;
-        if (inter->settings.print_execution) log_trace(inter->ctx, assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
+        if (inter->settings.print_execution) log_trace(assignment->code, STR("%S = %S"), obj->identifier, string_from_obj(scratch.arena, inter, obj));
     }
 }
 
@@ -553,7 +553,7 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
     }
     
     if (inter->settings.execute) {
-        if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("if (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
+        if (inter->settings.print_execution) log_trace(node->code, STR("if (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
         b32 result = get_bool(expresion_result);
         
         push_scope(inter, ScopeType_Block, 0);
@@ -602,7 +602,7 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
         
         if (inter->settings.execute)
         {
-            if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("while (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
+            if (inter->settings.print_execution) log_trace(node->code, STR("while (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
             
             if (!get_bool(expresion_result)) break;
             
@@ -646,7 +646,7 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
         
         if (inter->settings.execute)
         {
-            if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("for (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
+            if (inter->settings.print_execution) log_trace(node->code, STR("for (%S)"), string_from_obj(scratch.arena, inter, expresion_result));
             
             if (!get_bool(expresion_result)) break;
             
@@ -734,7 +734,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
                 set_int(index, i);
             }
             
-            if (inter->settings.print_execution) log_trace(inter->ctx, node->code, STR("for each[%l] (%S)"), i, string_from_obj(scratch.arena, inter, element));
+            if (inter->settings.print_execution) log_trace(node->code, STR("for each[%l] (%S)"), i, string_from_obj(scratch.arena, inter, element));
             
             push_scope(inter, ScopeType_Block, 0);
             interpret_op(inter, node, node->content);
@@ -809,6 +809,7 @@ Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expres
 i32 interpret_object_type(Interpreter* inter, OpNode* node0)
 {
     OpNode_ObjectType* node = (OpNode_ObjectType*)node0;
+    if (node->name.size == 0) return VType_Void;
     i32 vtype = vtype_from_name(inter, node->name);
     vtype = vtype_from_array_dimension(inter, vtype, node->array_dimensions);
     if (vtype < 0) report_object_type_not_found(node->code, node->name);
@@ -937,30 +938,6 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     else {
         report_semantic_unknown_op(node->code);
     }
-}
-
-internal_fn i32 define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values)
-{
-    SCRATCH();
-    
-    if (values.count == 0) {
-        values = array_make<i64>(scratch.arena, names.count);
-        foreach(i, values.count) values[i] = i;
-    }
-    
-    names = array_copy(inter->ctx->static_arena, names);
-    values = array_copy(inter->ctx->static_arena, values);
-    
-    VariableType t = {};
-    t.name = name;
-    t.kind = VariableKind_Enum;
-    t.vtype = inter->vtype_table.count;
-    t.enum_names = names;
-    t.enum_values = values;
-    assert(names.count == values.count);
-    array_add(&inter->vtype_table, t);
-    
-    return t.vtype;
 }
 
 internal_fn Array<OpNode_StructDefinition*> get_struct_definitions(Arena* arena, Interpreter* inter, Array<OpNode*> nodes)
@@ -1154,16 +1131,11 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
                 valid = false;
             }
             
-            Array<i32> vtypes = array_make<i32>(inter->ctx->static_arena, node->members.count);
-            Array<String> names = array_make<String>(inter->ctx->static_arena, node->members.count);
-            Array<u32> strides = array_make<u32>(inter->ctx->static_arena, node->members.count);
-            Array<OpNode*> initialize_expresions = array_make<OpNode*>(inter->ctx->static_arena, node->members.count);
+            Array<ObjectDefinition> members = array_make<ObjectDefinition>(yov->static_arena, node->members.count);
             
-            u32 stride = 0;
-            
-            foreach(i, vtypes.count) {
+            foreach(i, members.count) {
                 OpNode_ObjectDefinition* member = node->members[i];
-                names[i] = member->object_name;
+                members[i].name = member->object_name;
                 
                 if (string_equals(member->type->name, name)) {
                     report_struct_recursive(node->code);
@@ -1177,30 +1149,18 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
                     continue;
                 }
                 
-                vtypes[i] = interpret_object_type(inter, member->type);
-                if (vtypes[i] < 0) {
+                members[i].vtype = interpret_object_type(inter, member->type);
+                if (members[i].vtype < 0) {
                     valid = false;
                     continue;
                 }
                 
-                initialize_expresions[i] = member->assignment;
-                
-                strides[i] = stride;
-                stride += vtype_get_size(inter, vtypes[i]);
+                members[i].default_value = member->assignment;
             }
             
             if (!valid) continue;
             
-            VariableType t = {};
-            t.name = name;
-            t.kind = VariableKind_Struct;
-            t.vtype = inter->vtype_table.count;
-            t.struct_names = names;
-            t.struct_vtypes = vtypes;
-            t.struct_strides = strides;
-            t.struct_stride = stride;
-            t.struct_initialize_expresions = initialize_expresions;
-            array_add(&inter->vtype_table, t);
+            define_struct(inter, name, members);
         }
     }
     
@@ -1219,12 +1179,12 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
             valid = false;
         }
         
-        Array<ParameterDefinition> parameters = array_make<ParameterDefinition>(inter->ctx->static_arena, node->parameters.count);
+        Array<ObjectDefinition> parameters = array_make<ObjectDefinition>(scratch.arena, node->parameters.count);
         
         foreach(i, parameters.count)
         {
             OpNode_ObjectDefinition* param_node = node->parameters[i];
-            ParameterDefinition* def = &parameters[i];
+            ObjectDefinition* def = &parameters[i];
             
             Object* assignment_result = interpret_assignment_for_object_definition(inter, param_node);
             if (is_unknown(assignment_result) || is_void(assignment_result)) {
@@ -1232,11 +1192,9 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
                 continue;
             }
             
-            b32 has_default_value = (param_node->assignment->kind != OpKind_None && param_node->assignment->kind != OpKind_Error);
-            
             def->vtype = assignment_result->vtype;
             def->name = param_node->object_name;
-            def->default_value = has_default_value ? assignment_result : inter->nil_obj;
+            def->default_value = param_node->assignment;
         }
         
         i32 return_vtype = VType_Void;
@@ -1246,25 +1204,35 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
             if (return_vtype < 0) valid = false;
         }
         
+        OpNode_Block* defined_fn = NULL;
+        b8 is_intrinsic = false;
+        
+        if (node->block->kind == OpKind_Block) {
+            defined_fn = (OpNode_Block*)node->block;
+        }
+        else if (node->block->kind == OpKind_None) {
+            is_intrinsic = true;
+        }
+        else {
+            valid = false;
+            assert(0);
+        }
+        
         if (!valid) continue;
         
-        FunctionDefinition fn{};
-        fn.identifier = node->identifier;
-        fn.return_vtype = return_vtype;
-        fn.parameters = parameters;
-        fn.defined_fn = node->block;
-        array_add(&inter->functions, fn);
+        if (is_intrinsic) define_intrinsic_function(inter, node->code, node->identifier, parameters, return_vtype);
+        else define_function(inter, node->code, node->identifier, parameters, return_vtype, defined_fn);
     }
 }
 
-void register_intrinsic_functions(Interpreter* inter);
+#include "autogenerated/core.h"
 
 internal_fn void register_definitions(Interpreter* inter)
 {
     SCRATCH();
     
-    inter->vtype_table = pooled_array_make<VariableType>(inter->ctx->static_arena, 32);
-    inter->functions = pooled_array_make<FunctionDefinition>(inter->ctx->static_arena, 32);
+    inter->vtype_table = pooled_array_make<VariableType>(yov->static_arena, 32);
+    inter->functions = pooled_array_make<FunctionDefinition>(yov->static_arena, 32);
     
     PooledArray<VariableType>* list = &inter->vtype_table;
     
@@ -1310,21 +1278,10 @@ internal_fn void register_definitions(Interpreter* inter)
         array_add(list, t);
     }
     
-    // Default Enums
-    {
-        String CopyMode[] = {
-            STR("NoOverride"),
-            STR("Override"),
-        };
-        
-        
-        i32 vtype;
-        vtype = define_enum(inter, STR("CopyMode"), { CopyMode, array_count(CopyMode) }, {});
-        assert(vtype == VType_Enum_CopyMode);
-    }
+    define_core(inter);
     
     // Script Definitions
-    for (auto it = pooled_array_make_iterator(&inter->ctx->scripts); it.valid; ++it)
+    for (auto it = pooled_array_make_iterator(&yov->scripts); it.valid; ++it)
     {
         OpNode* ast = it.value->ast;
         
@@ -1339,6 +1296,34 @@ internal_fn void register_definitions(Interpreter* inter)
         interpret_definitions(block, inter, only_definitions);
     }
     
+    // Assign intrinsic functions
+    {
+        Array<IntrinsicDefinition> table = get_intrinsics_table(scratch.arena);
+        
+        for (auto it = pooled_array_make_iterator(&inter->functions); it.valid; ++it)
+        {
+            FunctionDefinition* fn = it.value;
+            if (!fn->is_intrinsic) continue;
+            
+            IntrinsicDefinition* intr = NULL;
+            
+            foreach(i, table.count) {
+                IntrinsicDefinition* intr0 = &table[i];
+                if (string_equals(intr0->name, fn->identifier)) {
+                    intr = intr0;
+                    break;
+                }
+            }
+            
+            if (intr == NULL) {
+                report_intrinsic_not_resolved(fn->code, fn->identifier);
+                continue;
+            }
+            
+            fn->intrinsic_fn = intr->fn;
+        }
+    }
+    
     // Analyze initialize expresions
     if (!inter->settings.execute)
     {
@@ -1348,8 +1333,6 @@ internal_fn void register_definitions(Interpreter* inter)
             interpret_object_initialize(inter, memory, vtype, NULL);
         }
     }
-    
-    register_intrinsic_functions(inter);
     
     foreach(i, inter->vtype_table.count) {
         VariableType t = inter->vtype_table[i];
@@ -1362,13 +1345,13 @@ internal_fn void define_globals(Interpreter* inter)
     Object* obj;
     
     obj = define_object(inter, STR("context_script_dir"), VType_String);
-    set_string(inter, obj, inter->ctx->scripts[0].dir);
+    set_string(inter, obj, yov->scripts[0].dir);
     
     obj = define_object(inter, STR("context_caller_dir"), VType_String);
-    set_string(inter, obj, inter->ctx->caller_dir);
+    set_string(inter, obj, yov->caller_dir);
     
     inter->cd_obj = define_object(inter, STR("cd"), VType_String);
-    set_string(inter, inter->cd_obj, inter->ctx->scripts[0].dir);
+    set_string(inter, inter->cd_obj, yov->scripts[0].dir);
     
     obj = define_object(inter, STR("yov_major"), VType_Int);
     set_int(obj, YOV_MAJOR_VERSION);
@@ -1381,7 +1364,7 @@ internal_fn void define_globals(Interpreter* inter)
     
     // Args
     {
-        Array<ProgramArg> args = inter->ctx->args;
+        Array<ProgramArg> args = yov->args;
         Object* array = obj_alloc_temp_array(inter, VType_String, args.count);
         foreach(i, args.count) {
             Object* element = obj_alloc_temp_string(inter, args[i].name);
@@ -1393,20 +1376,21 @@ internal_fn void define_globals(Interpreter* inter)
     }
 }
 
-void interpret(Yov* ctx, InterpreterSettings settings)
+void interpret(InterpreterSettings settings)
 {
-    YovScript* main_script = yov_get_script(ctx, 0);
+    YovScript* main_script = yov_get_script(0);
     
-    Interpreter* inter = arena_push_struct<Interpreter>(ctx->static_arena);
-    inter->ctx = ctx;
+    Interpreter* inter = arena_push_struct<Interpreter>(yov->static_arena);
     inter->settings = settings;
     inter->root = main_script->ast;
     
-    inter->void_obj = arena_push_struct<Object>(inter->ctx->static_arena);
+    inter->void_obj = arena_push_struct<Object>(yov->static_arena);
     inter->void_obj->vtype = VType_Void;
     
-    inter->nil_obj = arena_push_struct<Object>(inter->ctx->static_arena);
+    inter->nil_obj = arena_push_struct<Object>(yov->static_arena);
     inter->nil_obj->vtype = VType_Unknown;
+    
+    inter->empty_op = arena_push_struct<OpNode>(yov->static_arena);
     
     inter->global_scope = alloc_scope(inter, ScopeType_Global);
     inter->current_scope = inter->global_scope;
@@ -1416,17 +1400,17 @@ void interpret(Yov* ctx, InterpreterSettings settings)
     
     interpret_block(inter, inter->root);
     
-    assert(inter->ctx->error_count != 0 || inter->global_scope == inter->current_scope);
+    assert(yov->error_count != 0 || inter->global_scope == inter->current_scope);
 }
 
 void interpreter_exit(Interpreter* inter)
 {
-    inter->ctx->error_count++;// TODO(Jose): Weird
+    yov->error_count++;// TODO(Jose): Weird
 }
 
 void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, String message_error)
 {
-    String script_path = yov_get_script(inter->ctx, code.script_id)->path;
+    String script_path = yov_get_script(code.script_id)->path;
     print_error("%S(%u): %S\n\t--> %S\n", script_path, (u32)code.line, resolved_line, message_error);
     
     interpreter_exit(inter);
@@ -1540,13 +1524,13 @@ RawBuffer obj_memory_alloc_empty(Interpreter* inter, i32 vtype)
 {
     u32 size = vtype_get_size(inter, vtype);
     RawBuffer buffer;
-    buffer.data = arena_push(inter->ctx->static_arena, size);
+    buffer.data = arena_push(yov->static_arena, size);
     buffer.size = size;
     return buffer;
 }
 
 void* obj_memory_dynamic_alloc(Interpreter* inter, u64 size) {
-    return arena_push(inter->ctx->static_arena, size);
+    return arena_push(yov->static_arena, size);
 }
 
 Object* obj_alloc_temp(Interpreter* inter, i32 vtype, RawBuffer memory)
@@ -1554,7 +1538,7 @@ Object* obj_alloc_temp(Interpreter* inter, i32 vtype, RawBuffer memory)
     if (vtype < 0) return inter->nil_obj;
     if (vtype == VType_Void) return inter->void_obj;
     
-    Object* obj = arena_push_struct<Object>(inter->ctx->static_arena);
+    Object* obj = arena_push_struct<Object>(yov->static_arena);
     obj->identifier = STR("TEMP");
     obj->vtype = vtype;
     obj->scope = inter->current_scope;
@@ -1869,8 +1853,8 @@ String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype)
 
 Scope* alloc_scope(Interpreter* inter, ScopeType type)
 {
-    Scope* scope = arena_push_struct<Scope>(inter->ctx->static_arena);
-    scope->objects = pooled_array_make<Object>(inter->ctx->static_arena, 32);
+    Scope* scope = arena_push_struct<Scope>(yov->static_arena);
+    scope->objects = pooled_array_make<Object>(yov->static_arena, 32);
     scope->type = type;
     scope->return_obj = inter->void_obj;
     return scope;
@@ -2079,7 +2063,7 @@ Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*>
         Scope* fn_scope = push_scope(inter, ScopeType_Function, fn->return_vtype);
         
         foreach(i, fn->parameters.count) {
-            ParameterDefinition param_def = fn->parameters[i];
+            ObjectDefinition param_def = fn->parameters[i];
             Object* param = define_object(inter, param_def.name, param_def.vtype);
             obj_copy(inter, param, parameters[i]);
         }
@@ -2107,10 +2091,92 @@ Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*>
     if (inter->settings.print_execution) {
         String return_string = string_from_obj(scratch.arena, inter, ret.return_obj);
         String parameters_string = STR("TODO");
-        log_trace(inter->ctx, node->code, STR("%S(%S) => %S"), fn->identifier, parameters_string, return_string);
+        log_trace(node->code, STR("%S(%S) => %S"), fn->identifier, parameters_string, return_string);
     }
     
     return ret.return_obj;
+}
+
+i32 define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values)
+{
+    SCRATCH();
+    
+    if (values.count == 0) {
+        values = array_make<i64>(scratch.arena, names.count);
+        foreach(i, values.count) values[i] = i;
+    }
+    
+    names = array_copy(yov->static_arena, names);
+    values = array_copy(yov->static_arena, values);
+    
+    VariableType t = {};
+    t.name = name;
+    t.kind = VariableKind_Enum;
+    t.vtype = inter->vtype_table.count;
+    t.enum_names = names;
+    t.enum_values = values;
+    assert(names.count == values.count);
+    array_add(&inter->vtype_table, t);
+    
+    return t.vtype;
+}
+
+void define_struct(Interpreter* inter, String name, Array<ObjectDefinition> members)
+{
+    Array<String> names = array_make<String>(yov->static_arena, members.count);
+    Array<i32> vtypes = array_make<i32>(yov->static_arena, members.count);
+    Array<u32> strides = array_make<u32>(yov->static_arena, members.count);
+    Array<OpNode*> initialize_expresions = array_make<OpNode*>(yov->static_arena, members.count);
+    
+    u32 stride = 0;
+    
+    foreach(i, vtypes.count)
+    {
+        ObjectDefinition member = members[i];
+        names[i] = member.name;
+        vtypes[i] = member.vtype;
+        initialize_expresions[i] = member.default_value;
+        
+        if (vtypes[i] < 0) return;
+        
+        strides[i] = stride;
+        stride += vtype_get_size(inter, vtypes[i]);
+    }
+    
+    VariableType t = {};
+    t.name = name;
+    t.kind = VariableKind_Struct;
+    t.vtype = inter->vtype_table.count;
+    t.struct_names = names;
+    t.struct_vtypes = vtypes;
+    t.struct_strides = strides;
+    t.struct_stride = stride;
+    t.struct_initialize_expresions = initialize_expresions;
+    array_add(&inter->vtype_table, t);
+}
+
+void define_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype, OpNode_Block* block)
+{
+    FunctionDefinition fn{};
+    fn.identifier = identifier;
+    fn.return_vtype = return_vtype;
+    fn.parameters = array_copy(yov->static_arena, parameters);
+    fn.defined_fn = block;
+    fn.code = code;
+    fn.is_intrinsic = false;
+    array_add(&inter->functions, fn);
+}
+
+void define_intrinsic_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype)
+{
+    FunctionDefinition fn{};
+    fn.identifier = identifier;
+    fn.return_vtype = return_vtype;
+    fn.parameters = array_copy(yov->static_arena, parameters);
+    fn.defined_fn = NULL;
+    fn.code = code;
+    fn.is_intrinsic = true;
+    array_add(&inter->functions, fn);
 }
 
 Object* member_from_object(Interpreter* inter, Object* obj, String member)
@@ -2261,7 +2327,7 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path)
 b32 interpretion_failed(Interpreter* inter)
 {
     if (!inter->settings.execute) return false;
-    return inter->ctx->error_count > 0;
+    return yov->error_count > 0;
 }
 
 b32 skip_ops(Interpreter* inter)

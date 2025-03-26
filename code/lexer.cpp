@@ -251,11 +251,10 @@ inline_fn Token extract_next_token(Lexer* lexer)
     return extract_token(lexer, TokenKind_Error, 1);
 }
 
-Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens, i32 script_id)
+Array<Token> generate_tokens(String text, b32 discard_tokens, i32 script_id)
 {
-    Lexer* lexer = arena_push_struct<Lexer>(ctx->temp_arena);
-    lexer->ctx = ctx;
-    lexer->tokens = pooled_array_make<Token>(lexer->ctx->temp_arena, 1024);
+    Lexer* lexer = arena_push_struct<Lexer>(yov->temp_arena);
+    lexer->tokens = pooled_array_make<Token>(yov->temp_arena, 1024);
     lexer->text = text;
     lexer->script_id = script_id;
     
@@ -278,5 +277,5 @@ Array<Token> generate_tokens(Yov* ctx, String text, b32 discard_tokens, i32 scri
         if (!discard) array_add(&lexer->tokens, token);
     }
     
-    return array_from_pooled_array(lexer->ctx->static_arena, lexer->tokens);
+    return array_from_pooled_array(yov->static_arena, lexer->tokens);
 }
