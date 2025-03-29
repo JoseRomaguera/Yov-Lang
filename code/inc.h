@@ -96,6 +96,18 @@ void memory_zero(void* dst, u64 size);
 #define YOV_REVISION_VERSION 0
 #define YOV_VERSION STR("v"MACRO_STR(YOV_MAJOR_VERSION)"."MACRO_STR(YOV_MINOR_VERSION)"."MACRO_STR(YOV_REVISION_VERSION))
 
+//- C STRING 
+
+u32 cstring_size(const char* str);
+u32 cstring_set(char* dst, const char* src, u32 src_size, u32 buff_size);
+u32 cstring_copy(char* dst, const char* src, u32 buff_size);
+u32 cstring_append(char* dst, const char* src, u32 buff_size);
+void cstring_from_u64(char* dst, u64 value, u32 base = 10);
+void cstring_from_i64(char* dst, i64 value, u32 base = 10);
+void cstring_from_f64(char* dst, f64 value, u32 decimals);
+
+//- BASE STRUCTS 
+
 struct Arena;
 
 struct RawBuffer {
@@ -115,6 +127,13 @@ struct String {
     inline u8& operator[](u64 index) {
         assert(index < size);
         return ((u8*)data)[index];
+    }
+    
+    String() = default;
+    
+    String(const char* cstr) {
+        size = cstring_size(cstr);
+        data = (char*)cstr;
     }
 };
 
@@ -246,16 +265,6 @@ void os_console_wait();
 
 u64 u64_divide_high(u64 n0, u64 n1);
 u32 pages_from_bytes(u64 bytes);
-
-//- C STRING 
-
-u32 cstring_size(const char* str);
-u32 cstring_set(char* dst, const char* src, u32 src_size, u32 buff_size);
-u32 cstring_copy(char* dst, const char* src, u32 buff_size);
-u32 cstring_append(char* dst, const char* src, u32 buff_size);
-void cstring_from_u64(char* dst, u64 value, u32 base = 10);
-void cstring_from_i64(char* dst, i64 value, u32 base = 10);
-void cstring_from_f64(char* dst, f64 value, u32 decimals);
 
 //- STRING 
 
@@ -683,6 +692,7 @@ struct OpNode_ObjectDefinition : OpNode {
     String object_name;
     OpNode_ObjectType* type;
     OpNode* assignment;
+    b8 is_constant;
 };
 
 struct OpNode_FunctionCall : OpNode {
@@ -823,6 +833,7 @@ struct Object {
     i32 vtype;
     Scope* scope;
     RawBuffer memory;
+    b8 is_constant;
 };
 
 #define VType_Unknown -1
@@ -830,7 +841,11 @@ struct Object {
 #define VType_Int 1
 #define VType_Bool 2
 #define VType_String 3
-#define VType_Enum_CopyMode vtype_from_name(inter, STR("CopyMode"))
+
+#define VType_CopyMode vtype_from_name(inter, "CopyMode")
+#define VType_YovInfo vtype_from_name(inter, "YovInfo")
+#define VType_Context vtype_from_name(inter, "Context")
+#define VType_OS vtype_from_name(inter, "OS")
 
 #define VType_IntArray vtype_from_array_dimension(inter, VType_Int, 1)
 #define VType_BoolArray vtype_from_array_dimension(inter, VType_Bool, 1)
@@ -959,7 +974,11 @@ struct Interpreter {
     Scope* current_scope;
     Scope* free_scope;
     
-    Object* cd_obj;
+    struct {
+        Object* yov;
+        Object* os;
+        Object* context;
+    } globals;
 };
 
 void interpreter_exit(Interpreter* inter);
@@ -1036,6 +1055,8 @@ void interpret_object_initialize(Interpreter* inter, RawBuffer buffer, i32 vtype
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
+Object* get_cd(Interpreter* inter);
+String get_cd_value(Interpreter* inter);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
 b32 interpretion_failed(Interpreter* inter);
 b32 skip_ops(Interpreter* inter);

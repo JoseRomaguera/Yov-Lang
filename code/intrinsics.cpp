@@ -25,7 +25,7 @@ internal_fn FunctionReturn intrinsic__call(Interpreter* inter, Array<Object*> va
     Result res = user_assertion(inter, string_format(scratch.arena, "Call:\n%S", command_line));
     
     if (res.success) {
-        result = os_call(get_string(inter->cd_obj), command_line);
+        result = os_call(get_cd_value(inter), command_line);
     }
     
     return { obj_alloc_temp_int(inter, result), RESULT_SUCCESS };
@@ -42,7 +42,7 @@ internal_fn FunctionReturn intrinsic__call_exe(Interpreter* inter, Array<Object*
     Result res = user_assertion(inter, string_format(scratch.arena, "Call Exe:\n%S %S", exe_name, params));
     
     if (res.success) {
-        result = os_call_exe(get_string(inter->cd_obj), exe_name, params);
+        result = os_call_exe(get_cd_value(inter), exe_name, params);
     }
     
     return { obj_alloc_temp_int(inter, result), RESULT_SUCCESS };
@@ -58,7 +58,7 @@ internal_fn FunctionReturn intrinsic__set_cd(Interpreter* inter, Array<Object*> 
 {
     SCRATCH();
     
-    Object* obj = inter->cd_obj;
+    Object* obj = get_cd(inter);
     String path = get_string(vars[0]);
     
     if (os_path_is_absolute(path)) {

@@ -33,7 +33,7 @@ internal_fn OpKind op_kind_from_tokens(Parser* parser)
         if (t1.kind == TokenKind_OpenParenthesis) return OpKind_FunctionCall;
     }
     
-    // Variable definition
+    // Object definition
     if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Identifier) return OpKind_ObjectDefinition;
     if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Assignment) return OpKind_ObjectDefinition;
     if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_OpenBracket) return OpKind_ObjectDefinition;
@@ -45,6 +45,7 @@ internal_fn OpKind op_kind_from_tokens(Parser* parser)
         if (t3.kind == TokenKind_EnumKeyword) return OpKind_EnumDefinition;
         if (t3.kind == TokenKind_StructKeyword) return OpKind_StructDefinition;
         if (t3.kind == TokenKind_OpenParenthesis) return OpKind_FunctionDefinition;
+        return OpKind_ObjectDefinition;
     }
     
     if (assignment_count == 1) return OpKind_Assignment;
@@ -1085,6 +1086,7 @@ OpNode* extract_object_definition(Parser* parser)
     Token type_or_assignment_token = peek_token(parser);
     
     if (type_or_assignment_token.kind == TokenKind_Assignment) {}
+    else if (type_or_assignment_token.kind == TokenKind_Colon) {}
     else if (type_or_assignment_token.kind == TokenKind_Identifier)
     {
         node_type = (OpNode_ObjectType*)extract_object_type(parser);
@@ -1100,13 +1102,19 @@ OpNode* extract_object_definition(Parser* parser)
     Token assignment_token = extract_token(parser);
     
     OpNode* assignment_node = NULL;
+    b32 is_constant = false;
     
     if (assignment_token.kind != TokenKind_NextSentence && assignment_token.kind != TokenKind_None)
     {
-        if (assignment_token.kind != TokenKind_Assignment || assignment_token.binary_operator != BinaryOperator_None) {
+        b32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.binary_operator == BinaryOperator_None;
+        b32 constant_assignment = assignment_token.kind == TokenKind_Colon;
+        
+        if (!variable_assignment && !constant_assignment) {
             report_objdef_expecting_assignment(starting_token.code);
             return alloc_node(parser, OpKind_Error, starting_token.code);
         }
+        
+        is_constant = constant_assignment;
         
         Array<Token> assignment_tokens = extract_tokens_until(parser, false, TokenKind_NextSentence);
         assignment_node = extract_expresion_from_array(parser, assignment_tokens);
@@ -1128,6 +1136,7 @@ OpNode* extract_object_definition(Parser* parser)
     node->assignment = assignment_node;
     node->type = node_type;
     node->object_name = identifier_token.value;
+    node->is_constant = (b8)is_constant;
     
     return node;
 }

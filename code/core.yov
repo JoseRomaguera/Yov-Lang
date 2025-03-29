@@ -1,4 +1,11 @@
 
+YovInfo :: struct {
+    version: String;
+    major: Int;
+    minor: Int;
+    revision: Int;
+}
+
 ParamInfo :: struct {
     name: String;
     type: String;
@@ -18,11 +25,12 @@ Context :: struct {
     structs: StructInfo[];
 }
 
-YovInfo :: struct {
-    version: String;
-    major: Int;
-    minor: Int;
-    revision: Int;
+OSKind :: enum {
+    Windows, Linux
+}
+
+OS :: struct {
+    kind: OSKind;
 }
 
 CopyMode :: enum {
@@ -30,11 +38,15 @@ CopyMode :: enum {
     Override,
 }
 
+yov     :: YovInfo();
+context :: Context();
+os      :: OS();
+
 // Core
 print       :: (text: String);
 println     :: (text: String);
-call        :: (command: String);
-call_exe    :: (exe_name: String, arguments: String[]);
+call        :: (command: String) -> Int;
+call_exe    :: (exe_name: String, arguments: String[]) -> Int;
 // call_script :: (script_name: String, arguments: String[]);
 exit        :: ();
 set_cd      :: (cd: String);
@@ -59,7 +71,7 @@ ask_yesno :: (text: String) -> Bool;
 
 // File System
 exists           :: (path: String) -> Bool;
-create_directory :: (path: String, recursive: String) -> Bool;
+create_directory :: (path: String, recursive: Bool) -> Bool;
 delete_directory :: (path: String) -> Bool;
 copy_directory   :: (dst: String, src: String) -> Bool;
 move_directory   :: (dst: String, src: String) -> Bool;

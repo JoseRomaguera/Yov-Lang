@@ -24,12 +24,11 @@ app_name := "yov";
 
 //-
 
-root := context_script_dir / "..";
+root := context.script_dir / "..";
 set_cd(root);
 
 create_directory("build", true);
 set_cd("build");
-
 
 defines: String[];
 libs:    String[];

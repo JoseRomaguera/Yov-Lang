@@ -1512,6 +1512,7 @@ internal_fn b32 generate_program_args(Array<String> raw_args)
 
 b32 yov_read_args()
 {
+    SCRATCH();
     Array<String> args = os_get_args(yov->static_arena);
     
     if (args.count <= 0) {
@@ -1549,7 +1550,7 @@ b32 yov_read_args()
     Array<String> script_args = array_subarray(args, script_args_start_index, args.count - script_args_start_index);
     generate_program_args(script_args);
     
-    yov->main_script_path = args[0];
+    yov->main_script_path = resolve_import_path(yov->static_arena, yov, os_get_working_path(scratch.arena), args[0]);
     
     return true;
 }

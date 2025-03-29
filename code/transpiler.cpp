@@ -115,6 +115,46 @@ String transpile_definitions(Arena* arena, OpNode_Block* ast)
             continue;
         }
         
+        if (node0->kind == OpKind_ObjectDefinition)
+        {
+            OpNode_ObjectDefinition* node = (OpNode_ObjectDefinition*)node0;
+            if (!node->is_constant) continue;
+            
+            String name = node->object_name;
+            
+            u32 in = 2;
+            
+            indent(&builder, 1); appendf(&builder, "// global %S\n", name);
+            indent(&builder, 1); append(&builder, "{\n");
+            
+            String type = {};
+            
+            if (node->type->name.size == 0) {
+                if (node->assignment->kind == OpKind_FunctionCall) {
+                    OpNode_FunctionCall* assignment = (OpNode_FunctionCall*)node->assignment;
+                    type = string_format(scratch.arena, "vtype_from_name(inter, \"%S\")", assignment->identifier);
+                }
+                else {
+                    assert(0);
+                }
+            }
+            else {
+                type = transpile_definition_for_object_type(scratch.arena, node->type);
+            }
+            
+            indent(&builder, in); appendf(&builder, "Object* obj = define_object(inter, \"%S\", %S);\n", name, type);
+            
+            if (node->assignment->kind == OpKind_None) {}
+            else if (node->assignment->kind == OpKind_FunctionCall) {}
+            else {
+                assert(0);
+            }
+            
+            indent(&builder, 1); append(&builder, "}\n");
+            
+            continue;
+        }
+        
         assert(0);
     }
     
