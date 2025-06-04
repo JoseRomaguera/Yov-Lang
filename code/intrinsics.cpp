@@ -365,6 +365,20 @@ internal_fn FunctionReturn intrinsic__delete_file(Interpreter* inter, Array<Obje
     return { obj_alloc_temp_bool(inter, res.success), res };
 }
 
+internal_fn FunctionReturn intrinsic__write_file(Interpreter* inter, Array<Object*> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String path = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    String content = get_string(vars[1]);
+    // TODO(Jose): b32 append = get_bool(vars[2]);
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Write file:\n'%S'", path));
+    if (res.success) res = os_write_entire_file(path, { content.data, content.size });
+    
+    return { obj_alloc_temp_bool(inter, res.success), res };
+}
+
 #define INTR(name, fn) { STR(name), fn }
 
 Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
@@ -405,6 +419,7 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("copy_file", intrinsic__copy_file),
         INTR("move_file", intrinsic__move_file),
         INTR("delete_file", intrinsic__delete_file),
+        INTR("write_file", intrinsic__write_file),
     };
     
     return array_copy(arena, array_make(table, array_count(table)));

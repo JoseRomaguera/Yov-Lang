@@ -275,4 +275,13 @@ internal_fn void define_core(Interpreter* inter)
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, STR("delete_file"), parameters, vtype_from_name(inter, STR("Bool")));
     }
+    // function write_file
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[2];
+        p[0] = obj_def_make(STR("path"), vtype_from_name(inter, STR("String")));
+        p[1] = obj_def_make(STR("content"), vtype_from_name(inter, STR("String")));
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, STR("write_file"), parameters, vtype_from_name(inter, STR("Bool")));
+    }
 }

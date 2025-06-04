@@ -78,3 +78,4 @@ move_directory   :: (dst: String, src: String) -> Bool;
 copy_file        :: (dst: String, src: String, mode: CopyMode) -> Bool;
 move_file        :: (dst: String, src: String) -> Bool;
 delete_file      :: (path: String) -> Bool;
+write_file       :: (path: String, content: String) -> Bool;
