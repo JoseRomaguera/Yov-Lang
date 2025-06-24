@@ -390,9 +390,9 @@ OpNode* extract_expresion(Parser* parser)
             b32 is_sign = false;
             
             i32 preference = i32_max;
-            if (token.kind == TokenKind_BinaryOperator)
+            if (token_is_sign_or_binary_op(token.kind))
             {
-                if (left_token.kind == TokenKind_BinaryOperator) is_sign = true;
+                if (token_is_sign_or_binary_op(left_token.kind)) is_sign = true;
                 if (left_token.kind == TokenKind_OpenParenthesis) is_sign = true;
                 if (left_token.kind == TokenKind_None) is_sign = true;
                 
@@ -400,20 +400,21 @@ OpNode* extract_expresion(Parser* parser)
                     preference = sign_preference;
                 }
                 else {
-                    if (token.binary_operator == BinaryOperator_Addition) preference = addition_preference;
-                    else if (token.binary_operator == BinaryOperator_Substraction) preference = addition_preference;
-                    else if (token.binary_operator == BinaryOperator_Multiplication) preference = multiplication_preference;
-                    else if (token.binary_operator == BinaryOperator_Division) preference = multiplication_preference;
-                    else if (token.binary_operator == BinaryOperator_Modulo) preference = multiplication_preference;
-                    else if (token.binary_operator == BinaryOperator_LogicalNot) preference = logical_preference;
-                    else if (token.binary_operator == BinaryOperator_LogicalOr) preference = logical_preference;
-                    else if (token.binary_operator == BinaryOperator_LogicalAnd) preference = logical_preference;
-                    else if (token.binary_operator == BinaryOperator_Equals) preference = boolean_preference;
-                    else if (token.binary_operator == BinaryOperator_NotEquals) preference = boolean_preference;
-                    else if (token.binary_operator == BinaryOperator_LessThan) preference = boolean_preference;
-                    else if (token.binary_operator == BinaryOperator_LessEqualsThan) preference = boolean_preference;
-                    else if (token.binary_operator == BinaryOperator_GreaterThan) preference = boolean_preference;
-                    else if (token.binary_operator == BinaryOperator_GreaterEqualsThan) preference = boolean_preference;
+                    BinaryOperator op = binary_operator_from_token(token.kind);
+                    if (op == BinaryOperator_Addition) preference = addition_preference;
+                    else if (op == BinaryOperator_Substraction) preference = addition_preference;
+                    else if (op == BinaryOperator_Multiplication) preference = multiplication_preference;
+                    else if (op == BinaryOperator_Division) preference = multiplication_preference;
+                    else if (op == BinaryOperator_Modulo) preference = multiplication_preference;
+                    else if (op == BinaryOperator_LogicalNot) preference = logical_preference;
+                    else if (op == BinaryOperator_LogicalOr) preference = logical_preference;
+                    else if (op == BinaryOperator_LogicalAnd) preference = logical_preference;
+                    else if (op == BinaryOperator_Equals) preference = boolean_preference;
+                    else if (op == BinaryOperator_NotEquals) preference = boolean_preference;
+                    else if (op == BinaryOperator_LessThan) preference = boolean_preference;
+                    else if (op == BinaryOperator_LessEqualsThan) preference = boolean_preference;
+                    else if (op == BinaryOperator_GreaterThan) preference = boolean_preference;
+                    else if (op == BinaryOperator_GreaterEqualsThan) preference = boolean_preference;
                     else {
                         assert(0);
                     }
@@ -444,17 +445,32 @@ OpNode* extract_expresion(Parser* parser)
         {
             Token op_token = tokens[preferent_operator_index];
             
-            if (op_token.kind == TokenKind_BinaryOperator)
+            if (token_is_sign_or_binary_op(op_token.kind))
             {
                 if (preference_is_sign)
                 {
                     assert(preferent_operator_index == 0);
-                    BinaryOperator op = tokens[preferent_operator_index].binary_operator;
                     
-                    auto node = (OpNode_Sign*)alloc_node(parser, OpKind_Sign, tokens[preferent_operator_index].code);
-                    node->op = op;
-                    node->expresion = extract_expresion_from_array(parser, array_subarray(tokens, 1, tokens.count - 1));
-                    return node;
+                    Token sign_token = tokens[preferent_operator_index];
+                    OpNode* expresion = extract_expresion_from_array(parser, array_subarray(tokens, 1, tokens.count - 1));
+                    
+                    if (sign_token.kind == TokenKind_Ampersand)
+                    {
+                        auto node = (OpNode_Reference*)alloc_node(parser, OpKind_Reference, sign_token.code);
+                        node->expresion = expresion;
+                        return node;
+                    }
+                    else
+                    {
+                        BinaryOperator op = binary_operator_from_token(sign_token.kind);
+                        
+                        assert(op != BinaryOperator_None);
+                        
+                        auto node = (OpNode_Sign*)alloc_node(parser, OpKind_Sign, sign_token.code);
+                        node->op = op;
+                        node->expresion = expresion;
+                        return node;
+                    }
                 }
                 else
                 {
@@ -471,7 +487,7 @@ OpNode* extract_expresion(Parser* parser)
                         auto node = (OpNode_Binary*)alloc_node(parser, OpKind_Binary, tokens[0].code);
                         node->left = left_expresion;
                         node->right = right_expresion;
-                        node->op = op_token.binary_operator;
+                        node->op = op_token.assignment_binary_operator;
                         return node;
                     }
                 }
@@ -799,7 +815,7 @@ internal_fn OpNode* extract_enum_definition(Parser* parser)
         OpNode* value{};
         Token assignment_token = peek_token(parser);
         
-        if (assignment_token.kind == TokenKind_Assignment && assignment_token.binary_operator == BinaryOperator_None) {
+        if (assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None) {
             extract_token(parser);
             // TODO(Jose): // TODO(Jose): Unitl: CloseBrace or Comma
             Array<Token> expresion_tokens = extract_tokens_until(parser, false, TokenKind_CloseBrace, TokenKind_Comma);
@@ -1028,7 +1044,7 @@ internal_fn OpNode* extract_assignment(Parser* parser)
     auto node = (OpNode_Assignment*)alloc_node(parser, OpKind_Assignment, starting_token.code);
     node->destination = destination;
     node->source = source;
-    node->binary_operator = assignment_token.binary_operator;
+    node->binary_operator = assignment_token.assignment_binary_operator;
     return node;
 }
 
@@ -1106,7 +1122,7 @@ OpNode* extract_object_definition(Parser* parser)
     
     if (assignment_token.kind != TokenKind_NextSentence && assignment_token.kind != TokenKind_None)
     {
-        b32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.binary_operator == BinaryOperator_None;
+        b32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None;
         b32 constant_assignment = assignment_token.kind == TokenKind_Colon;
         
         if (!variable_assignment && !constant_assignment) {

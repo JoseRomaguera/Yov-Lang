@@ -1050,22 +1050,22 @@ u32 array_calculate_index(PooledArrayR* array, void* ptr)
 //- MISC 
 
 String string_from_binary_operator(BinaryOperator op) {
-    if (op == BinaryOperator_Addition) return STR("+");
-    if (op == BinaryOperator_Substraction) return STR("-");
-    if (op == BinaryOperator_Multiplication) return STR("*");
-    if (op == BinaryOperator_Division) return STR("/");
-    if (op == BinaryOperator_Modulo) return STR("%");
-    if (op == BinaryOperator_LogicalNot) return STR("!");
-    if (op == BinaryOperator_LogicalOr) return STR("||");
-    if (op == BinaryOperator_LogicalAnd) return STR("&&");
-    if (op == BinaryOperator_Equals) return STR("==");
-    if (op == BinaryOperator_NotEquals) return STR("!=");
-    if (op == BinaryOperator_LessThan) return STR("<");
-    if (op == BinaryOperator_LessEqualsThan) return STR("<=");
-    if (op == BinaryOperator_GreaterThan) return STR(">");
-    if (op == BinaryOperator_GreaterEqualsThan) return STR(">=");
+    if (op == BinaryOperator_Addition) return "+";
+    if (op == BinaryOperator_Substraction) return "-";
+    if (op == BinaryOperator_Multiplication) return "*";
+    if (op == BinaryOperator_Division) return "/";
+    if (op == BinaryOperator_Modulo) return "%";
+    if (op == BinaryOperator_LogicalNot) return "!";
+    if (op == BinaryOperator_LogicalOr) return "||";
+    if (op == BinaryOperator_LogicalAnd) return "&&";
+    if (op == BinaryOperator_Equals) return "==";
+    if (op == BinaryOperator_NotEquals) return "!=";
+    if (op == BinaryOperator_LessThan) return "<";
+    if (op == BinaryOperator_LessEqualsThan) return "<=";
+    if (op == BinaryOperator_GreaterThan) return ">";
+    if (op == BinaryOperator_GreaterEqualsThan) return ">=";
     assert(0);
-    return STR("?");
+    return "?";
 }
 
 String string_from_tokens(Arena* arena, Array<Token> tokens)
@@ -1087,39 +1087,55 @@ String string_from_tokens(Arena* arena, Array<Token> tokens)
 
 String debug_info_from_token(Arena* arena, Token token)
 {
-    if (token.kind == TokenKind_Separator) return STR("separator");
-    if (token.kind == TokenKind_Identifier) return string_format(arena, "identifier: %S", token.value);
-    if (token.kind == TokenKind_IfKeyword) return STR("if");
-    if (token.kind == TokenKind_ElseKeyword) return STR("else");
-    if (token.kind == TokenKind_WhileKeyword) return STR("while");
-    if (token.kind == TokenKind_ForKeyword) return STR("for");
-    if (token.kind == TokenKind_EnumKeyword) return STR("enum");
-    if (token.kind == TokenKind_IntLiteral) return string_format(arena, "Int Literal: %S", token.value);
-    if (token.kind == TokenKind_BoolLiteral) { return string_format(arena, "Bool Literal: %S", token.value); }
-    if (token.kind == TokenKind_StringLiteral) { return string_format(arena, "String Literal: %S", token.value); }
-    if (token.kind == TokenKind_Comment) { return string_format(arena, "Comment: %S", token.value); }
-    if (token.kind == TokenKind_Comma) return STR(STR(","));
-    if (token.kind == TokenKind_Dot) return STR(STR("."));
-    if (token.kind == TokenKind_Colon) return STR(STR(":"));
-    if (token.kind == TokenKind_OpenBrace) return STR(STR("{"));
-    if (token.kind == TokenKind_CloseBrace) return STR(STR("}"));
-    if (token.kind == TokenKind_OpenBracket) return STR(STR("["));
-    if (token.kind == TokenKind_CloseBracket) return STR(STR("]"));
-    if (token.kind == TokenKind_OpenParenthesis) return STR(STR("("));
-    if (token.kind == TokenKind_CloseParenthesis) return STR(STR(")"));
-    if (token.kind == TokenKind_Assignment) {
-        if (token.binary_operator == BinaryOperator_None) return STR("=");
-        return string_format(arena, "%S=", string_from_binary_operator(token.binary_operator));
-    }
-    if (token.kind == TokenKind_BinaryOperator) return string_format(arena, "%S", string_from_binary_operator(token.binary_operator));
-    if (token.kind == TokenKind_OpenString) return STR("Open String");
-    if (token.kind == TokenKind_NextLine) return STR("Next Line");
-    if (token.kind == TokenKind_CloseString) return STR("Close String");
-    if (token.kind == TokenKind_NextSentence) return STR(";");
-    if (token.kind == TokenKind_Error) return STR("Error");
-    if (token.kind == TokenKind_None) return STR("None");
+    TokenKind k = token.kind;
     
-    return STR("?");
+    if (k == TokenKind_Separator) return "separator";
+    if (k == TokenKind_Identifier) return string_format(arena, "identifier: %S", token.value);
+    if (k == TokenKind_IfKeyword) return "if";
+    if (k == TokenKind_ElseKeyword) return "else";
+    if (k == TokenKind_WhileKeyword) return "while";
+    if (k == TokenKind_ForKeyword) return "for";
+    if (k == TokenKind_EnumKeyword) return "enum";
+    if (k == TokenKind_IntLiteral) return string_format(arena, "Int Literal: %S", token.value);
+    if (k == TokenKind_BoolLiteral) { return string_format(arena, "Bool Literal: %S", token.value); }
+    if (k == TokenKind_StringLiteral) { return string_format(arena, "String Literal: %S", token.value); }
+    if (k == TokenKind_Comment) { return string_format(arena, "Comment: %S", token.value); }
+    if (k == TokenKind_Comma) return ",";
+    if (k == TokenKind_Dot) return ".";
+    if (k == TokenKind_Colon) return ":";
+    if (k == TokenKind_OpenBrace) return "{";
+    if (k == TokenKind_CloseBrace) return "}";
+    if (k == TokenKind_OpenBracket) return "[";
+    if (k == TokenKind_CloseBracket) return "]";
+    if (k == TokenKind_OpenParenthesis) return "(";
+    if (k == TokenKind_CloseParenthesis) return ")";
+    if (k == TokenKind_Assignment) {
+        if (token.assignment_binary_operator == BinaryOperator_None) return "=";
+        return string_format(arena, "%S=", string_from_binary_operator(token.assignment_binary_operator));
+    }
+    if (k == TokenKind_PlusSign) return "+";
+    if (k == TokenKind_MinusSign) return "-";
+    if (k == TokenKind_Asterisk) return "*";
+    if (k == TokenKind_Slash) return "/";
+    if (k == TokenKind_Modulo) return "%";
+    if (k == TokenKind_Ampersand) return "&";
+    if (k == TokenKind_Exclamation) return "!";
+    if (k == TokenKind_LogicalOr) return "||";
+    if (k == TokenKind_LogicalAnd) return "&&";
+    if (k == TokenKind_CompEquals) return "==";
+    if (k == TokenKind_CompNotEquals) return "!=";
+    if (k == TokenKind_CompLess) return "<";
+    if (k == TokenKind_CompLessEquals) return "<=";
+    if (k == TokenKind_CompGreater) return ">";
+    if (k == TokenKind_CompGreaterEquals) return ">=";
+    if (k == TokenKind_OpenString) return "Open String";
+    if (k == TokenKind_NextLine) return "Next Line";
+    if (k == TokenKind_CloseString) return "Close String";
+    if (k == TokenKind_NextSentence) return ";";
+    if (k == TokenKind_Error) return "Error";
+    if (k == TokenKind_None) return "None";
+    
+    return "?";
 }
 
 void log_tokens(Array<Token> tokens)
@@ -1149,6 +1165,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_ArrayExpresion) return sizeof(OpNode_ArrayExpresion);
     if (kind == OpKind_Binary) return sizeof(OpNode_Binary);
     if (kind == OpKind_Sign) return sizeof(OpNode_Sign);
+    if (kind == OpKind_Reference) return sizeof(OpNode_Reference);
     if (kind == OpKind_IntLiteral) return sizeof(OpNode_Literal);
     if (kind == OpKind_StringLiteral) return sizeof(OpNode_Literal);
     if (kind == OpKind_BoolLiteral) return sizeof(OpNode_Literal);
@@ -1416,7 +1433,7 @@ i32 yov_import_script(String path)
     script->dir = path_resolve(yov->static_arena, path_append(scratch.arena, path, STR("..")));;
     script->text = STR(raw_file);
     
-    script->tokens = generate_tokens(script->text, true, script_id);
+    script->tokens = lexer_generate_tokens(script->text, true, script_id);
     script->ast = generate_ast(script->tokens, true);
     
     Array<OpNode_Import*> imports = get_imports(scratch.arena, script->ast);

@@ -403,7 +403,24 @@ enum TokenKind {
     TokenKind_NextSentence,
     
     TokenKind_Assignment,
-    TokenKind_BinaryOperator,
+    
+    TokenKind_PlusSign, // +
+    TokenKind_MinusSign, // -
+    TokenKind_Asterisk, // *
+    TokenKind_Slash, // /
+    TokenKind_Modulo, // %
+    TokenKind_Ampersand, // &
+    TokenKind_Exclamation, // !
+    
+    TokenKind_LogicalOr, // ||
+    TokenKind_LogicalAnd, // &&
+    
+    TokenKind_CompEquals, // ==
+    TokenKind_CompNotEquals, // !=
+    TokenKind_CompLess, // <
+    TokenKind_CompLessEquals, // <=
+    TokenKind_CompGreater, // >
+    TokenKind_CompGreaterEquals, // >=
     
     TokenKind_IfKeyword,
     TokenKind_ElseKeyword,
@@ -423,7 +440,7 @@ struct Token {
     CodeLocation code;
     
     union {
-        BinaryOperator binary_operator;
+        BinaryOperator assignment_binary_operator;
     };
 };
 
@@ -606,7 +623,10 @@ struct Lexer {
     u32 code_line;
 };
 
-Array<Token> generate_tokens(String text, b32 discard_tokens, i32 script_id);
+Array<Token> lexer_generate_tokens(String text, b32 discard_tokens, i32 script_id);
+
+BinaryOperator binary_operator_from_token(TokenKind token);
+b32 token_is_sign_or_binary_op(TokenKind token);
 
 //- AST 
 
@@ -627,6 +647,7 @@ enum OpKind {
     OpKind_ArrayExpresion,
     OpKind_Binary,
     OpKind_Sign,
+    OpKind_Reference,
     OpKind_IntLiteral,
     OpKind_StringLiteral,
     OpKind_BoolLiteral,
@@ -715,6 +736,10 @@ struct OpNode_Binary : OpNode {
 struct OpNode_Sign : OpNode {
     OpNode* expresion;
     BinaryOperator op;
+};
+
+struct OpNode_Reference : OpNode {
+    OpNode* expresion;
 };
 
 struct OpNode_Literal : OpNode {

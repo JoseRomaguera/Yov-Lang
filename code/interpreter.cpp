@@ -197,6 +197,18 @@ Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext c
         }
     }
     
+    if (node->kind == OpKind_Reference)
+    {
+        // TODO(Jose): // TODO(Jose): 
+        /*
+        if (depth != 0 || !context.is_assignment) {
+            return inter->nil_obj;
+        }
+        */
+        auto node0 = (OpNode_Reference*)node;
+        return interpret_expresion(inter, node0->expresion, context);
+    }
+    
     if (node->kind == OpKind_IntLiteral) return obj_alloc_temp_int(inter, ((OpNode_Literal*)node)->int_literal);
     if (node->kind == OpKind_StringLiteral) {
         auto node0 = (OpNode_Literal*)node;
@@ -443,6 +455,8 @@ Object* interpret_assignment_for_object_definition(Interpreter* inter, OpNode_Ob
     
     if (is_unknown(assignment_result)) return inter->nil_obj;
     
+    b32 is_reference = assignment->kind == OpKind_Reference;// TODO(Jose): 
+    
     if (is_void(assignment_result))
     {
         if (vtype <= 0) {
@@ -513,6 +527,8 @@ void interpret_assignment(Interpreter* inter, OpNode* node0)
     BinaryOperator op = node->binary_operator;
     
     Object* assignment_obj = interpret_expresion(inter, assignment, expresion_context_make(obj->vtype));
+    
+    b32 is_reference = assignment->kind == OpKind_Reference;// TODO(Jose): 
     
     if (is_unknown(assignment_obj)) return;
     if (is_void(assignment_obj)) {

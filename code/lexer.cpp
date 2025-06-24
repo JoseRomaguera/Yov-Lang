@@ -16,7 +16,7 @@ inline_fn b32 codepoint_is_text(u32 codepoint) {
     return false;
 }
 
-inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
+internal_fn Token lexer_extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
 {
     assert(size > 0);
     
@@ -30,16 +30,16 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
     token.code = code_location_make(lexer->cursor, lexer->code_start_line_offset, lexer->code_line, lexer->code_column, lexer->script_id);
     
     if (kind == TokenKind_Identifier) {
-        if (string_equals(STR("if"), token.value)) kind = TokenKind_IfKeyword;
-        else if (string_equals(STR("else"), token.value)) kind = TokenKind_ElseKeyword;
-        else if (string_equals(STR("while"), token.value)) kind = TokenKind_WhileKeyword;
-        else if (string_equals(STR("for"), token.value)) kind = TokenKind_ForKeyword;
-        else if (string_equals(STR("enum"), token.value)) kind = TokenKind_EnumKeyword;
-        else if (string_equals(STR("struct"), token.value)) kind = TokenKind_StructKeyword;
-        else if (string_equals(STR("return"), token.value)) kind = TokenKind_ReturnKeyword;
-        else if (string_equals(STR("import"), token.value)) kind = TokenKind_ImportKeyword;
-        else if (string_equals(STR("true"), token.value)) kind = TokenKind_BoolLiteral;
-        else if (string_equals(STR("false"), token.value)) kind = TokenKind_BoolLiteral;
+        if (string_equals("if", token.value)) kind = TokenKind_IfKeyword;
+        else if (string_equals("else", token.value)) kind = TokenKind_ElseKeyword;
+        else if (string_equals("while", token.value)) kind = TokenKind_WhileKeyword;
+        else if (string_equals("for", token.value)) kind = TokenKind_ForKeyword;
+        else if (string_equals("enum", token.value)) kind = TokenKind_EnumKeyword;
+        else if (string_equals("struct", token.value)) kind = TokenKind_StructKeyword;
+        else if (string_equals("return", token.value)) kind = TokenKind_ReturnKeyword;
+        else if (string_equals("import", token.value)) kind = TokenKind_ImportKeyword;
+        else if (string_equals("true", token.value)) kind = TokenKind_BoolLiteral;
+        else if (string_equals("false", token.value)) kind = TokenKind_BoolLiteral;
     }
     
     token.kind = kind;
@@ -67,7 +67,7 @@ inline_fn Token extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
     return token;
 }
 
-inline_fn Token extract_token(Lexer* lexer, TokenKind kind, u32 codepoint_length)
+internal_fn Token lexer_extract_token(Lexer* lexer, TokenKind kind, u32 codepoint_length)
 {
     u64 start_cursor = lexer->cursor;
     u64 cursor = lexer->cursor;
@@ -78,17 +78,17 @@ inline_fn Token extract_token(Lexer* lexer, TokenKind kind, u32 codepoint_length
         string_get_codepoint(lexer->text, &cursor);
     }
     
-    return extract_dynamic_token(lexer, kind, cursor - start_cursor);
+    return lexer_extract_dynamic_token(lexer, kind, cursor - start_cursor);
 }
 
-inline_fn Token extract_token_with_binary_op(Lexer* lexer, TokenKind kind, BinaryOperator binary_op, u32 codepoint_length)
+internal_fn Token lexer_extract_token_assignment(Lexer* lexer, BinaryOperator binary_op, u32 codepoint_length)
 {
-    Token token = extract_token(lexer, kind, codepoint_length);
-    token.binary_operator = binary_op;
+    Token token = lexer_extract_token(lexer, TokenKind_Assignment, codepoint_length);
+    token.assignment_binary_operator = binary_op;
     return token;
 }
 
-inline_fn Token extract_next_token(Lexer* lexer)
+internal_fn Token lexer_extract_next_token(Lexer* lexer)
 {
     SCRATCH();
     
@@ -109,7 +109,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
     u32 c4 = codepoints[4];
     
     if (c0 == 0) {
-        return extract_token(lexer, TokenKind_NextLine, 1);
+        return lexer_extract_token(lexer, TokenKind_NextLine, 1);
     }
     
     if (codepoint_is_separator(c0))
@@ -123,7 +123,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
             }
             cursor = next_cursor;
         }
-        return extract_dynamic_token(lexer, TokenKind_Separator, cursor - lexer->cursor);
+        return lexer_extract_dynamic_token(lexer, TokenKind_Separator, cursor - lexer->cursor);
     }
     
     if (c0 == '/' && c1 == '/')
@@ -135,7 +135,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
             if (codepoint == '\n') break;
             cursor = next_cursor;
         }
-        return extract_dynamic_token(lexer, TokenKind_Comment, cursor - lexer->cursor);
+        return lexer_extract_dynamic_token(lexer, TokenKind_Comment, cursor - lexer->cursor);
     }
     
     if (c0 == '/' && c1 == '*')
@@ -157,7 +157,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
             }
             last_codepoint = codepoint;
         }
-        return extract_dynamic_token(lexer, TokenKind_Comment, cursor - lexer->cursor);
+        return lexer_extract_dynamic_token(lexer, TokenKind_Comment, cursor - lexer->cursor);
     }
     
     if (c0 == '"') {
@@ -174,51 +174,52 @@ inline_fn Token extract_next_token(Lexer* lexer)
             if (codepoint == '\\') ignore_next = true;
             if (codepoint == '"') break;
         }
-        return extract_dynamic_token(lexer, TokenKind_StringLiteral, cursor - lexer->cursor);
+        return lexer_extract_dynamic_token(lexer, TokenKind_StringLiteral, cursor - lexer->cursor);
     }
     
-    if (c0 == '-' && c1 == '>') return extract_token(lexer, TokenKind_Arrow, 2);
+    if (c0 == '-' && c1 == '>') return lexer_extract_token(lexer, TokenKind_Arrow, 2);
     
-    if (c0 == ',') return extract_token(lexer, TokenKind_Comma, 1);
-    if (c0 == '.') return extract_token(lexer, TokenKind_Dot, 1);
-    if (c0 == '{') return extract_token(lexer, TokenKind_OpenBrace, 1);
-    if (c0 == '}') return extract_token(lexer, TokenKind_CloseBrace, 1);
-    if (c0 == '[') return extract_token(lexer, TokenKind_OpenBracket, 1);
-    if (c0 == ']') return extract_token(lexer, TokenKind_CloseBracket, 1);
-    if (c0 == '"') return extract_token(lexer, TokenKind_OpenString, 1);
-    if (c0 == '(') return extract_token(lexer, TokenKind_OpenParenthesis, 1);
-    if (c0 == ')') return extract_token(lexer, TokenKind_CloseParenthesis, 1);
-    if (c0 == ':') return extract_token(lexer, TokenKind_Colon, 1);
-    if (c0 == ';') return extract_token(lexer, TokenKind_NextSentence, 1);
-    if (c0 == '\n') return extract_token(lexer, TokenKind_NextLine, 1);
-    if (c0 == '_') return extract_token(lexer, TokenKind_Identifier, 1);
+    if (c0 == ',') return lexer_extract_token(lexer, TokenKind_Comma, 1);
+    if (c0 == '.') return lexer_extract_token(lexer, TokenKind_Dot, 1);
+    if (c0 == '{') return lexer_extract_token(lexer, TokenKind_OpenBrace, 1);
+    if (c0 == '}') return lexer_extract_token(lexer, TokenKind_CloseBrace, 1);
+    if (c0 == '[') return lexer_extract_token(lexer, TokenKind_OpenBracket, 1);
+    if (c0 == ']') return lexer_extract_token(lexer, TokenKind_CloseBracket, 1);
+    if (c0 == '"') return lexer_extract_token(lexer, TokenKind_OpenString, 1);
+    if (c0 == '(') return lexer_extract_token(lexer, TokenKind_OpenParenthesis, 1);
+    if (c0 == ')') return lexer_extract_token(lexer, TokenKind_CloseParenthesis, 1);
+    if (c0 == ':') return lexer_extract_token(lexer, TokenKind_Colon, 1);
+    if (c0 == ';') return lexer_extract_token(lexer, TokenKind_NextSentence, 1);
+    if (c0 == '\n') return lexer_extract_token(lexer, TokenKind_NextLine, 1);
+    if (c0 == '_') return lexer_extract_token(lexer, TokenKind_Identifier, 1);
     
-    if (c0 == '+' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Addition, 2);
-    if (c0 == '-' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Substraction, 2);
-    if (c0 == '*' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Multiplication, 2);
-    if (c0 == '/' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Division, 2);
-    if (c0 == '%' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_Modulo, 2);
+    if (c0 == '+' && c1 == '=') return lexer_extract_token_assignment(lexer, BinaryOperator_Addition, 2);
+    if (c0 == '-' && c1 == '=') return lexer_extract_token_assignment(lexer, BinaryOperator_Substraction, 2);
+    if (c0 == '*' && c1 == '=') return lexer_extract_token_assignment(lexer, BinaryOperator_Multiplication, 2);
+    if (c0 == '/' && c1 == '=') return lexer_extract_token_assignment(lexer, BinaryOperator_Division, 2);
+    if (c0 == '%' && c1 == '=') return lexer_extract_token_assignment(lexer, BinaryOperator_Modulo, 2);
     
-    if (c0 == '=' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Equals, 2);
-    if (c0 == '!' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_NotEquals, 2);
-    if (c0 == '<' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_LessEqualsThan, 2);
-    if (c0 == '>' && c1 == '=') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_GreaterEqualsThan, 2);
+    if (c0 == '=' && c1 == '=') return lexer_extract_token(lexer, TokenKind_CompEquals, 2);
+    if (c0 == '!' && c1 == '=') return lexer_extract_token(lexer, TokenKind_CompNotEquals, 2);
+    if (c0 == '<' && c1 == '=') return lexer_extract_token(lexer, TokenKind_CompLessEquals, 2);
+    if (c0 == '>' && c1 == '=') return lexer_extract_token(lexer, TokenKind_CompGreaterEquals, 2);
     
-    if (c0 == '|' && c1 == '|') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_LogicalOr, 2);
-    if (c0 == '&' && c1 == '&') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_LogicalAnd, 2);
+    if (c0 == '|' && c1 == '|') return lexer_extract_token(lexer, TokenKind_LogicalOr, 2);
+    if (c0 == '&' && c1 == '&') return lexer_extract_token(lexer, TokenKind_LogicalAnd, 2);
     
-    if (c0 == '=') return extract_token_with_binary_op(lexer, TokenKind_Assignment, BinaryOperator_None, 1);
+    if (c0 == '=') return lexer_extract_token_assignment(lexer, BinaryOperator_None, 1);
     
-    if (c0 == '<') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_LessThan, 1);
-    if (c0 == '>') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_GreaterThan, 1);
+    if (c0 == '<') return lexer_extract_token(lexer, TokenKind_CompLess, 1);
+    if (c0 == '>') return lexer_extract_token(lexer, TokenKind_CompGreater, 1);
     
-    if (c0 == '+') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Addition, 1);
-    if (c0 == '-') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Substraction, 1);
-    if (c0 == '*') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Multiplication, 1);
-    if (c0 == '/') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Division, 1);
-    if (c0 == '%') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_Modulo, 1);
+    if (c0 == '+') return lexer_extract_token(lexer, TokenKind_PlusSign, 1);
+    if (c0 == '-') return lexer_extract_token(lexer, TokenKind_MinusSign, 1);
+    if (c0 == '*') return lexer_extract_token(lexer, TokenKind_Asterisk, 1);
+    if (c0 == '/') return lexer_extract_token(lexer, TokenKind_Slash, 1);
+    if (c0 == '%') return lexer_extract_token(lexer, TokenKind_Modulo, 1);
     
-    if (c0 == '!') return extract_token_with_binary_op(lexer, TokenKind_BinaryOperator, BinaryOperator_LogicalNot, 1);
+    if (c0 == '&') return lexer_extract_token(lexer, TokenKind_Ampersand, 1);
+    if (c0 == '!') return lexer_extract_token(lexer, TokenKind_Exclamation, 1);
     
     if (codepoint_is_number(c0))
     {
@@ -231,7 +232,7 @@ inline_fn Token extract_next_token(Lexer* lexer)
             }
             cursor = next_cursor;
         }
-        return extract_dynamic_token(lexer, TokenKind_IntLiteral, cursor - lexer->cursor);
+        return lexer_extract_dynamic_token(lexer, TokenKind_IntLiteral, cursor - lexer->cursor);
     }
     
     if (codepoint_is_text(c0))
@@ -245,13 +246,13 @@ inline_fn Token extract_next_token(Lexer* lexer)
             }
             cursor = next_cursor;
         }
-        return extract_dynamic_token(lexer, TokenKind_Identifier, cursor - lexer->cursor);
+        return lexer_extract_dynamic_token(lexer, TokenKind_Identifier, cursor - lexer->cursor);
     }
     
-    return extract_token(lexer, TokenKind_Error, 1);
+    return lexer_extract_token(lexer, TokenKind_Error, 1);
 }
 
-Array<Token> generate_tokens(String text, b32 discard_tokens, i32 script_id)
+Array<Token> lexer_generate_tokens(String text, b32 discard_tokens, i32 script_id)
 {
     Lexer* lexer = arena_push_struct<Lexer>(yov->temp_arena);
     lexer->tokens = pooled_array_make<Token>(yov->temp_arena, 1024);
@@ -263,7 +264,7 @@ Array<Token> generate_tokens(String text, b32 discard_tokens, i32 script_id)
     
     while (lexer->cursor < lexer->text.size)
     {
-        Token token = extract_next_token(lexer);
+        Token token = lexer_extract_next_token(lexer);
         
         b32 discard = false;
         
@@ -278,4 +279,52 @@ Array<Token> generate_tokens(String text, b32 discard_tokens, i32 script_id)
     }
     
     return array_from_pooled_array(yov->static_arena, lexer->tokens);
+}
+
+BinaryOperator binary_operator_from_token(TokenKind token)
+{
+    if (token == TokenKind_PlusSign) return BinaryOperator_Addition;
+    if (token == TokenKind_MinusSign) return BinaryOperator_Substraction;
+    if (token == TokenKind_Asterisk) return BinaryOperator_Multiplication;
+    if (token == TokenKind_Slash) return BinaryOperator_Division;
+    if (token == TokenKind_Modulo) return BinaryOperator_Modulo;
+    if (token == TokenKind_Ampersand) return BinaryOperator_None;
+    if (token == TokenKind_Exclamation) return BinaryOperator_LogicalNot;
+    if (token == TokenKind_LogicalOr) return BinaryOperator_LogicalOr;
+    if (token == TokenKind_LogicalAnd) return BinaryOperator_LogicalAnd;
+    if (token == TokenKind_CompEquals) return BinaryOperator_Equals;
+    if (token == TokenKind_CompNotEquals) return BinaryOperator_NotEquals;
+    if (token == TokenKind_CompLess) return BinaryOperator_LessThan;
+    if (token == TokenKind_CompLessEquals) return BinaryOperator_LessEqualsThan;
+    if (token == TokenKind_CompGreater) return BinaryOperator_GreaterThan;
+    if (token == TokenKind_CompGreaterEquals) return BinaryOperator_GreaterEqualsThan;
+    return BinaryOperator_None;
+};
+
+b32 token_is_sign_or_binary_op(TokenKind token)
+{
+    TokenKind tokens[] = {
+        TokenKind_PlusSign,
+        TokenKind_MinusSign,
+        TokenKind_Asterisk,
+        TokenKind_Slash,
+        TokenKind_Modulo,
+        TokenKind_Ampersand,
+        TokenKind_Exclamation,
+        
+        TokenKind_LogicalOr,
+        TokenKind_LogicalAnd,
+        
+        TokenKind_CompEquals,
+        TokenKind_CompNotEquals,
+        TokenKind_CompLess,
+        TokenKind_CompLessEquals,
+        TokenKind_CompGreater,
+        TokenKind_CompGreaterEquals,
+    };
+    
+    foreach(i, array_count(tokens)) {
+        if (tokens[i] == token) return true;
+    }
+    return false;
 }
