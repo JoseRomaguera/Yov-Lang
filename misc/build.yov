@@ -65,6 +65,7 @@ lflags:  String[];
         lflags += "DEBUG:NONE";
     }
     
+    lflags += { "IGNORE:4210" };
     lflags += { "MERGE:.rdata=.", "MERGE:.pdata=.", "MERGE:text=.", "SECTION:.,ER" };
     lflags += { "ENTRY:main", "SUBSYSTEM:CONSOLE" };
     lflags += "incremental:no";

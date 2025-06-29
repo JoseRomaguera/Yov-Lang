@@ -10,7 +10,7 @@ internal_fn void define_core(Interpreter* inter)
         m[2] = obj_def_make(STR("minor"), vtype_from_name(inter, STR("Int")));
         m[3] = obj_def_make(STR("revision"), vtype_from_name(inter, STR("Int")));
         Array<ObjectDefinition> members = array_make(m, array_count(m));
-        define_struct(inter, STR("YovInfo"), members);
+        define_struct(inter, "YovInfo", members);
     }
     // struct ParamInfo
     {
@@ -18,7 +18,7 @@ internal_fn void define_core(Interpreter* inter)
         m[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
         m[1] = obj_def_make(STR("type"), vtype_from_name(inter, STR("String")));
         Array<ObjectDefinition> members = array_make(m, array_count(m));
-        define_struct(inter, STR("ParamInfo"), members);
+        define_struct(inter, "ParamInfo", members);
     }
     // struct StructInfo
     {
@@ -26,7 +26,7 @@ internal_fn void define_core(Interpreter* inter)
         m[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
         m[1] = obj_def_make(STR("members"), vtype_from_array_dimension(inter, vtype_from_name(inter, STR("ParamInfo")), 1));
         Array<ObjectDefinition> members = array_make(m, array_count(m));
-        define_struct(inter, STR("StructInfo"), members);
+        define_struct(inter, "StructInfo", members);
     }
     // struct Context
     {
@@ -37,41 +37,41 @@ internal_fn void define_core(Interpreter* inter)
         m[3] = obj_def_make(STR("args"), vtype_from_array_dimension(inter, vtype_from_name(inter, STR("String")), 1));
         m[4] = obj_def_make(STR("structs"), vtype_from_array_dimension(inter, vtype_from_name(inter, STR("StructInfo")), 1));
         Array<ObjectDefinition> members = array_make(m, array_count(m));
-        define_struct(inter, STR("Context"), members);
+        define_struct(inter, "Context", members);
     }
     // enum OSKind
     {
         String n[1];
-        n[0] = STR("Windows");
+        n[0] = "Windows";
         Array<String> names = array_make(n, array_count(n));
-        define_enum(inter, STR("OSKind"), names, {});
+        define_enum(inter, "OSKind", names, {});
     }
     // struct OS
     {
         ObjectDefinition m[1];
         m[0] = obj_def_make(STR("kind"), vtype_from_name(inter, STR("OSKind")));
         Array<ObjectDefinition> members = array_make(m, array_count(m));
-        define_struct(inter, STR("OS"), members);
+        define_struct(inter, "OS", members);
     }
     // enum CopyMode
     {
         String n[2];
-        n[0] = STR("NoOverride");
-        n[1] = STR("Override");
+        n[0] = "NoOverride";
+        n[1] = "Override";
         Array<String> names = array_make(n, array_count(n));
-        define_enum(inter, STR("CopyMode"), names, {});
+        define_enum(inter, "CopyMode", names, {});
     }
     // global yov
     {
-        Object* obj = define_object(inter, "yov", vtype_from_name(inter, "YovInfo"));
+        ObjectRef* ref = scope_define_object_ref(inter, "yov", value_def(inter, vtype_from_name(inter, "YovInfo")));
     }
     // global context
     {
-        Object* obj = define_object(inter, "context", vtype_from_name(inter, "Context"));
+        ObjectRef* ref = scope_define_object_ref(inter, "context", value_def(inter, vtype_from_name(inter, "Context")));
     }
     // global os
     {
-        Object* obj = define_object(inter, "os", vtype_from_name(inter, "OS"));
+        ObjectRef* ref = scope_define_object_ref(inter, "os", value_def(inter, vtype_from_name(inter, "OS")));
     }
     // function print
     {
@@ -79,7 +79,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("text"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("print"), parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "print", parameters, VType_Void);
     }
     // function println
     {
@@ -87,7 +87,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("text"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("println"), parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "println", parameters, VType_Void);
     }
     // function call
     {
@@ -95,7 +95,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("command"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("call"), parameters, vtype_from_name(inter, STR("Int")));
+        define_intrinsic_function(inter, {}, "call", parameters, vtype_from_name(inter, STR("Int")));
     }
     // function call_exe
     {
@@ -104,12 +104,12 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("exe_name"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("arguments"), vtype_from_array_dimension(inter, vtype_from_name(inter, STR("String")), 1));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("call_exe"), parameters, vtype_from_name(inter, STR("Int")));
+        define_intrinsic_function(inter, {}, "call_exe", parameters, vtype_from_name(inter, STR("Int")));
     }
     // function exit
     {
         Array<ObjectDefinition> parameters{};
-        define_intrinsic_function(inter, {}, STR("exit"), parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "exit", parameters, VType_Void);
     }
     // function set_cd
     {
@@ -117,7 +117,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("cd"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("set_cd"), parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "set_cd", parameters, VType_Void);
     }
     // function path_resolve
     {
@@ -125,7 +125,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("path"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("path_resolve"), parameters, vtype_from_name(inter, STR("String")));
+        define_intrinsic_function(inter, {}, "path_resolve", parameters, vtype_from_name(inter, STR("String")));
     }
     // function yov_require
     {
@@ -134,7 +134,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("major"), vtype_from_name(inter, STR("Int")));
         p[1] = obj_def_make(STR("minor"), vtype_from_name(inter, STR("Int")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("yov_require"), parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "yov_require", parameters, VType_Void);
     }
     // function yov_require_min
     {
@@ -143,7 +143,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("major"), vtype_from_name(inter, STR("Int")));
         p[1] = obj_def_make(STR("minor"), vtype_from_name(inter, STR("Int")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("yov_require_min"), parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "yov_require_min", parameters, VType_Void);
     }
     // function yov_require_max
     {
@@ -152,7 +152,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("major"), vtype_from_name(inter, STR("Int")));
         p[1] = obj_def_make(STR("minor"), vtype_from_name(inter, STR("Int")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("yov_require_max"), parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "yov_require_max", parameters, VType_Void);
     }
     // function arg_int
     {
@@ -161,7 +161,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("default"), vtype_from_name(inter, STR("Int")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("arg_int"), parameters, vtype_from_name(inter, STR("Int")));
+        define_intrinsic_function(inter, {}, "arg_int", parameters, vtype_from_name(inter, STR("Int")));
     }
     // function arg_bool
     {
@@ -170,7 +170,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("default"), vtype_from_name(inter, STR("Bool")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("arg_bool"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "arg_bool", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function arg_string
     {
@@ -179,7 +179,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("default"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("arg_string"), parameters, vtype_from_name(inter, STR("String")));
+        define_intrinsic_function(inter, {}, "arg_string", parameters, vtype_from_name(inter, STR("String")));
     }
     // function arg_flag
     {
@@ -187,7 +187,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("arg_flag"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "arg_flag", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function arg_exists
     {
@@ -195,7 +195,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("arg_exists"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "arg_exists", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function ask_yesno
     {
@@ -203,7 +203,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("text"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("ask_yesno"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "ask_yesno", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function exists
     {
@@ -211,7 +211,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("path"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("exists"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "exists", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function create_directory
     {
@@ -220,7 +220,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("path"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("recursive"), vtype_from_name(inter, STR("Bool")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("create_directory"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "create_directory", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function delete_directory
     {
@@ -228,7 +228,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("path"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("delete_directory"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "delete_directory", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function copy_directory
     {
@@ -237,7 +237,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("dst"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("src"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("copy_directory"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "copy_directory", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function move_directory
     {
@@ -246,7 +246,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("dst"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("src"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("move_directory"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "move_directory", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function copy_file
     {
@@ -256,7 +256,7 @@ internal_fn void define_core(Interpreter* inter)
         p[1] = obj_def_make(STR("src"), vtype_from_name(inter, STR("String")));
         p[2] = obj_def_make(STR("mode"), vtype_from_name(inter, STR("CopyMode")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("copy_file"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "copy_file", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function move_file
     {
@@ -265,7 +265,7 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("dst"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("src"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("move_file"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "move_file", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function delete_file
     {
@@ -273,7 +273,7 @@ internal_fn void define_core(Interpreter* inter)
         ObjectDefinition p[1];
         p[0] = obj_def_make(STR("path"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("delete_file"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "delete_file", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function write_file
     {
@@ -282,6 +282,6 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make(STR("path"), vtype_from_name(inter, STR("String")));
         p[1] = obj_def_make(STR("content"), vtype_from_name(inter, STR("String")));
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, STR("write_file"), parameters, vtype_from_name(inter, STR("Bool")));
+        define_intrinsic_function(inter, {}, "write_file", parameters, vtype_from_name(inter, STR("Bool")));
     }
 }

@@ -1,5 +1,9 @@
 #pragma once
 
+#define SCOPE_CAPACITY 128
+
+//-
+
 #include <stdint.h>
 #include <stdarg.h>
 
@@ -51,8 +55,47 @@ static_assert(sizeof(f64) == 8);
 #define _JOIN(x, y) x##y
 #define JOIN(x, y) _JOIN(x, y)
 
+#if _WIN32
+#define OS_WINDOWS 1
+#endif
+
+#if _MSC_VER
+#define COMPILER_MSVC 1
+#else
+#define COMPILER_MSVC 0
+#endif
+
+#if __clang
+#define COMPILER_CLANG 1
+#else
+#define COMPILER_CLANG 0
+#endif
+
+#if __GNUC__
+#define COMPILER_GCC 1
+#else
+#endif
+
+#if COMPILER_MSVC
+# define no_asan __declspec(no_sanitize_address)
+#elif (COMPILER_CLANG || COMPILER_GCC)
+# define no_asan __attribute__((no_sanitize("address")))
+#endif
+#if !defined(no_asan)
+# define no_asan
+#endif
+
+#if OS_WINDOWS
+#pragma section(".rdonly", read)
+#define read_only no_asan __declspec(allocate(".rdonly"))
+#else
+#define read_only
+#endif
+
 #define inline_fn inline
 #define internal_fn static
+#define global_var extern
+
 #define array_count(x) (sizeof(x) / sizeof(x[0]))
 #define foreach(it, count) for (u32 (it) = 0; (it) < (count); (it)++)
 
@@ -81,10 +124,6 @@ void assertion_failed(const char* text);
 
 void memory_copy(void* dst, const void* src, u64 size);
 void memory_zero(void* dst, u64 size);
-
-#if _WIN32
-#define OS_WINDOWS 1
-#endif
 
 #define STR(x) string_make(x)
 
@@ -527,7 +566,6 @@ void report_error_ex(CodeLocation code, String text, ...);
 void yov_print_reports();
 
 #define report_error(code, text, ...) report_error_ex(code, STR(text), __VA_ARGS__);
-#define log_trace(code, text, ...) print_info(STR(text), __VA_ARGS__);
 
 void print_report(Report report);
 
@@ -573,6 +611,7 @@ void print_report(Report report);
 #define report_type_missmatch_append(_code, _v0, _v1) report_error(_code, "Type missmatch, can't append a '%S' into '%S'", _v0, _v1);
 #define report_type_missmatch_array_expr(_code, _v0, _v1) report_error(_code, "Type missmatch in array expresion, expecting '%S' but found '%S'", _v0, _v1);
 #define report_type_missmatch_assign(_code, _v0, _v1) report_error(_code, "Type missmatch, can't assign '%S' to '%S'", _v0, _v1);
+#define report_assignment_is_constant(_code, _v0) report_error(_code, "Can't assign a value to '%S', is constant", _v0);
 #define report_unknown_array_definition(_code) report_error(_code, "Unknown type for array definition");
 #define report_invalid_binary_op(_code, _v0, _op, _v1) report_error(_code, "Invalid binary operation: '%S' %S '%S'", _v0, _op, _v1);
 #define report_invalid_signed_op(_code, _op, _v) report_error(_code, "Invalid signed operation '%S %S'", _op, _v);
@@ -589,7 +628,10 @@ void print_report(Report report);
 #define report_function_not_found(_code, _v) report_error(_code, "Function '%S' not found", _v);
 #define report_function_expecting_parameters(_code, _v, _c) report_error(_code, "Function '%S' is expecting %u parameters", _v, _c);
 #define report_function_wrong_parameter_type(_code, _f, _t, _c) report_error(_code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
+#define report_function_expects_ref_as_parameter(_code, _f, _c) report_error(_code, "Function '%S' is expecting a ref as a parameter %u", _f, _c);
 #define report_function_wrong_return_type(_code, _t) report_error(_code, "Expected a '%S' as a return", _t);
+#define report_function_expects_ref_as_return(_code) report_error(_code, "Expected a reference as a return");
+#define report_function_expects_no_ref_as_return(_code) report_error(_code, "Can't return a reference");
 #define report_function_no_return(_code, _f) report_error(_code, "Not all paths of '%S' have a return", _f);
 #define report_symbol_not_invokable(_code, _v) report_error(_code, "Not invokable symbol '%S'", _v);
 #define report_indexing_expects_an_int(_code) report_error(_code, "Indexing expects an Int");
@@ -598,6 +640,7 @@ void print_report(Report report);
 #define report_dimensions_expects_an_int(_code) report_error(_code, "Expecting an integer for the dimensions of the array");
 #define report_dimensions_must_be_positive(_code) report_error(_code, "Expecting a positive integer for the dimensions of the array");
 #define report_expr_expects_bool(_code, _what)  report_error(_code, "%S expects a Bool", STR(_what));
+#define report_expr_expects_lvalue(_code) report_error(_code, "Expresion expects a lvalue: {line}");
 #define report_expr_semantic_unknown(_code)  report_error(_code, "Unknown expresion: {line}");
 #define report_for_expects_an_array(_code)  report_error(_code, "Foreach-Statement expects an array");
 #define report_semantic_unknown_op(_code) report_error(_code, "Unknown operation: {line}");
@@ -605,10 +648,15 @@ void print_report(Report report);
 #define report_struct_circular_dependency(_code) report_error(_code, "Struct has circular dependency");
 #define report_struct_implicit_member_type(_code) report_error(_code, "Implicit member type is not allowed in structs");
 #define report_intrinsic_not_resolved(_code, _n) report_error(_code, "Intrinsic '%S' can't be resolved", STR(_n));
+#define report_ref_expects_lvalue(_code) report_error(_code, "Can't get a reference of a rvalue");
+#define report_ref_expects_non_constant(_code) report_error(_code, "Can't get a reference of a constant");
+#define report_reftype_invalid(_code) report_error(_code, "Invalid definition of a reference: {line}");
 
 //- LANG REPORTS
 
-#define report_stack_is_broken() report_error({}, "The stack is broken");
+#define lang_report_stack_is_broken() report_error({}, "[LANG_ERROR] The stack is broken");
+#define lang_report_unfreed_objects() report_error({}, "[LANG_ERROR] Not all objects have been freed");
+#define lang_report_unfreed_dynamic() report_error({}, "[LANG_ERROR] Not all dynamic allocations have been freed");
 
 //- LEXER
 
@@ -707,6 +755,7 @@ struct OpNode_ForeachArrayStatement : OpNode {
 struct OpNode_ObjectType : OpNode {
     String name;
     u32 array_dimensions;
+    b32 is_reference;
 };
 
 struct OpNode_ObjectDefinition : OpNode {
@@ -833,32 +882,69 @@ void log_ast(OpNode* node, i32 depth);
 
 //- INTERPRETER 
 
-struct ObjectMemory_Int {
-    i64 value;
-};
-struct ObjectMemory_Bool {
-    b32 value;
-};
-struct ObjectMemory_String {
-    u64 size;
-    char* data;
-};
-struct ObjectMemory_Array {
-    i64 count;
-    void* data;
-};
-struct ObjectMemory_Enum {
-    i64 index;
-};
+#define log_trace(code, text, ...) if (inter->settings.execute && inter->settings.print_execution) { \
+String log = string_format(scratch.arena, text, __VA_ARGS__);\
+print_info("%S\n", log); \
+} \
+else do{}while(0) 
 
-struct Scope;
+#if DEV && 0
+#define log_mem_trace(text, ...) print_info(STR(text), __VA_ARGS__)
+#else 
+#define log_mem_trace(text, ...) do{}while(0)
+#endif
 
 struct Object {
-    String identifier;
+    u32 ID;
     i32 vtype;
-    Scope* scope;
-    RawBuffer memory;
-    b8 is_constant;
+    i32 ref_count;
+    Object* prev;
+    Object* next;
+};
+
+struct Object_Int : Object {
+    i64 value;
+};
+struct Object_Bool : Object {
+    b32 value;
+};
+struct Object_Enum : Object {
+    i64 index;
+};
+struct Object_String : Object{
+    String value;
+};
+struct Object_Array : Object {
+    Array<Object*> elements;
+};
+struct Object_Struct : Object {
+    Array<Object*> members;
+};
+
+struct ObjectRef {
+    String identifier;
+    Object* object;
+    i32 vtype;
+    b32 constant;
+};
+
+enum ValueKind {
+    ValueKind_LValue,
+    ValueKind_RValue,
+    ValueKind_Reference,// LValue requested to be referenced
+};
+
+struct LValue {
+    ObjectRef* ref;
+};
+
+struct Value {
+    Object* obj;// TODO(Jose): Rename to "object"
+    Object* parent;
+    u32 index;
+    i32 vtype;
+    ValueKind kind;
+    LValue lvalue;
 };
 
 #define VType_Unknown -1
@@ -875,6 +961,10 @@ struct Object {
 #define VType_IntArray vtype_from_array_dimension(inter, VType_Int, 1)
 #define VType_BoolArray vtype_from_array_dimension(inter, VType_Bool, 1)
 #define VType_StringArray vtype_from_array_dimension(inter, VType_String, 1)
+
+global_var Object* nil_obj;
+global_var Object* null_obj;
+global_var ObjectRef* nil_ref;
 
 enum VariableKind {
     VariableKind_Unknown,
@@ -897,18 +987,16 @@ struct VariableType {
     
     Array<String> struct_names;
     Array<i32> struct_vtypes;
-    Array<u32> struct_strides;
     Array<OpNode*> struct_initialize_expresions;
-    u32 struct_stride;
 };
 
 struct FunctionReturn {
-    Object* return_obj;
+    Value return_value;
     Result error_result;
 };
 
 struct Interpreter;
-typedef FunctionReturn IntrinsicFunction(Interpreter* inter, Array<Object*> objs, CodeLocation code);
+typedef FunctionReturn IntrinsicFunction(Interpreter* inter, Array<Value> objs, CodeLocation code);
 
 struct IntrinsicDefinition {
     String name;
@@ -919,6 +1007,7 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena);
 
 struct ObjectDefinition {
     i32 vtype;
+    b32 is_reference;
     String name;
     OpNode* default_value;
 };
@@ -934,6 +1023,7 @@ struct FunctionDefinition {
     String identifier;
     Array<ObjectDefinition> parameters;
     i32 return_vtype;
+    b32 return_reference;
     
     CodeLocation code;
     IntrinsicFunction* intrinsic_fn;
@@ -944,7 +1034,7 @@ struct FunctionDefinition {
 
 enum SymbolType {
     SymbolType_None,
-    SymbolType_Object,
+    SymbolType_ObjectRef,
     SymbolType_Function,
     SymbolType_Type,
 };
@@ -953,17 +1043,15 @@ struct Symbol {
     SymbolType type;
     String identifier;
     
-    Object* object;
+    ObjectRef* ref;
     FunctionDefinition* function;
     i32 vtype;
 };
 
 struct InterpreterSettings {
-    b8 execute; // Execute AST until an error ocurrs otherwise do semantic analysis of all the AST
+    b8 execute; // Execute AST until an error ocurrs otherwise do semantic analysis of the entire AST
     b8 user_assertion; // Forces user assertion of every operation to the OS
     b8 print_execution;
-    
-    // TODO(Jose): b8 ignore_errors; // Ignore errors on execution and keep running
 };
 
 void interpret(InterpreterSettings settings);
@@ -976,9 +1064,10 @@ enum ScopeType {
 
 struct Scope {
     ScopeType type;
-    PooledArray<Object> objects;
-    Object* return_obj;
+    PooledArray<ObjectRef> object_refs;
+    Value return_value;
     i32 expected_return_vtype;
+    b32 expected_return_reference;
     Scope* next;
     Scope* previous;
 };
@@ -991,8 +1080,11 @@ struct Interpreter {
     PooledArray<VariableType> vtype_table;
     PooledArray<FunctionDefinition> functions;
     
-    Object* nil_obj;
-    Object* void_obj;
+    u32 object_id_counter;
+    Object* object_list;
+    i32 object_count;
+    i32 allocation_count;
+    
     OpNode* empty_op;
     
     Scope* global_scope;
@@ -1000,68 +1092,15 @@ struct Interpreter {
     Scope* free_scope;
     
     struct {
-        Object* yov;
-        Object* os;
-        Object* context;
+        ObjectRef* yov;
+        ObjectRef* os;
+        ObjectRef* context;
     } globals;
 };
 
 void interpreter_exit(Interpreter* inter);
 void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, String message_error);
 Result user_assertion(Interpreter* inter, String message);
-
-VariableType vtype_get(Interpreter* inter, i32 vtype);
-i32 vtype_from_name(Interpreter* inter, String name);
-i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension);
-i32 vtype_from_array_element(Interpreter* inter, i32 vtype);
-i32 vtype_from_array_base(Interpreter* inter, i32 vtype);
-u32 vtype_get_size(Interpreter* inter, i32 vtype);
-i32 encode_vtype(u32 index, u32 dimensions);
-void decode_vtype(i32 vtype, u32* _index, u32* _dimensions);
-
-RawBuffer obj_memory_alloc_empty(Interpreter* inter, i32 vtype);
-void* obj_memory_dynamic_alloc(Interpreter* inter, u64 size);
-
-Object* obj_alloc_temp(Interpreter* inter, i32 vtype, RawBuffer memory);
-
-Object* obj_alloc_temp_int(Interpreter* inter, i64 value);
-Object* obj_alloc_temp_bool(Interpreter* inter, b32 value);
-Object* obj_alloc_temp_string(Interpreter* inter, String value);
-Object* obj_alloc_temp_array(Interpreter* inter, i32 element_vtype, i64 count);
-Object* obj_alloc_temp_array_multidimensional(Interpreter* inter, i32 element_vtype, Array<i64> dimensions, b32 initialize_elements);
-Object* obj_alloc_temp_enum(Interpreter* inter, i32 vtype, i64 index);
-Object* obj_alloc_temp_array_from_enum(Interpreter* inter, i32 enum_vtype);
-
-RawBuffer obj_copy_data(Interpreter* inter, Object* obj);
-void obj_copy_data(Interpreter* inter, RawBuffer dst, RawBuffer src, i32 vtype);
-
-RawBuffer obj_get_element_memory(Interpreter* inter, Object* obj, i64 index);
-RawBuffer obj_get_element_memory(Interpreter* inter, RawBuffer memory, i32 vtype, i64 index);
-
-b32 obj_copy(Interpreter* inter, Object* dst, Object* src);
-
-String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);
-String string_from_obj_memory(Arena* arena, Interpreter* inter, RawBuffer memory, i32 vtype, b32 raw = true);
-String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype);
-
-Scope* alloc_scope(Interpreter* inter, ScopeType type);
-Scope* push_scope(Interpreter* inter, ScopeType type, i32 expected_return_vtype);
-void pop_scope(Interpreter* inter);
-Scope* get_returnable_scope(Interpreter* inter);
-
-Symbol find_symbol(Interpreter* inter, String identifier);
-Object* find_object(Interpreter* inter, String identifier, b32 parent_scopes);
-Object* define_object(Interpreter* inter, String identifier, i32 vtype);
-FunctionDefinition* find_function(Interpreter* inter, String identifier);
-Object* call_function(Interpreter* inter, FunctionDefinition* fn, Array<Object*> parameters, OpNode* parent_node, b32 is_expresion);
-
-i32 define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values);
-void define_struct(Interpreter* inter, String name, Array<ObjectDefinition> members);
-void define_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype, OpNode_Block* block);
-void define_intrinsic_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype);
-
-Object* member_from_object(Interpreter* inter, Object* obj, String member);
-Object* member_from_type(Interpreter* inter, i32 vtype, String member);
 
 struct ExpresionContext {
     i32 expected_vtype;
@@ -1073,58 +1112,170 @@ inline_fn ExpresionContext expresion_context_make(i32 expected_vtype) {
     return d;
 }
 
-Object* interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext context);
-Object* interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
-i32 interpret_object_type(Interpreter* inter, OpNode* node0);
-void interpret_object_initialize(Interpreter* inter, RawBuffer buffer, i32 vtype, OpNode* expresion);
+Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext context);
+Value interpret_assignment_for_object_definition(Interpreter* inter, OpNode_ObjectDefinition* node, b32 allow_reference);
+void interpret_object_definition(Interpreter* inter, OpNode* node0);
+void interpret_assignment(Interpreter* inter, OpNode* node0);
+void interpret_if_statement(Interpreter* inter, OpNode* node0);
+void interpret_while_statement(Interpreter* inter, OpNode* node0);
+void interpret_for_statement(Interpreter* inter, OpNode* node0);
+void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0);
+Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
+i32 interpret_object_type(Interpreter* inter, OpNode* node0, b32 allow_reference);
+void interpret_return(Interpreter* inter, OpNode* node0);
+void interpret_block(Interpreter* inter, OpNode* block0);
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 
 String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
-Object* get_cd(Interpreter* inter);
+Value get_cd(Interpreter* inter);
 String get_cd_value(Interpreter* inter);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
 b32 interpretion_failed(Interpreter* inter);
 b32 skip_ops(Interpreter* inter);
 
-b32 is_valid(const Object* obj);
-b32 is_unknown(const Object* obj);
+//- SCOPE
 
-b32 is_void(const Object* obj);
-b32 is_int(const Object* obj);
-b32 is_bool(const Object* obj);
-b32 is_string(const Object* obj);
-b32 is_array(i32 vtype);
-b32 is_array(Object* obj);
-b32 is_enum(Interpreter* inter, i32 vtype);
-b32 is_enum(Interpreter* inter, Object* obj);
+Scope* scope_alloc(Interpreter* inter, ScopeType type);
+void   scope_clear(Interpreter* inter, Scope* scope);
+Scope* scope_push(Interpreter* inter, ScopeType type, i32 expected_return_vtype, b32 expected_return_reference);
+void   scope_pop(Interpreter* inter);
+
+Scope* scope_find_returnable(Interpreter* inter);
+ObjectRef* scope_define_object_ref(Interpreter* inter, String identifier, Value value, b32 constant = false);
+ObjectRef* scope_find_object_ref(Interpreter* inter, String identifier, b32 parent_scopes);
+
+//- DEFINITIONS
+
+i32 define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values);
+void define_struct(Interpreter* inter, String name, Array<ObjectDefinition> members);
+void define_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype, b32 return_reference, OpNode_Block* block);
+void define_intrinsic_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype);
+
+Symbol find_symbol(Interpreter* inter, String identifier);
+FunctionDefinition* find_function(Interpreter* inter, String identifier);
+Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node, b32 is_expresion);
+
+VariableType vtype_get(Interpreter* inter, i32 vtype);
+b32 vtype_is_enum(Interpreter* inter, i32 vtype);
+b32 vtype_is_array(i32 vtype);
+b32 vtype_is_struct(Interpreter* inter, i32 vtype);
+i32 vtype_from_name(Interpreter* inter, String name);
+i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension);
+i32 vtype_from_array_element(Interpreter* inter, i32 vtype);
+i32 vtype_from_array_base(Interpreter* inter, i32 vtype);
+u32 vtype_get_size(Interpreter* inter, i32 vtype);
+Value vtype_get_member(Interpreter* inter, i32 vtype, String member);
+i32 vtype_get_element(Interpreter* inter, i32 vtype, u32 index);
+i32 encode_vtype(u32 index, u32 dimensions);
+void decode_vtype(i32 vtype, u32* _index, u32* _dimensions);
+
+String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype);
+
+//- VALUE OPS 
+
+Value value_null(i32 vtype);
+Value value_void();
+Value value_nil();
+Value value_def(Interpreter* inter, i32 vtype);
+Value rvalue_make(Object* obj, Object* parent, u32 index, i32 vtype);
+Value rvalue_from_obj(Object* obj);
+Value lvalue_make(Object* obj, ObjectRef* ref, Object* parent, u32 index, i32 vtype);
+Value lvalue_from_ref(ObjectRef* ref);
+Value value_from_child(Value parent_value, Object* object, u32 index, i32 vtype);
+
+String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw = true);
+String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);
+
+// Assignment Rules
+
+// L = L   -> Copy
+// L = R   -> Copy
+// L = Ref -> Ref
+// R = L   -> Copy
+// R = R   -> Copy
+// R = Ref -> Error
+
+// new L = L   -> Alloc and Copy
+// new L = R   -> Ref
+// new L = Ref -> Ref
+// new R = L   -> Alloc and Copy
+// new R = R   -> Ref
+// new R = Ref -> Error
+
+b32 value_assign(Interpreter* inter, Value dst, Value src);
+b32 value_assign_as_new(Interpreter* inter, Value dst, Value src);
+b32 value_assign_ref(Interpreter* inter, Value* dst, Value src);
+b32 value_assign_null(Interpreter* inter, Value* dst);
+b32 value_copy(Interpreter* inter, Value dst, Value src);
+
+Array<Object*> object_get_childs(Interpreter* inter, Object* obj);
+b32 object_set_child(Interpreter* inter, Object* obj, u32 index, Object* child);
+
+Value value_get_element(Interpreter* inter, Value value, u32 index);
+Value value_get_member(Interpreter* inter, Value value, String member_name);
+
+Value alloc_int(Interpreter* inter, i64 value);
+Value alloc_bool(Interpreter* inter, b32 value);
+Value alloc_string(Interpreter* inter, String value);
+Value alloc_array(Interpreter* inter, i32 element_vtype, i64 count, b32 null_elements);
+Value alloc_array_multidimensional(Interpreter* inter, i32 base_vtype, Array<i64> dimensions);
+Value alloc_array_from_enum(Interpreter* inter, i32 enum_vtype);
+Value alloc_enum(Interpreter* inter, i32 vtype, i64 index);
+
+b32 value_is_vtype(Value value, i32 vtype);
+b32 is_valid(Object* obj);
+b32 is_valid(Value value);
+b32 is_unknown(Object* obj);
+b32 is_unknown(Value value);
+
+b32 is_const(Value value);
+b32 is_void(const ObjectRef* ref);
+b32 is_null(const Object* obj);
+b32 is_null(Value value);
+b32 is_int(Value value);
+b32 is_bool(Value value);
+b32 is_string(Value value);
+b32 is_array(Value value);
+b32 is_enum(Interpreter* inter, Value value);
 b32 is_struct(Interpreter* inter, i32 vtype);
 
-i64 get_int(Object* obj);
-i64 get_int(RawBuffer memory);
-b32 get_bool(Object* obj);
-b32 get_bool(RawBuffer memory);
-i64 get_enum_index(Interpreter* inter, Object* obj);
-i64 get_enum_index(Interpreter* inter, RawBuffer memory);
-String get_string(Object* obj);
-String get_string(RawBuffer memory);
+i64 get_int(Value value);
+b32 get_bool(Value value);
+i64 get_enum_index(Interpreter* inter, Value value);
+String get_string(Value value);
+Array<Object*> get_array(Value value);
 
-void set_int(Object* obj, i64 value);
-void set_bool(Object* obj, b32 value);
-void set_enum_index(Interpreter* inter, Object* obj, i64 value);
-void set_string(Interpreter* inter, Object* obj, String value);
-
-i64 get_array_count(Object* obj);
-void* get_array_data(Object* obj);
-void resize_array(Interpreter* inter, ObjectMemory_Array* array, i64 count, i32 stride);
-
+void set_int(Value value, i64 v);
+void set_bool(Value value, b32 v);
+void set_enum_index(Interpreter* inter, Value value, i64 v);
+void set_string(Interpreter* inter, Value value, String v);
 
 enum CopyMode {
     CopyMode_NoOverride,
     CopyMode_Override,
 };
-inline_fn CopyMode get_enum_CopyMode(Interpreter* inter, Object* obj) {
-    return (CopyMode)get_enum_index(inter, obj);
+inline_fn CopyMode get_enum_CopyMode(Interpreter* inter, Value value) {
+    return (CopyMode)get_enum_index(inter, value);
 }
+
+//- GARBAGE COLLECTOR
+
+u32 object_generate_id(Interpreter* inter);
+Value object_alloc(Interpreter* inter, i32 vtype);
+void object_free(Interpreter* inter, Object* obj);
+void object_free_unused(Interpreter* inter);
+
+void object_increment_ref(Object* obj);
+void object_decrement_ref(Object* obj);
+
+void object_release_internal(Interpreter* inter, Object* obj);
+void object_copy(Interpreter* inter, Object* dst, Object* src);
+Object* object_alloc_and_copy(Interpreter* inter, Object* src);
+
+void* gc_dynamic_allocate(Interpreter* inter, u64 size);
+void gc_dynamic_free(Interpreter* inter, void* ptr);
+
+void print_memory_usage(Interpreter* inter);
 
 //- TRANSPILER 
 

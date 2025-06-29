@@ -336,6 +336,12 @@ OpNode* extract_expresion(Parser* parser)
         }
     }
     
+    // Function call
+    if (tokens.count >= 2 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis) {
+        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        if (couple) return process_function_call(parser, tokens);
+    }
+    
     // Binary operations & Signs
     if (tokens.count >= 2)
     {
@@ -354,6 +360,7 @@ OpNode* extract_expresion(Parser* parser)
         
         i32 parenthesis_depth = 0;
         i32 braces_depth = 0;
+        i32 brackets_depth = 0;
         b32 preference_is_sign = false;
         
         for (i32 i = tokens.count - 1; i >= 0; --i)
@@ -382,6 +389,19 @@ OpNode* extract_expresion(Parser* parser)
                 braces_depth--;
                 if (braces_depth < 0) {
                     report_common_missing_closing_brace(token.code);
+                    return alloc_node(parser, OpKind_Error, token.code);
+                }
+                continue;
+            }
+            
+            if (token.kind == TokenKind_CloseBracket) {
+                brackets_depth++;
+                continue;
+            }
+            if (token.kind == TokenKind_OpenBracket) {
+                brackets_depth--;
+                if (brackets_depth < 0) {
+                    report_common_missing_closing_bracket(token.code);
                     return alloc_node(parser, OpKind_Error, token.code);
                 }
                 continue;
@@ -421,7 +441,7 @@ OpNode* extract_expresion(Parser* parser)
                 }
             }
             
-            if (preference == i32_max || braces_depth != 0) continue;
+            if (preference == i32_max || braces_depth != 0 || brackets_depth != 0) continue;
             
             preference += parenthesis_depth * depth_mult;
             
@@ -487,18 +507,12 @@ OpNode* extract_expresion(Parser* parser)
                         auto node = (OpNode_Binary*)alloc_node(parser, OpKind_Binary, tokens[0].code);
                         node->left = left_expresion;
                         node->right = right_expresion;
-                        node->op = op_token.assignment_binary_operator;
+                        node->op = binary_operator_from_token(op_token.kind);
                         return node;
                     }
                 }
             }
         }
-    }
-    
-    // Function call
-    if (tokens.count >= 2 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis) {
-        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
-        if (couple) return process_function_call(parser, tokens);
     }
     
     // Array Expresions
@@ -539,9 +553,9 @@ OpNode* extract_expresion(Parser* parser)
     }
     
     // Indexing
-    if (tokens.count >= 3 && tokens[tokens.count - 1].kind == TokenKind_CloseBracket)
+    if (tokens.count >= 2 && tokens[tokens.count-1].kind == TokenKind_CloseBracket)
     {
-        u32 starting_token = 0;
+        i32 starting_token = 0;
         while (starting_token < tokens.count && tokens[starting_token].kind != TokenKind_OpenBracket)
             starting_token++;
         
@@ -1060,7 +1074,6 @@ OpNode* extract_object_type(Parser* parser)
         report_objdef_expecting_type_identifier(identifier_token.code);
         return alloc_node(parser, OpKind_Error, identifier_token.code);
     }
-    
     name = identifier_token.value;
     
     Token open_bracket = peek_token(parser, 0);
@@ -1079,9 +1092,17 @@ OpNode* extract_object_type(Parser* parser)
         }
     }
     
+    b32 is_reference = false;
+    Token ref_token = peek_token(parser, 0);
+    if (ref_token.kind == TokenKind_Ampersand) {
+        skip_tokens(parser, 1);
+        is_reference = true;
+    }
+    
     OpNode_ObjectType* node = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
     node->name = name;
     node->array_dimensions = array_dimensions;
+    node->is_reference = is_reference;
     return node;
 }
 
@@ -1345,7 +1366,7 @@ void log_ast(OpNode* node, i32 depth)
     }
     else if (node->kind == OpKind_ObjectType) {
         auto node0 = (OpNode_ObjectType*)node;
-        print_info("type: '%S", node0->name);
+        print_info("type: '%S%s", node0->name, node0->is_reference ? "&" : "");
         foreach(i, node0->array_dimensions) print_info("[]");
         print_info("'");
     }
