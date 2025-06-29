@@ -2966,37 +2966,48 @@ void object_copy(Interpreter* inter, Object* dst, Object* src)
     
     object_release_internal(inter, dst);
     
-    VariableType type = vtype_get(inter, src->vtype);
-    
     u32 type_size = vtype_get_size(inter, src->vtype);
     memory_copy(dst + 1, src + 1, type_size - sizeof(Object));
     
-    if (type.kind == VariableKind_Array)
+    if (src->vtype == VType_String)
     {
-        Object_Array* dst_array = (Object_Array*)dst;
-        Object_Array* src_array = (Object_Array*)src;
-        
-        Object** memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * src_array->elements.count);
-        dst_array->elements.data = memory;
-        
-        foreach(i, src_array->elements.count) {
-            Object* element_obj = object_alloc_and_copy(inter, src_array->elements[i]);
-            object_increment_ref(element_obj);
-            dst_array->elements[i] = element_obj;
-        }
+        Object_String* src_str = (Object_String*)src;
+        Object_String* dst_str = (Object_String*)dst;
+        dst_str->value.data = (char*)gc_dynamic_allocate(inter, src_str->value.size);
+        dst_str->value.size = src_str->value.size;
+        memory_copy(dst_str->value.data, src_str->value.data, src_str->value.size);
     }
-    else if (type.kind == VariableKind_Struct)
+    else
     {
-        Object_Struct* dst_struct = (Object_Struct*)dst;
-        Object_Struct* src_struct = (Object_Struct*)src;
+        VariableType type = vtype_get(inter, src->vtype);
         
-        Object** memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * src_struct->members.count);
-        dst_struct->members.data = memory;
-        
-        foreach(i, src_struct->members.count) {
-            Object* member_obj = object_alloc_and_copy(inter, src_struct->members[i]);
-            object_increment_ref(member_obj);
-            dst_struct->members[i] = member_obj;
+        if (type.kind == VariableKind_Array)
+        {
+            Object_Array* dst_array = (Object_Array*)dst;
+            Object_Array* src_array = (Object_Array*)src;
+            
+            Object** memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * src_array->elements.count);
+            dst_array->elements.data = memory;
+            
+            foreach(i, src_array->elements.count) {
+                Object* element_obj = object_alloc_and_copy(inter, src_array->elements[i]);
+                object_increment_ref(element_obj);
+                dst_array->elements[i] = element_obj;
+            }
+        }
+        else if (type.kind == VariableKind_Struct)
+        {
+            Object_Struct* dst_struct = (Object_Struct*)dst;
+            Object_Struct* src_struct = (Object_Struct*)src;
+            
+            Object** memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * src_struct->members.count);
+            dst_struct->members.data = memory;
+            
+            foreach(i, src_struct->members.count) {
+                Object* member_obj = object_alloc_and_copy(inter, src_struct->members[i]);
+                object_increment_ref(member_obj);
+                dst_struct->members[i] = member_obj;
+            }
         }
     }
 }
@@ -3021,6 +3032,7 @@ void* gc_dynamic_allocate(Interpreter* inter, u64 size) {
 }
 
 void gc_dynamic_free(Interpreter* inter, void* ptr) {
+    assert(inter->allocation_count > 0);
     inter->allocation_count--;
     os_free_heap(ptr);
 }
