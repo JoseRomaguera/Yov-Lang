@@ -168,7 +168,10 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     SCRATCH();
     
     if (node->kind == OpKind_Error) return value_nil();
-    if (node->kind == OpKind_None) return value_null(context.expected_vtype);
+    if (node->kind == OpKind_None) {
+        if (context.expected_vtype >= 0) return value_null(context.expected_vtype);
+        else return value_void();
+    }
     
     if (node->kind == OpKind_Binary)
     {
@@ -235,14 +238,66 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     }
     
     if (node->kind == OpKind_IntLiteral) {
-        return alloc_int(inter, ((OpNode_Literal*)node)->int_literal);
-    }
-    if (node->kind == OpKind_StringLiteral) {
-        auto node0 = (OpNode_Literal*)node;
-        return alloc_string(inter, solve_string_literal(scratch.arena, inter, node0->string_literal, node0->code));
+        return alloc_int(inter, ((OpNode_NumericLiteral*)node)->int_literal);
     }
     if (node->kind == OpKind_BoolLiteral) {
-        return alloc_bool(inter, ((OpNode_Literal*)node)->bool_literal);
+        return alloc_bool(inter, ((OpNode_NumericLiteral*)node)->bool_literal);
+    }
+    if (node->kind == OpKind_StringLiteral)
+    {
+        auto node0 = (OpNode_StringLiteral*)node;
+        
+        String value = node0->value;
+        
+        if (node0->expresions.count > 0)
+        {
+            u32 expresion_index = 0;
+            StringBuilder builder = string_builder_make(scratch.arena);
+            
+            u64 cursor = 0;
+            while (cursor < value.size)
+            {
+                u32 codepoint = string_get_codepoint(value, &cursor);
+                
+                if (codepoint == '\\')
+                {
+                    codepoint = 0;
+                    if (cursor < value.size) {
+                        codepoint = string_get_codepoint(value, &cursor);
+                    }
+                    
+                    if (codepoint == '\\') append(&builder, "\\");
+                    else if (codepoint == '%') append(&builder, "%");
+                    else { assert(0); }
+                    
+                    continue;
+                }
+                
+                if (codepoint == '%')
+                {
+                    if (expresion_index >= node0->expresions.count) {
+                        assert(0);
+                    }
+                    else
+                    {
+                        OpNode* expresion_node = node0->expresions[expresion_index++];
+                        Value expresion_result = interpret_expresion(inter, expresion_node, expresion_context_make(VType_Unknown));
+                        if (is_unknown(expresion_result)) return value_nil();
+                        if (is_void(expresion_result)) append(&builder, "");
+                        else append(&builder, string_from_value(scratch.arena, inter, expresion_result));
+                        
+                    }
+                    
+                    continue;
+                }
+                
+                append_codepoint(&builder, codepoint);
+            }
+            
+            value = string_from_builder(yov->static_arena, &builder);
+        }
+        
+        return alloc_string(inter, value);
     }
     if (node->kind == OpKind_Symbol)
     {
@@ -1461,62 +1516,6 @@ Result user_assertion(Interpreter* inter, String message)
     return res;
 }
 
-String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code)
-{
-    SCRATCH(arena);
-    
-    String res = src;
-    res = string_replace(scratch.arena, res, "\\n", "\n");
-    res = string_replace(scratch.arena, res, "\\t", "\t");
-    res = string_replace(scratch.arena, res, "\\\"", "\"");
-    res = string_replace(scratch.arena, res, "\\\\", "\\");
-    
-    // Variable replacement
-    {
-        StringBuilder builder = string_builder_make(scratch.arena);
-        
-        u64 last_variable_index = 0;
-        
-        u64 cursor = 0;
-        while (cursor < res.size) {
-            u32 codepoint = string_get_codepoint(res, &cursor);
-            if (codepoint == '{')
-            {
-                u64 start_identifier = cursor;
-                i32 depth = 1;
-                
-                while (cursor < res.size) {
-                    u32 codepoint = string_get_codepoint(res, &cursor);
-                    if (codepoint == '{') depth++;
-                    else if (codepoint == '}') {
-                        depth--;
-                        if (depth == 0) break;
-                    }
-                }
-                
-                append(&builder, string_substring(res, last_variable_index, start_identifier - last_variable_index - 1));
-                
-                String identifier = string_substring(res, start_identifier, cursor - start_identifier - 1);
-                ObjectRef* ref = scope_find_object_ref(inter, identifier, true);
-                if (ref == nil_ref) {
-                    report_object_not_found(code, identifier);
-                }
-                else {
-                    append(&builder, string_from_value(scratch.arena, inter, lvalue_from_ref(ref)));
-                }
-                
-                last_variable_index = cursor;
-            }
-        }
-        
-        append(&builder, string_substring(res, last_variable_index, cursor - last_variable_index));
-        
-        res = string_from_builder(scratch.arena, &builder);
-    }
-    
-    return string_copy(arena, res);
-}
-
 Value get_cd(Interpreter* inter) {
     return value_get_member(inter, lvalue_from_ref(inter->globals.context), "cd");
 }
@@ -2600,9 +2599,8 @@ b32 is_const(Value value) {
     return value.kind == ValueKind_LValue && value.lvalue.ref->constant;
 }
 
-b32 is_void(const ObjectRef* ref) {
-    if (ref == NULL) return false;
-    return ref->vtype == VType_Void;
+b32 is_void(Value value) {
+    return is_valid(value) && value.vtype == VType_Void;
 }
 b32 is_null(const Object* obj) {
     if (obj == NULL) return true;

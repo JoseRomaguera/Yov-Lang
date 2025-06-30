@@ -51,6 +51,7 @@ static_assert(sizeof(f64) == 8);
 #define CLAMP(x, _min, _max) MAX(MIN(x, _max), _min)
 #define ABS(x) (((x) < 0) ? (-(x)) : (x))
 #define SWAP(a, b) do { auto& _a = (a); auto& _b = (b); auto aux = _b; _b = _a; _a = aux; } while(0)
+#define BIT(x) (1ULL << (x)) 
 
 #define _JOIN(x, y) x##y
 #define JOIN(x, y) _JOIN(x, y)
@@ -318,6 +319,7 @@ b32 u32_from_string(u32* dst, String str);
 b32 u32_from_char(u32* dst, char c);
 b32 i64_from_string(String str, i64* out);
 b32 i32_from_string(String str, i32* out);
+String string_from_codepoint(Arena* arena, u32 codepoint);
 String string_from_memory(Arena* arena, u64 bytes);
 String string_join(Arena* arena, LinkedList<String> ll);
 Array<String> string_split(Arena* arena, String str, String separator);
@@ -340,7 +342,7 @@ String path_get_last_element(String path);
 StringBuilder string_builder_make(Arena* arena);
 void appendf_ex(StringBuilder* builder, String str, ...);
 void append(StringBuilder* builder, String str);
-void append(StringBuilder* builder, const char* cstr);
+void append_codepoint(StringBuilder* builder, u32 codepoint);
 void append_i64(StringBuilder* builder, i64 v, u32 base = 10);
 void append_i32(StringBuilder* builder, i32 v, u32 base = 10);
 void append_u64(StringBuilder* builder, u64 v, u32 base = 10);
@@ -417,6 +419,7 @@ inline_fn CodeLocation no_code_make() { CodeLocation c{}; c.script_id = -1; retu
 #define NO_CODE no_code_make()
 
 inline_fn CodeLocation code_location_make(u64 offset, u64 start_line_offset, u32 line, u32 column, i32 script_id) { return { offset, start_line_offset, line, column, script_id }; }
+inline_fn CodeLocation code_location_start_script(i32 script_id) { return code_location_make(0, 0, 1, 0, script_id); }
 
 enum TokenKind {
     TokenKind_None,
@@ -601,6 +604,7 @@ void print_report(Report report);
 #define report_expecting_object_definition(_code) report_error(_code, "Expecting an object definition");
 #define report_expecting_string_literal(_code) report_error(_code, "Expecting string literal");
 #define report_expecting_semicolon(_code) report_error(_code, "Expecting semicolon");
+#define report_invalid_escape_sequence(_code, _v) report_error(_code, "Invalid escape sequence '\\%S'", STR(_v));
 
 //- SEMANTIC REPORTS
 
@@ -671,7 +675,7 @@ struct Lexer {
     u32 code_line;
 };
 
-Array<Token> lexer_generate_tokens(String text, b32 discard_tokens, i32 script_id);
+Array<Token> lexer_generate_tokens(Arena* arena, String text, b32 discard_tokens, CodeLocation code);
 
 BinaryOperator binary_operator_from_token(TokenKind token);
 b32 token_is_sign_or_binary_op(TokenKind token);
@@ -791,12 +795,18 @@ struct OpNode_Reference : OpNode {
     OpNode* expresion;
 };
 
-struct OpNode_Literal : OpNode {
+struct OpNode_NumericLiteral : OpNode {
     union {
         u32 int_literal;
         b8 bool_literal;
         String string_literal;
     };
+};
+
+struct OpNode_StringLiteral : OpNode {
+    String raw_value;
+    String value;
+    Array<OpNode*> expresions;
 };
 
 struct OpNode_Symbol : OpNode {
@@ -875,6 +885,8 @@ OpNode* extract_object_type(Parser* parser);
 OpNode* extract_object_definition(Parser* parser);
 
 OpNode* generate_ast(Array<Token> tokens, b32 is_block);
+
+Parser* parser_alloc(Array<Token> tokens);
 
 Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast);
 
@@ -1126,7 +1138,6 @@ void interpret_return(Interpreter* inter, OpNode* node0);
 void interpret_block(Interpreter* inter, OpNode* block0);
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 
-String solve_string_literal(Arena* arena, Interpreter* inter, String src, CodeLocation code);
 Value get_cd(Interpreter* inter);
 String get_cd_value(Interpreter* inter);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
@@ -1229,7 +1240,7 @@ b32 is_unknown(Object* obj);
 b32 is_unknown(Value value);
 
 b32 is_const(Value value);
-b32 is_void(const ObjectRef* ref);
+b32 is_void(Value value);
 b32 is_null(const Object* obj);
 b32 is_null(Value value);
 b32 is_int(Value value);

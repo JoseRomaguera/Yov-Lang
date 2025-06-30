@@ -311,7 +311,7 @@ OpNode* extract_expresion(Parser* parser)
         if (token.kind == TokenKind_IntLiteral) {
             u32 v;
             if (u32_from_string(&v, token.value)) {
-                auto node = (OpNode_Literal*)alloc_node(parser, OpKind_IntLiteral, token.code);
+                auto node = (OpNode_NumericLiteral*)alloc_node(parser, OpKind_IntLiteral, token.code);
                 node->int_literal = v;
                 return node;
             }
@@ -319,19 +319,92 @@ OpNode* extract_expresion(Parser* parser)
                 assert(0);
             }
         }
-        else if (token.kind == TokenKind_StringLiteral) {
-            auto node = (OpNode_Literal*)alloc_node(parser, OpKind_StringLiteral, token.code);
-            node->string_literal = token.value;
-            return node;
-        }
         else if (token.kind == TokenKind_BoolLiteral) {
-            auto node = (OpNode_Literal*)alloc_node(parser, OpKind_BoolLiteral, token.code);
+            auto node = (OpNode_NumericLiteral*)alloc_node(parser, OpKind_BoolLiteral, token.code);
             node->bool_literal = (b8)string_equals(token.value, STR("true"));
             return node;
         }
         else if (token.kind == TokenKind_Identifier) {
             auto node = (OpNode_Symbol*)alloc_node(parser, OpKind_Symbol, token.code);
             node->identifier = token.value;
+            return node;
+        }
+        else if (token.kind == TokenKind_StringLiteral)
+        {
+            PooledArray<OpNode*> expresions = pooled_array_make<OpNode*>(scratch.arena, 8);
+            
+            String raw = token.value;
+            StringBuilder builder = string_builder_make(scratch.arena);
+            
+            u64 cursor = 0;
+            while (cursor < raw.size)
+            {
+                u32 codepoint = string_get_codepoint(raw, &cursor);
+                
+                if (codepoint == '%') {
+                    append(&builder, "\\%");
+                    continue;
+                }
+                
+                if (codepoint == '\\')
+                {
+                    codepoint = 0;
+                    if (cursor < raw.size) {
+                        codepoint = string_get_codepoint(raw, &cursor);
+                    }
+                    
+                    if (codepoint == '\\') {
+                        // This is resolved on interpretation
+                        append(&builder, "\\\\");
+                        continue;
+                    }
+                    
+                    if (codepoint == 'n') append(&builder, "\n");
+                    else if (codepoint == 't') append(&builder, "\t");
+                    else if (codepoint == '"') append(&builder, "\"");
+                    else if (codepoint == '{') append(&builder, "{");
+                    else if (codepoint == '}') append(&builder, "}");
+                    else {
+                        String sequence = string_from_codepoint(scratch.arena, codepoint);
+                        report_invalid_escape_sequence(token.code, sequence);
+                    }
+                    
+                    continue;
+                }
+                
+                if (codepoint == '{')
+                {
+                    u64 start_identifier = cursor;
+                    i32 depth = 1;
+                    
+                    while (cursor < raw.size) {
+                        u32 codepoint = string_get_codepoint(raw, &cursor);
+                        if (codepoint == '{') depth++;
+                        else if (codepoint == '}') {
+                            depth--;
+                            if (depth == 0) break;
+                        }
+                    }
+                    
+                    String expresion_string = string_substring(raw, start_identifier, cursor - start_identifier - 1);
+                    Array<Token> tokens = lexer_generate_tokens(scratch.arena, expresion_string, true, token.code);
+                    
+                    OpNode* expresion = extract_expresion_from_array(parser, tokens);
+                    append(&builder, "%");
+                    
+                    array_add(&expresions, expresion);
+                    continue;
+                }
+                
+                append_codepoint(&builder, codepoint);
+            }
+            
+            String value = string_from_builder(yov->static_arena, &builder);
+            
+            auto node = (OpNode_StringLiteral*)alloc_node(parser, OpKind_StringLiteral, token.code);
+            node->raw_value = raw;
+            node->value = value;
+            node->expresions = array_from_pooled_array(yov->static_arena, expresions);
             return node;
         }
     }
@@ -1316,12 +1389,17 @@ OpNode* extract_op(Parser* parser)
 }
 
 OpNode* generate_ast(Array<Token> tokens, b32 is_block) {
-    Parser* parser = arena_push_struct<Parser>(yov->temp_arena);
-    parser->state_stack = pooled_array_make<ParserState>(yov->temp_arena, 8);
-    
-    parser_push_state(parser, tokens);
+    Parser* parser = parser_alloc(tokens);
     if (is_block) return extract_block(parser);
     else return extract_op(parser);
+}
+
+Parser* parser_alloc(Array<Token> tokens)
+{
+    Parser* parser = arena_push_struct<Parser>(yov->temp_arena);
+    parser->state_stack = pooled_array_make<ParserState>(yov->temp_arena, 8);
+    parser_push_state(parser, tokens);
+    return parser;
 }
 
 Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast)
@@ -1379,15 +1457,15 @@ void log_ast(OpNode* node, i32 depth)
         print_info("sign %S", string_from_binary_operator(node0->op));
     }
     else if (node->kind == OpKind_IntLiteral) {
-        auto node0 = (OpNode_Literal*)node;
+        auto node0 = (OpNode_NumericLiteral*)node;
         print_info("int literal: %u", node0->int_literal);
     }
     else if (node->kind == OpKind_StringLiteral) {
-        auto node0 = (OpNode_Literal*)node;
-        print_info("str literal: %S", node0->string_literal);
+        auto node0 = (OpNode_StringLiteral*)node;
+        print_info("str literal: %S", node0->raw_value);
     }
     else if (node->kind == OpKind_BoolLiteral) {
-        auto node0 = (OpNode_Literal*)node;
+        auto node0 = (OpNode_NumericLiteral*)node;
         print_info("bool literal: %s", node0->bool_literal ? "true" : "false");
     }
     else if (node->kind == OpKind_Symbol) {

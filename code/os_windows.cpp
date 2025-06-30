@@ -53,6 +53,9 @@ void os_setup_memory_info()
 
 void os_initialize()
 {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    
     yov->os.internal = arena_push_struct<Windows>(yov->static_arena);
     Windows* windows = (Windows*)yov->os.internal;
     

@@ -252,15 +252,15 @@ internal_fn Token lexer_extract_next_token(Lexer* lexer)
     return lexer_extract_token(lexer, TokenKind_Error, 1);
 }
 
-Array<Token> lexer_generate_tokens(String text, b32 discard_tokens, i32 script_id)
+Array<Token> lexer_generate_tokens(Arena* arena, String text, b32 discard_tokens, CodeLocation code)
 {
     Lexer* lexer = arena_push_struct<Lexer>(yov->temp_arena);
     lexer->tokens = pooled_array_make<Token>(yov->temp_arena, 1024);
     lexer->text = text;
-    lexer->script_id = script_id;
+    lexer->script_id = code.script_id;
     
-    lexer->code_line = 1;
-    lexer->code_column = 0;
+    lexer->code_line = code.line;
+    lexer->code_column = code.column;
     
     while (lexer->cursor < lexer->text.size)
     {
@@ -278,7 +278,7 @@ Array<Token> lexer_generate_tokens(String text, b32 discard_tokens, i32 script_i
         if (!discard) array_add(&lexer->tokens, token);
     }
     
-    return array_from_pooled_array(yov->static_arena, lexer->tokens);
+    return array_from_pooled_array(arena, lexer->tokens);
 }
 
 BinaryOperator binary_operator_from_token(TokenKind token)

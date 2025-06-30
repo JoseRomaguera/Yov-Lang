@@ -485,6 +485,52 @@ b32 i32_from_string(String str, i32* out)
 	return true;
 }
 
+String string_from_codepoint(Arena* arena, u32 c)
+{
+    u32 byte_count;
+    
+    if (c <= 0x7F) {
+        byte_count = 1;
+    }
+    else if (c <= 0x7FF) {
+        byte_count = 2;
+    }
+    else if (c <= 0xFFFF) {
+        byte_count = 3;
+    }
+    else if (c <= 0x10FFFF) {
+        byte_count = 4;
+    }
+    else {
+        return {};
+    }
+    
+    String res{};
+    res.data = (char*)arena_push(arena, byte_count + 1);
+    res.size = byte_count;
+    
+    if (byte_count == 1) {
+        res[0] = (char)c;
+    }
+    else if (byte_count == 2) {
+        res[0] = (char)(0xC0 | (c >> 6));
+        res[1] = (char)(0x80 | (c & 0x3F));
+    }
+    else if (byte_count == 3) {
+        res[0] = (char)(0xE0 | (c >> 12));
+        res[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+        res[2] = (char)(0x80 | (c & 0x3F));
+    }
+    else if (byte_count == 4) {
+        res[0] = (char)(0xF0 | (c >> 18));
+        res[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+        res[2] = (char)(0x80 | ((c >> 6) & 0x3F));
+        res[3] = (char)(0x80 | (c & 0x3F));
+    }
+    
+    return res;
+}
+
 String string_from_memory(Arena* arena, u64 bytes)
 {
     f64 kb = bytes / 1024.0;
@@ -705,11 +751,48 @@ String string_format_ex(Arena* arena, String string, ...)
 
 u32 string_get_codepoint(String str, u64* cursor_ptr)
 {
-    // TODO(Jose):
     u64 cursor = *cursor_ptr;
-    u32 codepoint = str[cursor];
-    *cursor_ptr = cursor + 1;
-    return codepoint;
+    DEFER(*cursor_ptr = cursor);
+    
+    if (cursor >= str.size) return 0;
+    
+    const char* it = str.data + cursor;
+    
+    u32 c = 0;
+    char b = *it;
+    
+	u32 byte_count;
+    if ((b & 0xF0) == 0xF0) byte_count = 4;
+    else if ((b & 0xE0) == 0xE0) byte_count = 3;
+    else if ((b & 0xC0) == 0xC0) byte_count = 2;
+    else byte_count = 1;
+    
+    if (cursor + byte_count > str.size) {
+        cursor = str.size;
+        return 0xFFFD;
+    }
+    
+    if (byte_count == 1) {
+        c = (u32)b;
+    }
+    else if (byte_count == 2) {
+        c |= ((u32)(it[0] & 0b00011111)) << 6;
+        c |= ((u32)(it[1] & 0b00111111)) << 0;
+    }
+    else if (byte_count == 3) {
+        c |= ((u32)(it[0] & 0b00001111)) << 12;
+        c |= ((u32)(it[1] & 0b00111111)) << 6;
+        c |= ((u32)(it[2] & 0b00111111)) << 0;
+    }
+    else {
+        c |= ((u32)(it[0] & 0b00000111)) << 18;
+        c |= ((u32)(it[1] & 0b00111111)) << 12;
+        c |= ((u32)(it[2] & 0b00111111)) << 6;
+        c |= ((u32)(it[3] & 0b00111111)) << 0;
+    }
+    
+    cursor += byte_count;
+    return c;
 }
 
 //- PATH 
@@ -847,8 +930,9 @@ void append(StringBuilder* builder, String str)
     }
 }
 
-void append(StringBuilder* builder, const char* cstr) {
-    append(builder, STR(cstr));
+void append_codepoint(StringBuilder* builder, u32 codepoint) {
+    SCRATCH(builder->arena);
+    append(builder, string_from_codepoint(scratch.arena, codepoint));
 }
 
 void append_i64(StringBuilder* builder, i64 v, u32 base)
@@ -1166,9 +1250,9 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_Binary) return sizeof(OpNode_Binary);
     if (kind == OpKind_Sign) return sizeof(OpNode_Sign);
     if (kind == OpKind_Reference) return sizeof(OpNode_Reference);
-    if (kind == OpKind_IntLiteral) return sizeof(OpNode_Literal);
-    if (kind == OpKind_StringLiteral) return sizeof(OpNode_Literal);
-    if (kind == OpKind_BoolLiteral) return sizeof(OpNode_Literal);
+    if (kind == OpKind_IntLiteral) return sizeof(OpNode_NumericLiteral);
+    if (kind == OpKind_StringLiteral) return sizeof(OpNode_StringLiteral);
+    if (kind == OpKind_BoolLiteral) return sizeof(OpNode_NumericLiteral);
     if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
     if (kind == OpKind_EnumDefinition) return sizeof(OpNode_EnumDefinition);
     if (kind == OpKind_StructDefinition) return sizeof(OpNode_StructDefinition);
@@ -1433,7 +1517,7 @@ i32 yov_import_script(String path)
     script->dir = path_resolve(yov->static_arena, path_append(scratch.arena, path, STR("..")));;
     script->text = STR(raw_file);
     
-    script->tokens = lexer_generate_tokens(script->text, true, script_id);
+    script->tokens = lexer_generate_tokens(yov->static_arena, script->text, true, code_location_start_script(script_id));
     script->ast = generate_ast(script->tokens, true);
     
     Array<OpNode_Import*> imports = get_imports(scratch.arena, script->ast);
