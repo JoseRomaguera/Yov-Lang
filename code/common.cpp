@@ -400,6 +400,11 @@ b32 string_equals(String s0, String s1) {
     return true;
 }
 
+b32 string_starts(String str, String with) {
+    if (with.size > str.size) return false;
+    return string_equals(string_substring(str, 0, with.size), with);
+}
+
 b32 u32_from_string(u32* dst, String str)
 {
 	u32 digits = (u32)str.size;
@@ -793,6 +798,34 @@ u32 string_get_codepoint(String str, u64* cursor_ptr)
     
     cursor += byte_count;
     return c;
+}
+
+u32 string_calculate_char_count(String str)
+{
+    u32 count = 0;
+    u64 cursor = 0;
+    while (cursor < str.size) {
+        string_get_codepoint(str, &cursor);
+        count++;
+    }
+    return count;
+}
+
+b32 codepoint_is_separator(u32 codepoint) {
+    if (codepoint == ' ') return true;
+    if (codepoint == '\t') return true;
+    if (codepoint == '\r') return true;
+    return false;
+}
+
+b32 codepoint_is_number(u32 codepoint) {
+    return codepoint >= '0' && codepoint <= '9';
+}
+
+b32 codepoint_is_text(u32 codepoint) {
+    if (codepoint >= 'a' && codepoint <= 'z') return true;
+    if (codepoint >= 'A' && codepoint <= 'Z') return true;
+    return false;
 }
 
 //- PATH 
@@ -1256,6 +1289,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
     if (kind == OpKind_EnumDefinition) return sizeof(OpNode_EnumDefinition);
     if (kind == OpKind_StructDefinition) return sizeof(OpNode_StructDefinition);
+    if (kind == OpKind_ArgDefinition) return sizeof(OpNode_ArgDefinition);
     if (kind == OpKind_FunctionDefinition) return sizeof(OpNode_FunctionDefinition);
     if (kind == OpKind_Import) return sizeof(OpNode_Import);
     assert(0);
@@ -1460,11 +1494,25 @@ void yov_run()
     settings.print_execution = yov->settings.trace;
     settings.user_assertion = yov->settings.user_assert;
     
-    // Semantic analysis of all the AST before execution
+    ScriptArg* help_arg = yov_find_arg("-help");
+    
+    if (help_arg != NULL)
     {
-        settings.execute = false;
-        interpret(settings);
+        if (!string_equals(help_arg->value, "")) {
+            report_arg_wrong_value(NO_CODE, help_arg->name, help_arg->value);
+        }
+        
+        interpret(settings, InterpreterMode_Help);
+        
+        if (yov->error_count != 0) {
+            yov_print_reports();
+        }
+        
+        return;
     }
+    
+    // Semantic analysis of all the AST before execution
+    interpret(settings, InterpreterMode_Analysis);
     
     if (yov->error_count != 0) {
         yov_print_reports();
@@ -1473,8 +1521,7 @@ void yov_run()
     
     // Execute
     if (!yov->settings.analyze_only) {
-        settings.execute = true;
-        interpret(settings);
+        interpret(settings, InterpreterMode_Execute);
     }
     
     if (yov->error_count != 0) {
@@ -1579,7 +1626,7 @@ String yov_get_line_sample(Arena* arena, CodeLocation code)
 internal_fn b32 generate_program_args(Array<String> raw_args)
 {
     SCRATCH();
-    yov->args = array_make<ProgramArg>(yov->static_arena, raw_args.count);
+    yov->args = array_make<ScriptArg>(yov->static_arena, raw_args.count);
     
     b32 success = true;
     
@@ -1587,12 +1634,12 @@ internal_fn b32 generate_program_args(Array<String> raw_args)
     {
         String raw = raw_args[i];
         
-        Array<String> split = string_split(scratch.arena, raw, STR("="));
+        Array<String> split = string_split(scratch.arena, raw, "=");
         
-        ProgramArg arg{};
+        ScriptArg arg{};
         if (split.count == 1) {
             arg.name = split[0];
-            arg.value = STR("1");
+            arg.value = "";
         }
         else if (split.count == 2) {
             arg.name = split[0];
@@ -1616,44 +1663,51 @@ b32 yov_read_args()
     SCRATCH();
     Array<String> args = os_get_args(yov->static_arena);
     
-    if (args.count <= 0) {
-        report_error(NO_CODE, "Script not specified");
-        return false;
-    }
-    
-    if (args.count == 1 && string_equals(args[0], STR("help"))) {
-        print_info("TODO\n");
-        return false;
-    }
-    
-    if (args.count == 1 && string_equals(args[0], STR("version"))) {
-        print_info(YOV_VERSION);
-        return false;
-    }
-    
+    String path = {};
     i32 script_args_start_index = args.count;
-    for (i32 i = 1; i < args.count; ++i) {
+    
+    foreach(i, args.count)
+    {
         String arg = args[i];
         
-        if (string_equals(arg, STR("/"))) {
+        if (arg.size > 0 && arg[0] != '-') {
+            path = arg;
             script_args_start_index = i + 1;
             break;
         }
         
-        if (string_equals(arg, STR("analyze"))) yov->settings.analyze_only = true;
-        else if (string_equals(arg, STR("trace"))) yov->settings.trace = true;
-        else if (string_equals(arg, STR("user_assert"))) yov->settings.user_assert = true;
-        else {
-            report_error(NO_CODE, "Unknown interpreter argument '%S'\n", arg);
+        if (string_equals(arg, "-analyze")) yov->settings.analyze_only = true;
+        else if (string_equals(arg, "-trace")) yov->settings.trace = true;
+        else if (string_equals(arg, "-user_assert")) yov->settings.user_assert = true;
+        else if (string_equals(arg, "-help")) {
+            print_info("TODO\n");
+            return false;
         }
+        else if (string_equals(arg, "-version")) print_info(YOV_VERSION);
+        else {
+            report_error(NO_CODE, "Unknown Yov argument '%S'\n", arg);
+        }
+    }
+    
+    if (path.size == 0) {
+        report_error(NO_CODE, "Script not specified");
+        return false;
     }
     
     Array<String> script_args = array_subarray(args, script_args_start_index, args.count - script_args_start_index);
     generate_program_args(script_args);
     
-    yov->main_script_path = resolve_import_path(yov->static_arena, yov, os_get_working_path(scratch.arena), args[0]);
+    yov->main_script_path = resolve_import_path(yov->static_arena, yov, os_get_working_path(scratch.arena), path);
     
     return true;
+}
+
+ScriptArg* yov_find_arg(String name) {
+    foreach(i, yov->args.count) {
+        ScriptArg* arg = &yov->args[i];
+        if (string_equals(arg->name, name)) return arg;
+    }
+    return NULL;
 }
 
 void report_error_ex(CodeLocation code, String text, ...)

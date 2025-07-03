@@ -1,21 +1,5 @@
 #include "inc.h"
 
-inline_fn b32 codepoint_is_separator(u32 codepoint) {
-    if (codepoint == ' ') return true;
-    if (codepoint == '\t') return true;
-    if (codepoint == '\r') return true;
-    return false;
-}
-
-inline_fn b32 codepoint_is_number(u32 codepoint) {
-    return codepoint >= '0' && codepoint <= '9';
-}
-inline_fn b32 codepoint_is_text(u32 codepoint) {
-    if (codepoint >= 'a' && codepoint <= 'z') return true;
-    if (codepoint >= 'A' && codepoint <= 'Z') return true;
-    return false;
-}
-
 internal_fn Token lexer_extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 size)
 {
     assert(size > 0);
@@ -36,6 +20,7 @@ internal_fn Token lexer_extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 
         else if (string_equals("for", token.value)) kind = TokenKind_ForKeyword;
         else if (string_equals("enum", token.value)) kind = TokenKind_EnumKeyword;
         else if (string_equals("struct", token.value)) kind = TokenKind_StructKeyword;
+        else if (string_equals("arg", token.value)) kind = TokenKind_ArgKeyword;
         else if (string_equals("return", token.value)) kind = TokenKind_ReturnKeyword;
         else if (string_equals("import", token.value)) kind = TokenKind_ImportKeyword;
         else if (string_equals("true", token.value)) kind = TokenKind_BoolLiteral;

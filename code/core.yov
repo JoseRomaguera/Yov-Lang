@@ -59,13 +59,6 @@ yov_require     :: (major: Int, minor: Int);
 yov_require_min :: (major: Int, minor: Int);
 yov_require_max :: (major: Int, minor: Int);
 
-// Args
-arg_int    :: (name: String, default: Int) -> Int;
-arg_bool   :: (name: String, default: Bool) -> Bool;
-arg_string :: (name: String, default: String) -> String;
-arg_flag   :: (name: String) -> Bool;
-arg_exists :: (name: String) -> Bool;
-
 // User
 ask_yesno :: (text: String) -> Bool;
 

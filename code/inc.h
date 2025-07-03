@@ -315,6 +315,7 @@ String string_make(RawBuffer buffer);
 String string_copy(Arena* arena, String src);
 String string_substring(String str, u64 offset, u64 size);
 b32 string_equals(String s0, String s1);
+b32 string_starts(String str, String with);
 b32 u32_from_string(u32* dst, String str);
 b32 u32_from_char(u32* dst, char c);
 b32 i64_from_string(String str, i64* out);
@@ -327,6 +328,11 @@ String string_replace(Arena* arena, String str, String old_str, String new_str);
 String string_format_with_args(Arena* arena, String string, va_list args);
 String string_format_ex(Arena* arena, String string, ...);
 u32 string_get_codepoint(String str, u64* cursor_ptr);
+u32 string_calculate_char_count(String str);
+
+b32 codepoint_is_separator(u32 codepoint);
+b32 codepoint_is_number(u32 codepoint);
+b32 codepoint_is_text(u32 codepoint);
 
 #define string_format(arena, str, ...) string_format_ex(arena, STR(str), __VA_ARGS__)
 
@@ -470,6 +476,7 @@ enum TokenKind {
     TokenKind_ForKeyword,
     TokenKind_EnumKeyword,
     TokenKind_StructKeyword,
+    TokenKind_ArgKeyword,
     TokenKind_ReturnKeyword,
     TokenKind_ImportKeyword,
     
@@ -509,7 +516,7 @@ struct Report {
     CodeLocation code;
 };
 
-struct ProgramArg {
+struct ScriptArg {
     String name;
     String value;
 };
@@ -533,7 +540,7 @@ struct Yov {
     
     PooledArray<YovScript> scripts;
     
-    Array<ProgramArg> args;
+    Array<ScriptArg> args;
     
     PooledArray<Report> reports;
     i32 error_count;
@@ -563,6 +570,7 @@ YovScript* yov_get_script(i32 script_id);
 String yov_get_line_sample(Arena* arena, CodeLocation code);
 
 b32 yov_read_args();
+ScriptArg* yov_find_arg(String name);
 
 void report_error_ex(CodeLocation code, String text, ...);
 
@@ -604,6 +612,8 @@ void print_report(Report report);
 #define report_expecting_object_definition(_code) report_error(_code, "Expecting an object definition");
 #define report_expecting_string_literal(_code) report_error(_code, "Expecting string literal");
 #define report_expecting_semicolon(_code) report_error(_code, "Expecting semicolon");
+#define report_expecting_assignment(_code) report_error(_code, "Expecting assignment");
+#define report_unknown_parameter(_code, _v) report_error(_code, "Unknown parameter '%S'", _v);
 #define report_invalid_escape_sequence(_code, _v) report_error(_code, "Invalid escape sequence '\\%S'", STR(_v));
 
 //- SEMANTIC REPORTS
@@ -632,7 +642,8 @@ void print_report(Report report);
 #define report_function_not_found(_code, _v) report_error(_code, "Function '%S' not found", _v);
 #define report_function_expecting_parameters(_code, _v, _c) report_error(_code, "Function '%S' is expecting %u parameters", _v, _c);
 #define report_function_wrong_parameter_type(_code, _f, _t, _c) report_error(_code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
-#define report_function_expects_ref_as_parameter(_code, _f, _c) report_error(_code, "Function '%S' is expecting a ref as a parameter %u", _f, _c);
+#define report_function_expects_ref_as_parameter(_code, _f, _c) report_error(_code, "Function '%S' is expecting a reference as a parameter %u", _f, _c);
+#define report_function_expects_noref_as_parameter(_code, _f, _c) report_error(_code, "Function '%S' is not expecting a reference as a parameter %u", _f, _c);
 #define report_function_wrong_return_type(_code, _t) report_error(_code, "Expected a '%S' as a return", _t);
 #define report_function_expects_ref_as_return(_code) report_error(_code, "Expected a reference as a return");
 #define report_function_expects_no_ref_as_return(_code) report_error(_code, "Can't return a reference");
@@ -655,6 +666,11 @@ void print_report(Report report);
 #define report_ref_expects_lvalue(_code) report_error(_code, "Can't get a reference of a rvalue");
 #define report_ref_expects_non_constant(_code) report_error(_code, "Can't get a reference of a constant");
 #define report_reftype_invalid(_code) report_error(_code, "Invalid definition of a reference: {line}");
+#define report_arg_invalid_name(_code, _v) report_error(_code, "Invalid arg name '%S'", _v);
+#define report_arg_duplicated_name(_code, _v) report_error(_code, "Duplicated arg name '%S'", _v);
+#define report_arg_is_required(_code, _v) report_error(_code, "Argument '%S' is required", _v);
+#define report_arg_wrong_value(_code, _n, _v) report_error(_code, "Invalid argument assignment '%S = %S'", _n, _v);
+#define report_arg_unknown(_code, _v) report_error(_code, "Unknown argument '%S'", _v);
 
 //- LANG REPORTS
 
@@ -706,6 +722,7 @@ enum OpKind {
     OpKind_MemberValue,
     OpKind_EnumDefinition,
     OpKind_StructDefinition,
+    OpKind_ArgDefinition,
     OpKind_FunctionDefinition,
     OpKind_Return,
     OpKind_Import,
@@ -828,6 +845,14 @@ struct OpNode_StructDefinition : OpNode {
     Array<OpNode_ObjectDefinition*> members;
     u32 dependency_index; // Used in interpreter
 };
+struct OpNode_ArgDefinition : OpNode {
+    String identifier;
+    OpNode* type;
+    OpNode* name;
+    OpNode* description;
+    OpNode* required;
+    OpNode* default_value;
+};
 struct OpNode_FunctionDefinition : OpNode {
     String identifier;
     OpNode* block;
@@ -879,10 +904,21 @@ OpNode* process_function_call(Parser* parser, Array<Token> tokens);
 
 OpNode* extract_expresion_from_array(Parser* parser, Array<Token> tokens);
 OpNode* extract_expresion(Parser* parser);
-OpNode* extract_op(Parser* parser);
-OpNode* extract_block(Parser* parser);
+OpNode* extract_if_statement(Parser* parser);
+OpNode* extract_while_statement(Parser* parser);
+OpNode* extract_for_statement(Parser* parser);
+OpNode* extract_enum_definition(Parser* parser);
+OpNode* extract_struct_definition(Parser* parser);
+OpNode* extract_arg_definition(Parser* parser);
+OpNode* extract_function_definition(Parser* parser);
+OpNode* extract_assignment(Parser* parser);
 OpNode* extract_object_type(Parser* parser);
 OpNode* extract_object_definition(Parser* parser);
+OpNode* extract_function_call(Parser* parser);
+OpNode* extract_return(Parser* parser);
+OpNode* extract_import(Parser* parser);
+OpNode* extract_block(Parser* parser);
+OpNode* extract_op(Parser* parser);
 
 OpNode* generate_ast(Array<Token> tokens, b32 is_block);
 
@@ -894,7 +930,7 @@ void log_ast(OpNode* node, i32 depth);
 
 //- INTERPRETER 
 
-#define log_trace(code, text, ...) if (inter->settings.execute && inter->settings.print_execution) { \
+#define log_trace(code, text, ...) if (inter->mode == InterpreterMode_Execute && inter->settings.print_execution) { \
 String log = string_format(scratch.arena, text, __VA_ARGS__);\
 print_info("%S\n", log); \
 } \
@@ -1044,6 +1080,14 @@ struct FunctionDefinition {
     b8 is_intrinsic;
 };
 
+struct ArgDefinition {
+    String identifier;
+    String name;
+    String description;
+    i32 vtype;
+    b32 required;
+};
+
 enum SymbolType {
     SymbolType_None,
     SymbolType_ObjectRef,
@@ -1061,12 +1105,17 @@ struct Symbol {
 };
 
 struct InterpreterSettings {
-    b8 execute; // Execute AST until an error ocurrs otherwise do semantic analysis of the entire AST
     b8 user_assertion; // Forces user assertion of every operation to the OS
     b8 print_execution;
 };
 
-void interpret(InterpreterSettings settings);
+enum InterpreterMode {
+    InterpreterMode_Analysis, // Do semantic analysis of the entire AST
+    InterpreterMode_Help,     // Validate arguments and show the descriptions
+    InterpreterMode_Execute,  // Execute AST until an error ocurrs
+};
+
+void interpret(InterpreterSettings settings, InterpreterMode mode);
 
 enum ScopeType {
     ScopeType_Global,
@@ -1077,6 +1126,7 @@ enum ScopeType {
 struct Scope {
     ScopeType type;
     PooledArray<ObjectRef> object_refs;
+    PooledArray<Object*> temp_objects;
     Value return_value;
     i32 expected_return_vtype;
     b32 expected_return_reference;
@@ -1085,12 +1135,14 @@ struct Scope {
 };
 
 struct Interpreter {
+    InterpreterMode mode;
     InterpreterSettings settings;
     
     OpNode* root;
     
     PooledArray<VariableType> vtype_table;
     PooledArray<FunctionDefinition> functions;
+    PooledArray<ArgDefinition> arg_definitions;
     
     u32 object_id_counter;
     Object* object_list;
@@ -1151,6 +1203,8 @@ void   scope_clear(Interpreter* inter, Scope* scope);
 Scope* scope_push(Interpreter* inter, ScopeType type, i32 expected_return_vtype, b32 expected_return_reference);
 void   scope_pop(Interpreter* inter);
 
+void scope_add_temporal(Interpreter* inter, Object* object);
+void scope_add_temporal(Interpreter* inter, Scope* scope, Object* object);
 Scope* scope_find_returnable(Interpreter* inter);
 ObjectRef* scope_define_object_ref(Interpreter* inter, String identifier, Value value, b32 constant = false);
 ObjectRef* scope_find_object_ref(Interpreter* inter, String identifier, b32 parent_scopes);
@@ -1159,11 +1213,13 @@ ObjectRef* scope_find_object_ref(Interpreter* inter, String identifier, b32 pare
 
 i32 define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values);
 void define_struct(Interpreter* inter, String name, Array<ObjectDefinition> members);
+void define_arg(Interpreter* inter, String identifier, String name, i32 vtype, b32 required, String description);
 void define_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype, b32 return_reference, OpNode_Block* block);
 void define_intrinsic_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype);
 
 Symbol find_symbol(Interpreter* inter, String identifier);
 FunctionDefinition* find_function(Interpreter* inter, String identifier);
+ArgDefinition* find_arg_definition_by_name(Interpreter* inter, String name);
 Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node, b32 is_expresion);
 
 VariableType vtype_get(Interpreter* inter, i32 vtype);
@@ -1193,6 +1249,7 @@ Value rvalue_from_obj(Object* obj);
 Value lvalue_make(Object* obj, ObjectRef* ref, Object* parent, u32 index, i32 vtype);
 Value lvalue_from_ref(ObjectRef* ref);
 Value value_from_child(Value parent_value, Object* object, u32 index, i32 vtype);
+Value value_from_string(Interpreter* inter, String str, i32 vtype);
 
 String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw = true);
 String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);

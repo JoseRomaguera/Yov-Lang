@@ -129,117 +129,6 @@ internal_fn FunctionReturn intrinsic__yov_require_max(Interpreter* inter, Array<
     return { value_void(), RESULT_SUCCESS };
 }
 
-//- ARGS 
-
-internal_fn ProgramArg* find_arg(Interpreter* inter, String name) {
-    foreach(i, yov->args.count) {
-        ProgramArg* arg = &yov->args[i];
-        if (string_equals(arg->name, name)) return arg;
-    }
-    return NULL;
-}
-
-internal_fn b32 i64_from_arg(String arg, i64* v)
-{
-    *v = 0;
-    
-    if (string_equals(arg, STR("true"))) {
-        *v = 1;
-        return true;
-    }
-    
-    if (string_equals(arg, STR("false"))) {
-        *v = 0;
-        return true;
-    }
-    
-    i64 v0;
-    if (i64_from_string(arg, &v0)) {
-        *v = v0;
-        return true;
-    }
-    
-    return false;
-}
-
-internal_fn FunctionReturn intrinsic__arg_int(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    SCRATCH();
-    ProgramArg* arg = find_arg(inter, get_string(vars[0]));
-    
-    i64 value;
-    
-    if (arg == NULL) {
-        value = get_int(vars[1]);
-    }
-    else {
-        if (!i64_from_arg(arg->value, &value)) {
-            // TODO(Jose): report_warning(inter->ctx, node->code, "Arg type missmatch, can't assign '%S' to a 'Int", arg->name);
-        }
-    }
-    
-    return { alloc_int(inter, value), RESULT_SUCCESS };
-}
-
-internal_fn FunctionReturn intrinsic__arg_bool(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    SCRATCH();
-    ProgramArg* arg = find_arg(inter, get_string(vars[0]));
-    
-    b32 value = false;
-    
-    if (arg == NULL) {
-        value = get_bool(vars[1]);
-    }
-    else
-    {
-        i64 int_value = 0;
-        if (!i64_from_arg(arg->value, &int_value)) {
-            // TODO(Jose): report_warning(inter->ctx, node->code, "Arg type missmatch, can't assign '%S' to a 'Bool", arg->name);
-        }
-        value = int_value != 0;
-    }
-    
-    return { alloc_bool(inter, value), RESULT_SUCCESS };
-}
-
-internal_fn FunctionReturn intrinsic__arg_string(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    SCRATCH();
-    ProgramArg* arg = find_arg(inter, get_string(vars[0]));
-    
-    String value;
-    
-    if (arg == NULL) value = get_string(vars[1]);
-    else value = arg->value;
-    
-    return { alloc_string(inter, value), RESULT_SUCCESS };
-}
-
-internal_fn FunctionReturn intrinsic__arg_exists(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    SCRATCH();
-    ProgramArg* arg = find_arg(inter, get_string(vars[0]));
-    return { alloc_bool(inter, arg != NULL), RESULT_SUCCESS };
-}
-
-internal_fn FunctionReturn intrinsic__arg_flag(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    SCRATCH();
-    ProgramArg* arg = find_arg(inter, get_string(vars[0]));
-    
-    b32 res = false;
-    
-    if (arg != NULL)
-    {
-        i64 int_value = 0;
-        if (i64_from_arg(arg->value, &int_value)) res = int_value != 0;
-        else res = true;
-    }
-    
-    return { alloc_bool(inter, (b8)res), RESULT_SUCCESS };
-}
-
 //- MISC 
 
 internal_fn FunctionReturn intrinsic__ask_yesno(Interpreter* inter, Array<Value> vars, CodeLocation code)
@@ -399,13 +288,6 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("yov_require", intrinsic__yov_require),
         INTR("yov_require_min", intrinsic__yov_require_min),
         INTR("yov_require_max", intrinsic__yov_require_max),
-        
-        // Args
-        INTR("arg_int", intrinsic__arg_int),
-        INTR("arg_bool", intrinsic__arg_bool),
-        INTR("arg_string", intrinsic__arg_string),
-        INTR("arg_flag", intrinsic__arg_flag),
-        INTR("arg_exists", intrinsic__arg_exists),
         
         // User
         INTR("ask_yesno", intrinsic__ask_yesno),

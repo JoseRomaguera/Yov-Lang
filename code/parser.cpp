@@ -44,6 +44,7 @@ internal_fn OpKind op_kind_from_tokens(Parser* parser)
     if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Colon) {
         if (t3.kind == TokenKind_EnumKeyword) return OpKind_EnumDefinition;
         if (t3.kind == TokenKind_StructKeyword) return OpKind_StructDefinition;
+        if (t3.kind == TokenKind_ArgKeyword) return OpKind_ArgDefinition;
         if (t3.kind == TokenKind_OpenParenthesis) return OpKind_FunctionDefinition;
         return OpKind_ObjectDefinition;
     }
@@ -687,7 +688,7 @@ OpNode* extract_expresion(Parser* parser)
     return alloc_node(parser, OpKind_Error, tokens[0].code);
 }
 
-internal_fn OpNode* extract_if_statement(Parser* parser)
+OpNode* extract_if_statement(Parser* parser)
 {
     Token starting_token = peek_token(parser);
     
@@ -727,7 +728,7 @@ internal_fn OpNode* extract_if_statement(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_while_statement(Parser* parser)
+OpNode* extract_while_statement(Parser* parser)
 {
     Token starting_token = peek_token(parser);
     
@@ -756,7 +757,7 @@ internal_fn OpNode* extract_while_statement(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_for_statement(Parser* parser)
+OpNode* extract_for_statement(Parser* parser)
 {
     Token starting_token = peek_token(parser);
     
@@ -865,7 +866,7 @@ internal_fn OpNode* extract_for_statement(Parser* parser)
     }
 }
 
-internal_fn OpNode* extract_enum_definition(Parser* parser)
+OpNode* extract_enum_definition(Parser* parser)
 {
     SCRATCH();
     
@@ -918,15 +919,15 @@ internal_fn OpNode* extract_enum_definition(Parser* parser)
             value = node;
         }
         
+        array_add(&names, name_token.value);
+        array_add(&values, value);
+        
         Token comma_token = extract_token(parser);
         if (comma_token.kind == TokenKind_CloseBrace) break;
         if (comma_token.kind != TokenKind_Comma) {
             report_enumdef_expecting_comma_separated_identifier(comma_token.code);
             return alloc_node(parser, OpKind_Error, starting_token.code);
         }
-        
-        array_add(&names, name_token.value);
-        array_add(&values, value);
     }
     while (true);
     
@@ -937,7 +938,7 @@ internal_fn OpNode* extract_enum_definition(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_struct_definition(Parser* parser)
+OpNode* extract_struct_definition(Parser* parser)
 {
     SCRATCH();
     
@@ -984,7 +985,80 @@ internal_fn OpNode* extract_struct_definition(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_function_definition(Parser* parser)
+OpNode* extract_arg_definition(Parser* parser)
+{
+    Token starting_token = peek_token(parser);
+    
+    Token identifier_token = extract_token(parser);
+    assert(identifier_token.kind == TokenKind_Identifier);
+    
+    Token colon0_token = extract_token(parser);
+    assert(colon0_token.kind == TokenKind_Colon);
+    Token colon1_token = extract_token(parser);
+    assert(colon1_token.kind == TokenKind_Colon);
+    
+    Token arg_keyword_token = extract_token(parser);
+    assert(arg_keyword_token.kind == TokenKind_ArgKeyword);
+    
+    OpNode* none_node = alloc_node(parser, OpKind_None, starting_token.code);
+    OpNode* type = (OpNode_ObjectType*)none_node;
+    OpNode* name = (OpNode_Assignment*)none_node;
+    OpNode* description = (OpNode_Assignment*)none_node;
+    OpNode* required = (OpNode_Assignment*)none_node;
+    OpNode* default_value = (OpNode_Assignment*)none_node;
+    
+    if (peek_token(parser).kind == TokenKind_Arrow)
+    {
+        extract_token(parser);
+        type = extract_object_type(parser);
+    }
+    
+    Token open_brace_token = extract_token(parser);
+    if (open_brace_token.kind != TokenKind_OpenBrace) {
+        report_common_missing_opening_bracket(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
+    
+    while (peek_token(parser).kind != TokenKind_CloseBrace) {
+        
+        OpNode_Assignment* assignment = (OpNode_Assignment*)extract_assignment(parser);
+        
+        if (assignment->kind == OpKind_Error) {
+            extract_tokens_until(parser, false, TokenKind_CloseBrace);
+            return assignment;
+        }
+        assert(assignment->kind == OpKind_Assignment);
+        
+        if (assignment->binary_operator != BinaryOperator_None || assignment->destination->kind != OpKind_Symbol) {
+            report_expecting_assignment(assignment->code);// TODO(Jose): 
+            return alloc_node(parser, OpKind_Error, assignment->code);
+        }
+        
+        String identifier = ((OpNode_Symbol*)assignment->destination)->identifier;
+        
+        if (string_equals(identifier, "name")) name = assignment;
+        else if (string_equals(identifier, "description")) description = assignment;
+        else if (string_equals(identifier, "required")) required = assignment;
+        else if (string_equals(identifier, "default")) default_value = assignment;
+        else {
+            report_unknown_parameter(assignment->code, identifier);
+            return alloc_node(parser, OpKind_Error, assignment->code);
+        }
+    }
+    
+    skip_tokens(parser, 1);
+    
+    OpNode_ArgDefinition* node = (OpNode_ArgDefinition*)alloc_node(parser, OpKind_ArgDefinition, starting_token.code);
+    node->identifier = identifier_token.value;
+    node->type = type;
+    node->name = name;
+    node->description = description;
+    node->required = required;
+    node->default_value = default_value;
+    return node;
+}
+
+OpNode* extract_function_definition(Parser* parser)
 {
     SCRATCH();
     
@@ -1107,9 +1181,14 @@ internal_fn OpNode* extract_function_definition(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_assignment(Parser* parser)
+OpNode* extract_assignment(Parser* parser)
 {
     Token starting_token = peek_token(parser);
+    
+    if (op_kind_from_tokens(parser) != OpKind_Assignment) {
+        report_expecting_assignment(starting_token.code);
+        return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
     
     Array<Token> destination_tokens = extract_tokens_until(parser, false, TokenKind_Assignment);
     
@@ -1251,14 +1330,14 @@ OpNode* extract_object_definition(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_function_call(Parser* parser)
+OpNode* extract_function_call(Parser* parser)
 {
     Token starting_token = peek_token(parser);
     Array<Token> sentence = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
     return process_function_call(parser, sentence);
 }
 
-internal_fn OpNode* extract_return(Parser* parser)
+OpNode* extract_return(Parser* parser)
 {
     Token return_token = extract_token(parser);
     assert(return_token.kind == TokenKind_ReturnKeyword);
@@ -1271,7 +1350,7 @@ internal_fn OpNode* extract_return(Parser* parser)
     return node;
 }
 
-internal_fn OpNode* extract_import(Parser* parser)
+OpNode* extract_import(Parser* parser)
 {
     Token import_token = extract_token(parser);
     assert(import_token.kind == TokenKind_ImportKeyword);
@@ -1369,6 +1448,7 @@ OpNode* extract_op(Parser* parser)
         if (kind == OpKind_ForStatement) node = extract_for_statement(parser);
         if (kind == OpKind_EnumDefinition) node = extract_enum_definition(parser);
         if (kind == OpKind_StructDefinition) node = extract_struct_definition(parser);
+        if (kind == OpKind_ArgDefinition) node = extract_arg_definition(parser);
         if (kind == OpKind_FunctionDefinition) node = extract_function_definition(parser);
         if (kind == OpKind_FunctionCall) node = extract_function_call(parser);
         if (kind == OpKind_ObjectDefinition) node = extract_object_definition(parser);
@@ -1481,6 +1561,10 @@ void log_ast(OpNode* node, i32 depth)
     else if (node->kind == OpKind_StructDefinition) {
         auto node0 = (OpNode_StructDefinition*)node;
         print_info("struct def: %S", node0->identifier);
+    }
+    else if (node->kind == OpKind_ArgDefinition) {
+        auto node0 = (OpNode_ArgDefinition*)node;
+        print_info("arg def: %S", node0->identifier);
     }
     else if (node->kind == OpKind_EnumDefinition) {
         auto node0 = (OpNode_EnumDefinition*)node;

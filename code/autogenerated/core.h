@@ -41,8 +41,9 @@ internal_fn void define_core(Interpreter* inter)
     }
     // enum OSKind
     {
-        String n[1];
+        String n[2];
         n[0] = "Windows";
+        n[1] = "Linux";
         Array<String> names = array_make(n, array_count(n));
         define_enum(inter, "OSKind", names, {});
     }
@@ -153,49 +154,6 @@ internal_fn void define_core(Interpreter* inter)
         p[1] = obj_def_make(STR("minor"), vtype_from_name(inter, STR("Int")));
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "yov_require_max", parameters, VType_Void);
-    }
-    // function arg_int
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[2];
-        p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
-        p[1] = obj_def_make(STR("default"), vtype_from_name(inter, STR("Int")));
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "arg_int", parameters, vtype_from_name(inter, STR("Int")));
-    }
-    // function arg_bool
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[2];
-        p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
-        p[1] = obj_def_make(STR("default"), vtype_from_name(inter, STR("Bool")));
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "arg_bool", parameters, vtype_from_name(inter, STR("Bool")));
-    }
-    // function arg_string
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[2];
-        p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
-        p[1] = obj_def_make(STR("default"), vtype_from_name(inter, STR("String")));
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "arg_string", parameters, vtype_from_name(inter, STR("String")));
-    }
-    // function arg_flag
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[1];
-        p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "arg_flag", parameters, vtype_from_name(inter, STR("Bool")));
-    }
-    // function arg_exists
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[1];
-        p[0] = obj_def_make(STR("name"), vtype_from_name(inter, STR("String")));
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "arg_exists", parameters, vtype_from_name(inter, STR("Bool")));
     }
     // function ask_yesno
     {

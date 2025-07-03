@@ -1,19 +1,29 @@
+
+script_description :: "This script builds the Yov programming language.
+It can be run in different modes depending on your development or distribution needs.";
+
+Mode :: enum { Dev, Dist, Manual }
+mode :: arg -> Mode {
+    default = .Dist;
+    description = "specifies the build mode. Available options: {Mode.array}";
+}
+profiler_enabled :: arg {
+    name = "-profiler";
+    description = "enables Tracy profiler (WIP)";
+}
+
 param_dev := false;
 param_optimize := true;
-param_profile := arg_flag("profile");
 
-mode := arg_string("mode", "dist");
-
-if (mode == "dev") {
+if (mode == Mode.Dev) {
     param_dev = true;
     param_optimize = false;
 }
-else if (mode == "dist") {
+else if (mode == Mode.Dist) {
 }
-else if (mode == "manual") {
+else if (mode == Mode.Manual) {
     param_dev = ask_yesno("dev");
     param_optimize = ask_yesno("optimize");
-    param_profile = ask_yesno("profile");
 }
 else {
     println("Unknown mode '{mode}'");
