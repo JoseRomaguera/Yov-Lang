@@ -4,7 +4,7 @@
 
 Intrinsics are built-in functions provided by the language for utilities, operating system interactions, and performance-critical operations.
 
-See [core.yov](code/core.yov) for the definitions.
+See [core.yov](../code/core.yov) for the definitions.
 
 > ⚠️ Work in progress! While some intrinsics are self-explanatory, detailed documentation will be added in the future.
 
