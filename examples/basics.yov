@@ -1,0 +1,175 @@
+
+ println("\n-> DEFINITIONS");
+
+integer0 : Int; // Zero initialization by default
+integer1: Int = 5;
+integer2 := 10; // Defined as an Int by default
+integer3 := 15 - integer1;
+
+//==============================================
+
+println("\n-> BASIC TYPES");
+
+integer: Int = 10;
+// TODO: floating: Float = 0.0;
+boolean: Bool = true;
+string: String = "Hello";
+
+//==============================================
+
+println("\n-> EXPRESIONS");
+
+expresion_result := (integer + 10) * 2 == 40 && boolean;
+
+//==============================================
+
+println("\n-> STRING LITERALS");
+
+string_literal := "Last expresion is: {expresion_result}";
+println(string_literal);
+
+path := "some_path/test0" / "../test1"; // Append and resolve paths using '/'
+println("Path = " + path); // Append strings using '+'
+
+println("Insert any expression inside braces: {5+5/2 == integer}");
+print("Special Chars: \\, \{, \}, \", \t, \n");
+
+//==============================================
+
+println("\n-> STRUCTS");
+
+Foo :: struct {
+    member0: Int; // Zero by default
+    member1 : String = "Hi"; // Default initialization
+}
+
+foo: Foo;
+println("foo = {foo}");
+println("Members = {foo.member0}, {foo.member1}");
+println("Foo.name = {Foo.name}");
+
+//==============================================
+
+println("\n-> ENUMS");
+
+Animal :: enum {
+    Cat, Dog, Human = 10
+}
+
+animal0 := Animal.Cat;
+animal1: Animal = .Human;
+
+println("animal0 = {animal0}");
+println("animal1.index = {animal1.index}");
+println("animal1.value = {animal1.value}");
+println("animal1.name = {animal1.name}");
+println("enum name = {Animal.name}");
+println("enum count = {Animal.count}");
+println("enum array = {Animal.array}");
+
+//==============================================
+
+println("\n-> REFERENCES");
+
+foo0: Foo; // 'foo0' contains a valid object by default
+foo1 := Foo(); // 'Foo()' is an expression that creates a default object of 'Foo'
+foo2 := foo1; // 'foo2' creates a new copy of 'foo1', DOES NOT store the reference
+foo3 := &foo1; // 'foo3' stores the reference of 'foo1', now refers to the same object
+
+foo3.member0 = 10;
+println("'foo2' references 'foo1' = {foo2.member0 == foo1.member0}");
+println("'foo3' references 'foo1' = {foo3.member0 == foo1.member0}");
+
+//==============================================
+
+println("\n-> IF-STATEMENT");
+
+say_it := ask_yesno("Say Hello World?");
+
+if (say_it) {
+    println("Hello World");
+}
+else {
+    println("Not saying Hello World :(");
+}
+
+//==============================================
+
+println("\n-> Loops");
+
+j := 0;
+while (j < 3) {
+    println("While: {j}");
+    j+= 1;
+}
+
+for (i := 0; i < 3; i += 1) {
+    println("For: {i}");
+}
+
+for (value: Animal.array) {
+    println("For Each: {value}");
+}
+
+for (value, index: Animal.array) {
+    println("For Each({index}) = {value}");
+}
+
+for (i := 0; true; i += 1) {
+    if (i % 2 == 0) {
+        println("Continue on {i}");
+        continue;
+    }
+    if (i == 5) {
+        println("Break on {i}");
+        break;
+    }
+}
+
+//==============================================
+
+println("\n-> Arrays");
+
+words := { "This", "is" } + { "a" };
+words += { "dynamic", "array" };
+words += "!";
+
+println("words = {words}");
+println("words.count = {words.count}");
+
+empty_array: Int[];
+array_with_defaults := [5]->Int;
+array_with_defaults[2] = 20;
+
+println("empty_array = {empty_array}");
+println("array_with_defaults = {array_with_defaults}");
+
+//==============================================
+
+println("\n-> Functions");
+
+basic_function();
+ret0 := function_with_return();
+ret1 := function_with_params(5, 5);
+println("Functions return: {ret0}, {ret1}");
+
+ret_ref := 10;
+println("Value before: {ret_ref}");
+function_with_refs(&ret_ref);
+println("Value after: {ret_ref}");
+
+basic_function :: () {
+    println("Hello from function");
+}
+
+function_with_return :: () -> Int {
+    return 25;
+}
+
+function_with_params :: (a: Int, b: Int) -> Int {
+    return a * b;
+}
+
+function_with_refs :: (a: Int&) {
+    a *= 2;
+}

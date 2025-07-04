@@ -1,0 +1,33 @@
+
+/*
+  Specify script args after path
+ Examples:
+      yov.exe script_args.yov -help
+yov.exe script_args.yov -foo=A
+yov.exe script_args.yov -foo=B -print_all
+yov.exe script_args.yov -foo=B -opt_foo=B
+*/
+
+script_description :: "This is an example of how to define and use script arguments.\nTo document a script, define the constant 'script_description' within the script itself.";
+
+foo :: arg -> Foo {
+    required = true;
+    description = "specifies the value for foo. Valid options: {Foo.array}";
+}
+
+opt_foo :: arg -> Foo {
+    description = "same as -foo, but not required. Valid options: {Foo.array}";
+    default = .C;
+}
+
+print_all :: arg {
+    description = "prints all arguments provided by the user";
+}
+
+Foo :: enum { A, B, C }
+
+println("foo = {foo}");
+println("opt_foo = {opt_foo}");
+println("print_all = {print_all}");
+
+if (print_all) println("All the defined args: {context.args}");

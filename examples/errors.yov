@@ -5,8 +5,10 @@
 
 invalid := "\".txt";
 
+// Ignoring the error
 if (!create_directory(invalid, false)) println("Failed but program continues");
 
+// Receiving an error and asking the user if wants to continue
 res := create_directory(invalid, false);
 if (!res) {
     if (ask_yesno("Failed, do you want to exit?")) {
@@ -18,5 +20,7 @@ if (!res) {
 // Not all intrinsics generate errors.
 exists(invalid);
 
+// Not handling the error and causing the script to stop at this point
 create_directory(invalid, false);
+
 println("This line is never executed");

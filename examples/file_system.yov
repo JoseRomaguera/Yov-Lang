@@ -1,13 +1,16 @@
 
 // Recommend turning on "user_assert" flag:
-// yov.exe 02_file_system.yov user_assert /
+// yov -user_assert file_system.yov
 
 // For copy/move operations: First parameter is destination and second is source
+
+// See the function definitions here:
+// https://github.com/JoseRomaguera/Yov-Lang/blob/main/code/core.yov
 
 if (exists("_copied.yov")) println("Currently exists");
 else println("Not exists");
 
-copy_file("_copied.yov", "02_file_system.yov", .Override);
+copy_file("_copied.yov", "file_system.yov", .Override);
 
 if (exists("_moved.yov")) {
     println("\"_moved.yov\" exits, deleting it...");

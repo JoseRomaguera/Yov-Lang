@@ -41,7 +41,7 @@ else println("OS is not supported😃");
 - Robust programming language.
 - Interpreted with Syntax Checking: Performs static analysis before execution.
 - Strictly Typed.
-- Lightweight: The only dependency is a ~100KB executable per platform.
+- Lightweight: The only dependency is a ~130KB executable per platform.
 - Cross-Platform:
     - Write once, run on Windows, Linux, and macOS with no changes.
     - Provides platform-independent intrinsics for common operations.
@@ -57,12 +57,14 @@ else println("OS is not supported😃");
 - Enhanced Reliability for Interpreted Languages: Since batch scripts tend to be shorter than full programs, 
 Yov takes advantage of this by analyzing the entire codebase before execution without relying on caches.
 - More expressive and readable than compiled systems languages.
-- Minimal Dependencies: The only requirement is a lightweight ~100KB executable.
+- Minimal Dependencies: The only requirement is a lightweight ~130KB executable.
 - Portable: The Yov executable can be easily included in any repository, ensuring that scripts run seamlessly across all machines, anytime.
 - Safety Measures: Includes helpful safeguards to prevent accidental file mishandling during script creation, making development more secure.
 
 ## Documentation
-TODO, see examples for reference
+
+Useful but still work in progress!<br>
+[Documentation](docs/index.md)
 
 ## What will not be in Yov
 
@@ -74,4 +76,17 @@ TODO, see examples for reference
 - No exceptions.
 
 ## Current State
-TODO
+
+The language currently supports most of the fundamental features expected from a programming language.
+
+However, several key aspects are still under development:
+- Cross-platform support, currently only available on Windows.
+- Additional intrinsic functions.
+- Improved error reporting and diagnostics.
+- Metaprogramming capabilities.
+- Performance and memory optimizations.
+- Various minor features and refinements.
+
+Questions, feedback, and contributions are always welcome!
+
+Join our [Discord server](https://discord.gg/KW4vFgPXxq).
