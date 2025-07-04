@@ -2,9 +2,9 @@
 
 > ⚠️ Work in progress!
 
-## [Overview](docs/overview.md)
+### [-> Overview](overview.md)
 
-## [Intrinsics](docs/intrinsics.md)
+### [-> Intrinsics](intrinsics.md)
 
 See the [examples folder](examples) for additional information.
 
