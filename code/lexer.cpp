@@ -22,6 +22,8 @@ internal_fn Token lexer_extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 
         else if (string_equals("struct", token.value)) kind = TokenKind_StructKeyword;
         else if (string_equals("arg", token.value)) kind = TokenKind_ArgKeyword;
         else if (string_equals("return", token.value)) kind = TokenKind_ReturnKeyword;
+        else if (string_equals("break", token.value)) kind = TokenKind_BreakKeyword;
+        else if (string_equals("continue", token.value)) kind = TokenKind_ContinueKeyword;
         else if (string_equals("import", token.value)) kind = TokenKind_ImportKeyword;
         else if (string_equals("true", token.value)) kind = TokenKind_BoolLiteral;
         else if (string_equals("false", token.value)) kind = TokenKind_BoolLiteral;
@@ -160,6 +162,23 @@ internal_fn Token lexer_extract_next_token(Lexer* lexer)
             if (codepoint == '"') break;
         }
         return lexer_extract_dynamic_token(lexer, TokenKind_StringLiteral, cursor - lexer->cursor);
+    }
+    
+    if (c0 == '\'') {
+        b32 ignore_next = false;
+        u64 cursor = lexer->cursor + 1;
+        while (cursor < lexer->text.size) {
+            u32 codepoint = string_get_codepoint(lexer->text, &cursor);
+            
+            if (ignore_next) {
+                ignore_next = false;
+                continue;
+            }
+            
+            if (codepoint == '\\') ignore_next = true;
+            if (codepoint == '\'') break;
+        }
+        return lexer_extract_dynamic_token(lexer, TokenKind_CodepointLiteral, cursor - lexer->cursor);
     }
     
     if (c0 == '-' && c1 == '>') return lexer_extract_token(lexer, TokenKind_Arrow, 2);

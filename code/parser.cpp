@@ -25,6 +25,8 @@ internal_fn OpKind op_kind_from_tokens(Parser* parser)
     if (t0.kind == TokenKind_WhileKeyword) return OpKind_WhileStatement;
     if (t0.kind == TokenKind_ForKeyword) return OpKind_ForStatement;
     if (t0.kind == TokenKind_ReturnKeyword) return OpKind_Return;
+    if (t0.kind == TokenKind_ContinueKeyword) return OpKind_Continue;
+    if (t0.kind == TokenKind_BreakKeyword) return OpKind_Break;
     if (t0.kind == TokenKind_ImportKeyword) return OpKind_Import;
     
     if (t0.kind == TokenKind_OpenBrace) return OpKind_Block;
@@ -361,6 +363,7 @@ OpNode* extract_expresion(Parser* parser)
                     }
                     
                     if (codepoint == 'n') append(&builder, "\n");
+                    else if (codepoint == 'r') append(&builder, "\r");
                     else if (codepoint == 't') append(&builder, "\t");
                     else if (codepoint == '"') append(&builder, "\"");
                     else if (codepoint == '{') append(&builder, "{");
@@ -406,6 +409,38 @@ OpNode* extract_expresion(Parser* parser)
             node->raw_value = raw;
             node->value = value;
             node->expresions = array_from_pooled_array(yov->static_arena, expresions);
+            return node;
+        }
+        else if (token.kind == TokenKind_CodepointLiteral)
+        {
+            String raw = token.value;
+            
+            if (raw.size <= 2) {
+                report_invalid_codepoint_literal(token.code, raw);
+                return alloc_node(parser, OpKind_Error, token.code);
+            }
+            
+            raw = string_substring(raw, 1, raw.size - 2);
+            
+            u32 v = u32_max;
+            if (string_equals(raw, "\\\\")) v = '\\';
+            else if (string_equals(raw, "\\'")) v = '\'';
+            else if (string_equals(raw, "\\n")) v = '\n';
+            else if (string_equals(raw, "\\r")) v = '\r';
+            else if (string_equals(raw, "\\t")) v = '\t';
+            else
+            {
+                u64 cursor;
+                v = string_get_codepoint(raw, &cursor);
+                
+                if (v == 0xFFFD || cursor != raw.size) {
+                    report_invalid_codepoint_literal(token.code, raw);
+                    return alloc_node(parser, OpKind_Error, token.code);
+                }
+            }
+            
+            auto node = (OpNode_NumericLiteral*)alloc_node(parser, OpKind_CodepointLiteral, token.code);
+            node->codepoint_literal = v;
             return node;
         }
     }
@@ -1350,6 +1385,24 @@ OpNode* extract_return(Parser* parser)
     return node;
 }
 
+OpNode* extract_continue(Parser* parser)
+{
+    Token continue_token = extract_token(parser);
+    assert(continue_token.kind == TokenKind_ContinueKeyword);
+    
+    OpNode* node = alloc_node(parser, OpKind_Continue, continue_token.code);
+    return node;
+}
+
+OpNode* extract_break(Parser* parser)
+{
+    Token break_token = extract_token(parser);
+    assert(break_token.kind == TokenKind_BreakKeyword);
+    
+    OpNode* node = alloc_node(parser, OpKind_Break, break_token.code);
+    return node;
+}
+
 OpNode* extract_import(Parser* parser)
 {
     Token import_token = extract_token(parser);
@@ -1453,6 +1506,8 @@ OpNode* extract_op(Parser* parser)
         if (kind == OpKind_FunctionCall) node = extract_function_call(parser);
         if (kind == OpKind_ObjectDefinition) node = extract_object_definition(parser);
         if (kind == OpKind_Return) node = extract_return(parser);
+        if (kind == OpKind_Continue) node = extract_continue(parser);
+        if (kind == OpKind_Break) node = extract_break(parser);
         if (kind == OpKind_Import) node = extract_import(parser);
         if (kind == OpKind_Block) node = extract_block(parser);
         assert(node != NULL);

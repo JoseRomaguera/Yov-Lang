@@ -81,6 +81,27 @@ internal_fn FunctionReturn intrinsic__path_resolve(Interpreter* inter, Array<Val
     return { alloc_string(inter, res), RESULT_SUCCESS };
 }
 
+internal_fn FunctionReturn intrinsic__str_get_codepoint(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    Scope* last_scope = inter->current_scope;
+    scope_push(inter, ScopeType_Block, VType_Void, false);
+    DEFER(scope_pop(inter));
+    
+    Value cursor_value = lvalue_from_ref(scope_define_object_ref(inter, "dst", vars[1]));
+    String str = get_string(vars[0]);
+    
+    u64 cursor = get_int(cursor_value);
+    u32 codepoint = string_get_codepoint(str, &cursor);
+    
+    set_int(cursor_value, cursor);
+    Value ret = alloc_int(inter, codepoint);
+    scope_add_temporal(inter, last_scope, ret.obj);
+    
+    return { ret, RESULT_SUCCESS };
+}
+
 //- YOV 
 
 internal_fn FunctionReturn intrinsic__yov_require(Interpreter* inter, Array<Value> vars, CodeLocation code)
@@ -254,7 +275,7 @@ internal_fn FunctionReturn intrinsic__delete_file(Interpreter* inter, Array<Valu
     return { alloc_bool(inter, res.success), res };
 }
 
-internal_fn FunctionReturn intrinsic__write_file(Interpreter* inter, Array<Value> vars, CodeLocation code)
+internal_fn FunctionReturn intrinsic__write_entire_file(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
     SCRATCH();
     
@@ -262,8 +283,30 @@ internal_fn FunctionReturn intrinsic__write_file(Interpreter* inter, Array<Value
     String content = get_string(vars[1]);
     // TODO(Jose): b32 append = get_bool(vars[2]);
     
-    Result res = user_assertion(inter, string_format(scratch.arena, "Write file:\n'%S'", path));
+    Result res = user_assertion(inter, string_format(scratch.arena, "Write entire file:\n'%S'", path));
     if (res.success) res = os_write_entire_file(path, { content.data, content.size });
+    
+    return { alloc_bool(inter, res.success), res };
+}
+
+internal_fn FunctionReturn intrinsic__read_entire_file(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    scope_push(inter, ScopeType_Block, VType_Void, false);
+    DEFER(scope_pop(inter));
+    
+    Value dst = lvalue_from_ref(scope_define_object_ref(inter, "dst", vars[1]));
+    String path = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    
+    Result res = user_assertion(inter, string_format(scratch.arena, "Read entire file:\n'%S'", path));
+    RawBuffer content{};
+    if (res.success) res = os_read_entire_file(scratch.arena, path, &content);
+    
+    if (res.success) {
+        String content_str = string_make((char*)content.data, content.size);
+        value_assign(inter, dst, alloc_string(inter, content_str));
+    }
     
     return { alloc_bool(inter, res.success), res };
 }
@@ -281,8 +324,9 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("exit", intrinsic__exit),
         INTR("set_cd", intrinsic__set_cd),
         
-        // Utils
+        // String Utils
         INTR("path_resolve", intrinsic__path_resolve),
+        INTR("str_get_codepoint", intrinsic__str_get_codepoint),
         
         // Yov
         INTR("yov_require", intrinsic__yov_require),
@@ -301,7 +345,8 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("copy_file", intrinsic__copy_file),
         INTR("move_file", intrinsic__move_file),
         INTR("delete_file", intrinsic__delete_file),
-        INTR("write_file", intrinsic__write_file),
+        INTR("read_entire_file", intrinsic__read_entire_file),
+        INTR("write_entire_file", intrinsic__write_entire_file),
     };
     
     return array_copy(arena, array_make(table, array_count(table)));

@@ -6,23 +6,11 @@ YovInfo :: struct {
     revision: Int;
 }
 
-ParamInfo :: struct {
-    name: String;
-    type: String;
-}
-
-StructInfo :: struct {
-    name: String;
-    members: ParamInfo[];
-}
-
 Context :: struct {
     cd: String;
     script_dir: String;
     caller_dir: String;
     args: String[];
-    
-    structs: StructInfo[];
 }
 
 OSKind :: enum {
@@ -51,8 +39,9 @@ call_exe    :: (exe_name: String, arguments: String[]) -> Int;
 exit        :: ();
 set_cd      :: (cd: String);
 
-// Utils
+// String Utils
 path_resolve :: (path: String) -> String;
+str_get_codepoint :: (str: String, cursor: Int&) -> Int;
 
 // Yov
 yov_require     :: (major: Int, minor: Int);
@@ -63,12 +52,13 @@ yov_require_max :: (major: Int, minor: Int);
 ask_yesno :: (text: String) -> Bool;
 
 // File System
-exists           :: (path: String) -> Bool;
-create_directory :: (path: String, recursive: Bool) -> Bool;
-delete_directory :: (path: String) -> Bool;
-copy_directory   :: (dst: String, src: String) -> Bool;
-move_directory   :: (dst: String, src: String) -> Bool;
-copy_file        :: (dst: String, src: String, mode: CopyMode) -> Bool;
-move_file        :: (dst: String, src: String) -> Bool;
-delete_file      :: (path: String) -> Bool;
-write_file       :: (path: String, content: String) -> Bool;
+exists            :: (path: String) -> Bool;
+create_directory  :: (path: String, recursive: Bool) -> Bool;
+delete_directory  :: (path: String) -> Bool;
+copy_directory    :: (dst: String, src: String) -> Bool;
+move_directory    :: (dst: String, src: String) -> Bool;
+copy_file         :: (dst: String, src: String, mode: CopyMode) -> Bool;
+move_file         :: (dst: String, src: String) -> Bool;
+delete_file       :: (path: String) -> Bool;
+read_entire_file  :: (path: String, content: String&) -> Bool;
+write_entire_file :: (path: String, content: String) -> Bool;

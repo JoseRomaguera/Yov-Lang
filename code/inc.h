@@ -276,7 +276,7 @@ void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count);
 void os_release_virtual_memory(void* address);
 
 b32 os_exists(String path);
-b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result);
+Result os_read_entire_file(Arena* arena, String path, RawBuffer* result);
 Result os_write_entire_file(String path, RawBuffer data);
 Result os_copy_file(String dst_path, String src_path, b32 override);
 Result os_move_file(String dst_path, String src_path);
@@ -292,6 +292,7 @@ i32 os_call(String working_dir, String command);
 i32 os_call_exe(String working_dir, String exe, String params);
 
 String os_get_working_path(Arena* arena);
+String os_get_executable_path(Arena* arena);
 
 b32 os_path_is_absolute(String path);
 b32 os_path_is_directory(String path);
@@ -435,6 +436,7 @@ enum TokenKind {
     TokenKind_Identifier,
     TokenKind_IntLiteral,
     TokenKind_StringLiteral,
+    TokenKind_CodepointLiteral,
     TokenKind_Dot,
     TokenKind_Comma,
     TokenKind_Colon,
@@ -478,6 +480,8 @@ enum TokenKind {
     TokenKind_StructKeyword,
     TokenKind_ArgKeyword,
     TokenKind_ReturnKeyword,
+    TokenKind_ContinueKeyword,
+    TokenKind_BreakKeyword,
     TokenKind_ImportKeyword,
     
     TokenKind_BoolLiteral,
@@ -615,6 +619,7 @@ void print_report(Report report);
 #define report_expecting_assignment(_code) report_error(_code, "Expecting assignment");
 #define report_unknown_parameter(_code, _v) report_error(_code, "Unknown parameter '%S'", _v);
 #define report_invalid_escape_sequence(_code, _v) report_error(_code, "Invalid escape sequence '\\%S'", STR(_v));
+#define report_invalid_codepoint_literal(_code, _v) report_error(_code, "Invalid codepoint literal: %S", STR(_v));
 
 //- SEMANTIC REPORTS
 
@@ -671,6 +676,8 @@ void print_report(Report report);
 #define report_arg_is_required(_code, _v) report_error(_code, "Argument '%S' is required", _v);
 #define report_arg_wrong_value(_code, _n, _v) report_error(_code, "Invalid argument assignment '%S = %S'", _n, _v);
 #define report_arg_unknown(_code, _v) report_error(_code, "Unknown argument '%S'", _v);
+#define report_break_inside_loop(_code) report_error(_code, "Break keyword must be used inside a loop");
+#define report_continue_inside_loop(_code) report_error(_code, "Continue keyword must be used inside a loop");
 
 //- LANG REPORTS
 
@@ -717,14 +724,17 @@ enum OpKind {
     OpKind_Sign,
     OpKind_Reference,
     OpKind_IntLiteral,
-    OpKind_StringLiteral,
     OpKind_BoolLiteral,
+    OpKind_StringLiteral,
+    OpKind_CodepointLiteral,
     OpKind_MemberValue,
     OpKind_EnumDefinition,
     OpKind_StructDefinition,
     OpKind_ArgDefinition,
     OpKind_FunctionDefinition,
     OpKind_Return,
+    OpKind_Continue,
+    OpKind_Break,
     OpKind_Import,
 };
 
@@ -814,9 +824,9 @@ struct OpNode_Reference : OpNode {
 
 struct OpNode_NumericLiteral : OpNode {
     union {
-        u32 int_literal;
+        i64 int_literal;
         b8 bool_literal;
-        String string_literal;
+        i64 codepoint_literal;
     };
 };
 
@@ -916,6 +926,8 @@ OpNode* extract_object_type(Parser* parser);
 OpNode* extract_object_definition(Parser* parser);
 OpNode* extract_function_call(Parser* parser);
 OpNode* extract_return(Parser* parser);
+OpNode* extract_continue(Parser* parser);
+OpNode* extract_break(Parser* parser);
 OpNode* extract_import(Parser* parser);
 OpNode* extract_block(Parser* parser);
 OpNode* extract_op(Parser* parser);
@@ -1060,10 +1072,11 @@ struct ObjectDefinition {
     OpNode* default_value;
 };
 
-inline_fn ObjectDefinition obj_def_make(String name, i32 vtype) {
+inline_fn ObjectDefinition obj_def_make(String name, i32 vtype, b32 is_reference = false) {
     ObjectDefinition d{};
     d.name = name;
     d.vtype = vtype;
+    d.is_reference = is_reference;
     return d;
 }
 
@@ -1120,6 +1133,7 @@ void interpret(InterpreterSettings settings, InterpreterMode mode);
 enum ScopeType {
     ScopeType_Global,
     ScopeType_Block,
+    ScopeType_LoopIteration,
     ScopeType_Function,
 };
 
@@ -1130,6 +1144,8 @@ struct Scope {
     Value return_value;
     i32 expected_return_vtype;
     b32 expected_return_reference;
+    b32 loop_iteration_continue_requested;
+    b32 loop_iteration_break_requested;
     Scope* next;
     Scope* previous;
 };
@@ -1187,7 +1203,9 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0);
 Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
 i32 interpret_object_type(Interpreter* inter, OpNode* node0, b32 allow_reference);
 void interpret_return(Interpreter* inter, OpNode* node0);
-void interpret_block(Interpreter* inter, OpNode* block0);
+void interpret_continue(Interpreter* inter, OpNode* node0);
+void interpret_break(Interpreter* inter, OpNode* node0);
+void interpret_block(Interpreter* inter, OpNode* block0, b32 push_scope);
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 
 Value get_cd(Interpreter* inter);
@@ -1206,6 +1224,7 @@ void   scope_pop(Interpreter* inter);
 void scope_add_temporal(Interpreter* inter, Object* object);
 void scope_add_temporal(Interpreter* inter, Scope* scope, Object* object);
 Scope* scope_find_returnable(Interpreter* inter);
+Scope* scope_find_looping(Interpreter* inter);
 ObjectRef* scope_define_object_ref(Interpreter* inter, String identifier, Value value, b32 constant = false);
 ObjectRef* scope_find_object_ref(Interpreter* inter, String identifier, b32 parent_scopes);
 

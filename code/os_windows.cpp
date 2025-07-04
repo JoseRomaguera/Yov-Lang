@@ -146,15 +146,20 @@ b32 os_exists(String path)
     return GetFileAttributes(path0.data) != INVALID_FILE_ATTRIBUTES;
 }
 
-b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result)
+Result os_read_entire_file(Arena* arena, String path, RawBuffer* result)
 {
     SCRATCH(arena);
     
     *result = {};
     String path0 = string_copy(scratch.arena, path);
     
+    Result res{};
+    
     HANDLE file = CreateFile(path0.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (file == INVALID_HANDLE_VALUE) return false;
+	if (file == INVALID_HANDLE_VALUE) {
+        res.message = string_from_last_error();
+        return res;
+    }
     
     RawBuffer buffer;
     buffer.size = (u32)GetFileSize(file, NULL);
@@ -166,7 +171,8 @@ b32 os_read_entire_file(Arena* arena, String path, RawBuffer* result)
     CloseHandle(file);
     
     *result = buffer;
-    return true;
+    res.success = true;
+    return res;
 }
 
 Result os_write_entire_file(String path, RawBuffer data)
@@ -504,6 +510,16 @@ String os_get_working_path(Arena* arena)
     GetCurrentDirectory(buffer_size, dst);
     
     return path_resolve(arena, STR(dst));
+}
+
+String os_get_executable_path(Arena* arena)
+{
+    SCRATCH(arena);
+    char buffer[MAX_PATH];
+    u32 size = GetModuleFileNameA(NULL, buffer, MAX_PATH);
+    char* dst = (char*)arena_push(scratch.arena, size + 1);
+    memory_copy(dst, buffer, size);
+    return path_resolve(arena, string_make(dst, size));
 }
 
 b32 os_path_is_absolute(String path)

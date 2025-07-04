@@ -1,0 +1,60 @@
+
+script_description :: "Given a .txt file, this script generates a C header file containing the entire text as a string literal.";
+
+src_path :: arg -> String {
+    required = true;
+    description = "path to the source .txt file to read from.";
+}
+
+dst_path :: arg -> String {
+    required = true;
+    description = "path to the destination .h file where the generated string literal will be written.";
+}
+
+expr_name :: arg -> String {
+    required = true;
+    description = "name of the C expression (variable or constant) that will hold the string literal.";
+}
+
+println("Reading file: {src_path}");
+
+raw: String;
+read_entire_file(src_path, &raw);
+
+println("Processing text");
+
+lines: String[];
+{
+    line: String;
+    cursor := 0;
+    while (cursor < raw.size) {
+        codepoint := str_get_codepoint(raw, &cursor);
+        
+        if (codepoint == '\r') continue;
+        
+        if (codepoint == '\n') {
+            lines += line;
+            line = "";
+            continue;
+        }
+        
+        line += codepoint;
+    }
+    if (line.size > 0) lines += line;
+}
+
+code: String;
+
+code += "const char* {expr_name} = \"\"\n";
+
+for (line: lines) {
+    code += "\"{line}\\n\"\n";
+}
+
+code += "\"\";";
+
+println("Writing file: {dst_path}");
+
+write_entire_file(dst_path, code);
+
+println("Finished");

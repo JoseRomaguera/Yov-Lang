@@ -79,6 +79,23 @@ internal_fn Value solve_binary_operation(Interpreter* inter, Value left, Value r
         }
     }
     
+    if ((is_string(left) && is_int(right)) || (is_int(left) && is_string(right)))
+    {
+        if (op == BinaryOperator_Addition)
+        {
+            Value string_value = is_string(left) ? left : right;
+            Value codepoint_value = is_int(left) ? left : right;
+            
+            String codepoint_str = string_from_codepoint(scratch.arena, (u32)get_int(codepoint_value));
+            
+            String left_str = is_string(left) ? get_string(left) : codepoint_str;
+            String right_str = is_string(right) ? get_string(right) : codepoint_str;
+            
+            String str = string_format(scratch.arena, "%S%S", left_str, right_str);
+            return alloc_string(inter, str);
+        }
+    }
+    
     if (is_enum(inter, left) && is_enum(inter, right)) {
         if (op == BinaryOperator_Equals) {
             return alloc_bool(inter, get_enum_index(inter, left) == get_enum_index(inter, right));
@@ -239,6 +256,9 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     
     if (node->kind == OpKind_IntLiteral) {
         return alloc_int(inter, ((OpNode_NumericLiteral*)node)->int_literal);
+    }
+    if (node->kind == OpKind_CodepointLiteral) {
+        return alloc_int(inter, ((OpNode_NumericLiteral*)node)->codepoint_literal);
     }
     if (node->kind == OpKind_BoolLiteral) {
         return alloc_bool(inter, ((OpNode_NumericLiteral*)node)->bool_literal);
@@ -671,7 +691,9 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_WhileStatement*)node0;
     
-    while (1)
+    b32 break_requested = false;
+    
+    while (!break_requested)
     {
         Value expresion = interpret_expresion(inter, node->expresion, expresion_context_make(VType_Bool));
         if (skip_ops(inter)) return;
@@ -687,15 +709,17 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
             
             if (!get_bool(expresion)) break;
             
-            scope_push(inter, ScopeType_Block, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
             interpret_op(inter, node, node->content);
+            if (inter->current_scope->loop_iteration_break_requested)
+                break_requested = true;
             scope_pop(inter);
         }
         else
         {
             Scope* scope = scope_find_returnable(inter);
             Value previous_return_value = scope->return_value;
-            scope_push(inter, ScopeType_Block, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
             interpret_op(inter, node, node->content);
             scope_pop(inter);
             scope->return_value = previous_return_value;
@@ -715,7 +739,9 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
     
     interpret_op(inter, node, node->initialize_sentence);
     
-    while (1)
+    b32 break_requested = false;
+    
+    while (!break_requested)
     {
         Value expresion = interpret_expresion(inter, node->condition_expresion, expresion_context_make(VType_Bool));
         if (skip_ops(inter)) return;
@@ -731,8 +757,10 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
             
             if (!get_bool(expresion)) break;
             
-            scope_push(inter, ScopeType_Block, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
             interpret_op(inter, node, node->content);
+            if (inter->current_scope->loop_iteration_break_requested)
+                break_requested = true;
             scope_pop(inter);
             
             interpret_op(inter, node, node->update_sentence);
@@ -741,7 +769,7 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
         {
             Scope* scope = scope_find_returnable(inter);
             Value previous_return_value = scope->return_value;
-            scope_push(inter, ScopeType_Block, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
             interpret_op(inter, node, node->content);
             scope_pop(inter);
             interpret_op(inter, node, node->update_sentence);
@@ -783,7 +811,9 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     
     if (inter->mode == InterpreterMode_Execute)
     {
-        for (u32 i = 0; i < get_array(array).count; ++i)
+        b32 break_requested = false;
+        
+        for (u32 i = 0; i < get_array(array).count && !break_requested; ++i)
         {
             value_assign_ref(inter, &element, value_get_element(inter, array, i));
             
@@ -795,6 +825,8 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
             
             scope_push(inter, ScopeType_Block, VType_Void, false);
             interpret_op(inter, node, node->content);
+            if (inter->current_scope->loop_iteration_break_requested)
+                break_requested = true;
             scope_pop(inter);
             
             if (skip_ops(inter)) return;
@@ -909,12 +941,34 @@ void interpret_return(Interpreter* inter, OpNode* node0)
     scope->return_value = return_value;
 }
 
-void interpret_block(Interpreter* inter, OpNode* block0)
+void interpret_continue(Interpreter* inter, OpNode* node0)
+{
+    Scope* scope = scope_find_looping(inter);
+    if (scope == NULL) {
+        report_continue_inside_loop(node0->code);
+        return;
+    }
+    
+    scope->loop_iteration_continue_requested = true;
+}
+
+void interpret_break(Interpreter* inter, OpNode* node0)
+{
+    Scope* scope = scope_find_looping(inter);
+    if (scope == NULL) {
+        report_break_inside_loop(node0->code);
+        return;
+    }
+    
+    scope->loop_iteration_break_requested = true;
+}
+
+void interpret_block(Interpreter* inter, OpNode* block0, b32 push_scope)
 {
     auto block = (OpNode_Block*)block0;
     assert(block->kind == OpKind_Block);
     
-    scope_push(inter, ScopeType_Block, VType_Void, false);
+    if (push_scope) scope_push(inter, ScopeType_Block, VType_Void, false);
     
     Array<OpNode*> ops = block->ops;
     
@@ -926,7 +980,7 @@ void interpret_block(Interpreter* inter, OpNode* block0)
         interpret_op(inter, block, node);
     }
     
-    scope_pop(inter);
+    if (push_scope) scope_pop(inter);
 }
 
 void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
@@ -934,7 +988,7 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     if (skip_ops(inter)) return;
     if (node->kind == OpKind_None) return;
     
-    if (node->kind == OpKind_Block) interpret_block(inter, node);
+    if (node->kind == OpKind_Block) interpret_block(inter, node, true);
     else if (node->kind == OpKind_Assignment) interpret_assignment(inter, node);
     else if (node->kind == OpKind_IfStatement) interpret_if_statement(inter, node);
     else if (node->kind == OpKind_WhileStatement) interpret_while_statement(inter, node);
@@ -942,10 +996,13 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     else if (node->kind == OpKind_ForeachArrayStatement) interpret_foreach_array_statement(inter, node);
     else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, false);
     else if (node->kind == OpKind_Return) interpret_return(inter, node);
+    else if (node->kind == OpKind_Continue) interpret_continue(inter, node);
+    else if (node->kind == OpKind_Break) interpret_break(inter, node);
     else if (node->kind == OpKind_Error) {}
     else if (node->kind == OpKind_ObjectDefinition) {
         OpNode_ObjectDefinition* node0 = (OpNode_ObjectDefinition*)node;
-        if (!node0->is_constant) interpret_object_definition(inter, node);
+        if (inter->current_scope->type != ScopeType_Global || !node0->is_constant)
+            interpret_object_definition(inter, node);
     }
     else if (node->kind == OpKind_EnumDefinition || node->kind == OpKind_StructDefinition || node->kind == OpKind_FunctionDefinition || node->kind == OpKind_ArgDefinition) {
         if (parent != inter->root) {
@@ -1738,7 +1795,7 @@ void interpret(InterpreterSettings settings, InterpreterMode mode)
         return;
     }
     
-    interpret_block(inter, inter->root);
+    interpret_block(inter, inter->root, false);
     
     scope_clear(inter, inter->global_scope);
     
@@ -1805,8 +1862,16 @@ b32 interpretion_failed(Interpreter* inter)
 b32 skip_ops(Interpreter* inter)
 {
     if (interpretion_failed(inter)) return true;
-    Scope* returnable_scope = scope_find_returnable(inter);
-    if (inter->mode == InterpreterMode_Execute && returnable_scope->expected_return_vtype > 0 && !is_null(returnable_scope->return_value)) return true;
+    
+    if (inter->mode == InterpreterMode_Execute)
+    {
+        Scope* returnable_scope = scope_find_returnable(inter);
+        if (returnable_scope->expected_return_vtype > 0 && !is_null(returnable_scope->return_value)) return true;
+        
+        Scope* looping_scope = scope_find_looping(inter);
+        if (looping_scope != NULL && looping_scope->loop_iteration_continue_requested) return true;
+    }
+    
     return false;
 }
 
@@ -1844,6 +1909,8 @@ void scope_clear(Interpreter* inter, Scope* scope)
     object_free_unused(inter);
     
     scope->return_value = value_void();
+    scope->loop_iteration_continue_requested = false;
+    scope->loop_iteration_break_requested = false;
 }
 
 Scope* scope_push(Interpreter* inter, ScopeType type, i32 expected_return_vtype, b32 expected_return_reference)
@@ -1902,13 +1969,24 @@ Scope* scope_find_returnable(Interpreter* inter)
 {
     Scope* scope = inter->current_scope;
     
-    while (true) {
+    while (scope != NULL) {
         if (scope->type == ScopeType_Function) return scope;
         if (scope->type == ScopeType_Global) return scope;
         scope = scope->previous;
     }
     assert(0);
     return inter->global_scope;
+}
+
+Scope* scope_find_looping(Interpreter* inter)
+{
+    Scope* scope = inter->current_scope;
+    
+    while (scope != NULL) {
+        if (scope->type == ScopeType_LoopIteration) return scope;
+        scope = scope->previous;
+    }
+    return NULL;
 }
 
 ObjectRef* scope_define_object_ref(Interpreter* inter, String identifier, Value value, b32 constant)
@@ -2781,6 +2859,12 @@ Value value_get_element(Interpreter* inter, Value value, u32 index)
 
 Value value_get_member(Interpreter* inter, Value value, String member_name)
 {
+    if (value.vtype == VType_String) {
+        if (string_equals(member_name, "size")) {
+            return alloc_int(inter, get_string(value).size);
+        }
+    }
+    
     VariableType type = vtype_get(inter, value.vtype);
     
     if (type.kind == VariableKind_Array)
@@ -2820,6 +2904,7 @@ Value value_get_member(Interpreter* inter, Value value, String member_name)
         }
     }
     
+    assert(0);
     return value_nil();
 }
 

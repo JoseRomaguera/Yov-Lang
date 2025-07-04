@@ -167,7 +167,7 @@ String transpile_definition_for_object_type(Arena* arena, OpNode_ObjectType* nod
 {
     SCRATCH(arena);
     
-    String type = string_format(scratch.arena, "vtype_from_name(inter, STR(\"%S\"))", node->name);
+    String type = string_format(scratch.arena, "vtype_from_name(inter, \"%S\")", node->name);
     if (node->array_dimensions) {
         type = string_format(scratch.arena, "vtype_from_array_dimension(inter, %S, %u)", type, node->array_dimensions);
     }
@@ -181,6 +181,7 @@ String transpile_definition_for_object_definition(Arena* arena, OpNode_ObjectDef
     
     String name = node->object_name;
     String type = transpile_definition_for_object_type(scratch.arena, node->type);
+    String is_ref = node->type->is_reference ? "true" : "false";
     
-    return string_format(arena, "obj_def_make(STR(\"%S\"), %S)", name, type);
+    return string_format(arena, "obj_def_make(\"%S\", %S, %S)", name, type, is_ref);
 }
