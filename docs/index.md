@@ -8,4 +8,4 @@
 
 See the [examples folder](examples) for additional information.
 
-See [core.yov](code/core.yov) for the default definitions and intrinsic functions.
+See [core.yov](../code/core.yov) for the default definitions and intrinsic functions.
