@@ -1616,6 +1616,7 @@ internal_fn void register_definitions(Interpreter* inter)
 
 internal_fn void define_globals(Interpreter* inter)
 {
+    SCRATCH();
     Value ref;
     Value member;
     
@@ -1635,6 +1636,9 @@ internal_fn void define_globals(Interpreter* inter)
         
         member = value_get_member(inter, ref, "version");
         set_string(inter, member, YOV_VERSION);
+        
+        member = value_get_member(inter, ref, "path");
+        set_string(inter, member, os_get_executable_path(scratch.arena));
     }
     
     // OS struct
@@ -1677,6 +1681,11 @@ internal_fn void define_globals(Interpreter* inter)
             member = value_get_member(inter, ref, "args");
             value_assign_ref(inter, &member, array);
         }
+    }
+    
+    // Calls struct
+    {
+        inter->globals.calls = scope_find_object_ref(inter, "calls", false);
     }
 }
 
@@ -1813,27 +1822,23 @@ void interpret(InterpreterSettings settings, InterpreterMode mode)
     assert(yov->error_count != 0 || inter->global_scope == inter->current_scope);
 }
 
-void interpreter_exit(Interpreter* inter)
+void interpreter_exit(Interpreter* inter, i32 exit_code)
 {
+    yov_set_exit_code(exit_code);
     yov->error_count++;// TODO(Jose): Weird
 }
 
-void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, String message_error)
+void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, Result result)
 {
     String script_path = yov_get_script(code.script_id)->path;
-    print_error("%S(%u): %S\n\t--> %S\n", script_path, (u32)code.line, resolved_line, message_error);
-    
-    interpreter_exit(inter);
+    print_error("%S(%u): %S\n\t--> %S\n", script_path, (u32)code.line, resolved_line, result.message);
+    interpreter_exit(inter, result.exit_code);
 }
 
 Result user_assertion(Interpreter* inter, String message)
 {
-    Result res{};
-    res.success = true;
-    if (!inter->settings.user_assertion) return res;
-    res.success = os_ask_yesno(STR("User Assertion"), message);
-    if (!res.success) res.message = STR("Operation denied by user");
-    return res;
+    if (!inter->settings.user_assertion || os_ask_yesno("User Assertion", message)) return RESULT_SUCCESS;
+    return result_failed_make("Operation denied by user");
 }
 
 Value get_cd(Interpreter* inter) {
@@ -1851,6 +1856,13 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path)
     String cd = get_cd_value(inter);
     if (!os_path_is_absolute(path)) path = path_resolve(scratch.arena, path_append(scratch.arena, cd, path));
     return string_copy(arena, path);
+}
+
+RedirectStdout get_calls_redirect_stdout(Interpreter* inter)
+{
+    Value calls = lvalue_from_ref(inter->globals.calls);
+    Value redirect_stdout = value_get_member(inter, calls, "redirect_stdout");
+    return (RedirectStdout)get_enum_index(inter, redirect_stdout);
 }
 
 b32 interpretion_failed(Interpreter* inter)
@@ -2279,7 +2291,7 @@ Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
     }
     
     if (!ret.error_result.success && !is_expresion) {
-        interpreter_report_runtime_error(inter, code, resolved_line, ret.error_result.message);
+        interpreter_report_runtime_error(inter, code, resolved_line, ret.error_result);
         return ret.return_value;
     }
     

@@ -252,11 +252,14 @@ void os_initialize();
 void os_shutdown();
 
 struct Result {
-    b32 success;
     String message;
+    i32 exit_code;
+    b32 success;
 };
 
-#define RESULT_SUCCESS Result{ true }
+inline_fn Result result_failed_make(String message, i32 error_code = -1) { return Result{ message, error_code, false }; }
+
+#define RESULT_SUCCESS Result{ "", 0, true }
 
 enum Severity {
     Severity_Info,
@@ -286,8 +289,20 @@ Result os_move_directory(String dst_path, String src_path);
 
 b32 os_ask_yesno(String title, String content);
 
-i32 os_call(String working_dir, String command);
-i32 os_call_exe(String working_dir, String exe, String params);
+enum RedirectStdout {
+    RedirectStdout_Console,
+    RedirectStdout_Ignore,
+    RedirectStdout_Script,
+};
+
+struct CallResult {
+    Result result;
+    String stdout;
+};
+
+CallResult os_call(Arena* arena, String working_dir, String command, RedirectStdout redirect_stdout);
+CallResult os_call_exe(Arena* arena, String working_dir, String exe, String args, RedirectStdout redirect_stdout);
+CallResult os_call_script(Arena* arena, String working_dir, String script, String args, RedirectStdout redirect_stdout);
 
 String os_get_working_path(Arena* arena);
 String os_get_executable_path(Arena* arena);
@@ -551,18 +566,24 @@ struct Yov {
         b8 analyze_only;
         b8 trace;
         b8 user_assert;
+        b8 wait_end;
     } settings;
     
     struct {
         u64 page_size;
         void* internal;
     } os;
+    
+    i32 exit_code;
+    b8 exit_code_is_set;
 };
 
 extern Yov* yov;
 
 void yov_initialize();
 void yov_shutdown();
+
+void yov_set_exit_code(i32 exit_code);
 
 void yov_run();
 
@@ -573,6 +594,7 @@ String yov_get_line_sample(Arena* arena, CodeLocation code);
 
 b32 yov_read_args();
 ScriptArg* yov_find_arg(String name);
+String yov_get_inherited_args(Arena* arena);
 
 void report_error_ex(CodeLocation code, String text, ...);
 
@@ -1015,6 +1037,7 @@ struct Value {
 #define VType_YovInfo vtype_from_name(inter, "YovInfo")
 #define VType_Context vtype_from_name(inter, "Context")
 #define VType_OS vtype_from_name(inter, "OS")
+#define VType_CallResult vtype_from_name(inter, "CallResult")
 
 #define VType_IntArray vtype_from_array_dimension(inter, VType_Int, 1)
 #define VType_BoolArray vtype_from_array_dimension(inter, VType_Bool, 1)
@@ -1173,11 +1196,12 @@ struct Interpreter {
         ObjectRef* yov;
         ObjectRef* os;
         ObjectRef* context;
+        ObjectRef* calls;
     } globals;
 };
 
-void interpreter_exit(Interpreter* inter);
-void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, String message_error);
+void interpreter_exit(Interpreter* inter, i32 exit_code);
+void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, Result result);
 Result user_assertion(Interpreter* inter, String message);
 
 struct ExpresionContext {
@@ -1209,6 +1233,7 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
 Value get_cd(Interpreter* inter);
 String get_cd_value(Interpreter* inter);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
+RedirectStdout get_calls_redirect_stdout(Interpreter* inter);
 b32 interpretion_failed(Interpreter* inter);
 b32 skip_ops(Interpreter* inter);
 

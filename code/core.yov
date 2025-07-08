@@ -1,5 +1,6 @@
 
 YovInfo :: struct {
+    path: String;
     version: String;
     major: Int;
     minor: Int;
@@ -21,23 +22,35 @@ OS :: struct {
     kind: OSKind;
 }
 
-CopyMode :: enum {
-    NoOverride,
-    Override,
+RedirectStdout :: enum {
+    Console, Ignore, Script
+}
+
+CallsContext :: struct {
+    redirect_stdout: RedirectStdout;
 }
 
 yov     :: YovInfo();
 context :: Context();
 os      :: OS();
+calls   :: CallsContext();
 
 // Core
 print       :: (text: String);
 println     :: (text: String);
-call        :: (command: String) -> Int;
-call_exe    :: (exe_name: String, arguments: String[]) -> Int;
-// call_script :: (script_name: String, arguments: String[]);
-exit        :: ();
+exit        :: (exit_code: Int);
 set_cd      :: (cd: String);
+
+// External Calls
+
+CallResult :: struct {
+    stdout: String;
+    exit_code: Int;
+}
+
+call        :: (command: String) -> CallResult;
+call_exe    :: (path: String, arguments: String) -> CallResult;
+call_script :: (path: String, arguments: String) -> CallResult;
 
 // String Utils
 path_resolve :: (path: String) -> String;
@@ -52,6 +65,12 @@ yov_require_max :: (major: Int, minor: Int);
 ask_yesno :: (text: String) -> Bool;
 
 // File System
+
+CopyMode :: enum {
+    NoOverride,
+    Override,
+}
+
 exists            :: (path: String) -> Bool;
 create_directory  :: (path: String, recursive: Bool) -> Bool;
 delete_directory  :: (path: String) -> Bool;

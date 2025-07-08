@@ -4,11 +4,12 @@ internal_fn void define_core(Interpreter* inter)
 {
     // struct YovInfo
     {
-        ObjectDefinition m[4];
-        m[0] = obj_def_make("version", vtype_from_name(inter, "String"), false);
-        m[1] = obj_def_make("major", vtype_from_name(inter, "Int"), false);
-        m[2] = obj_def_make("minor", vtype_from_name(inter, "Int"), false);
-        m[3] = obj_def_make("revision", vtype_from_name(inter, "Int"), false);
+        ObjectDefinition m[5];
+        m[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
+        m[1] = obj_def_make("version", vtype_from_name(inter, "String"), false);
+        m[2] = obj_def_make("major", vtype_from_name(inter, "Int"), false);
+        m[3] = obj_def_make("minor", vtype_from_name(inter, "Int"), false);
+        m[4] = obj_def_make("revision", vtype_from_name(inter, "Int"), false);
         Array<ObjectDefinition> members = array_make(m, array_count(m));
         define_struct(inter, "YovInfo", members);
     }
@@ -37,13 +38,21 @@ internal_fn void define_core(Interpreter* inter)
         Array<ObjectDefinition> members = array_make(m, array_count(m));
         define_struct(inter, "OS", members);
     }
-    // enum CopyMode
+    // enum RedirectStdout
     {
-        String n[2];
-        n[0] = "NoOverride";
-        n[1] = "Override";
+        String n[3];
+        n[0] = "Console";
+        n[1] = "Ignore";
+        n[2] = "Script";
         Array<String> names = array_make(n, array_count(n));
-        define_enum(inter, "CopyMode", names, {});
+        define_enum(inter, "RedirectStdout", names, {});
+    }
+    // struct CallsContext
+    {
+        ObjectDefinition m[1];
+        m[0] = obj_def_make("redirect_stdout", vtype_from_name(inter, "RedirectStdout"), false);
+        Array<ObjectDefinition> members = array_make(m, array_count(m));
+        define_struct(inter, "CallsContext", members);
     }
     // global yov
     {
@@ -56,6 +65,10 @@ internal_fn void define_core(Interpreter* inter)
     // global os
     {
         ObjectRef* ref = scope_define_object_ref(inter, "os", value_def(inter, vtype_from_name(inter, "OS")));
+    }
+    // global calls
+    {
+        ObjectRef* ref = scope_define_object_ref(inter, "calls", value_def(inter, vtype_from_name(inter, "CallsContext")));
     }
     // function print
     {
@@ -73,26 +86,12 @@ internal_fn void define_core(Interpreter* inter)
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "println", parameters, VType_Void);
     }
-    // function call
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[1];
-        p[0] = obj_def_make("command", vtype_from_name(inter, "String"), false);
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "call", parameters, vtype_from_name(inter, "Int"));
-    }
-    // function call_exe
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[2];
-        p[0] = obj_def_make("exe_name", vtype_from_name(inter, "String"), false);
-        p[1] = obj_def_make("arguments", vtype_from_array_dimension(inter, vtype_from_name(inter, "String"), 1), false);
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "call_exe", parameters, vtype_from_name(inter, "Int"));
-    }
     // function exit
     {
         Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("exit_code", vtype_from_name(inter, "Int"), false);
+        parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "exit", parameters, VType_Void);
     }
     // function set_cd
@@ -102,6 +101,40 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make("cd", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "set_cd", parameters, VType_Void);
+    }
+    // struct CallResult
+    {
+        ObjectDefinition m[2];
+        m[0] = obj_def_make("stdout", vtype_from_name(inter, "String"), false);
+        m[1] = obj_def_make("exit_code", vtype_from_name(inter, "Int"), false);
+        Array<ObjectDefinition> members = array_make(m, array_count(m));
+        define_struct(inter, "CallResult", members);
+    }
+    // function call
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("command", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "call", parameters, vtype_from_name(inter, "CallResult"));
+    }
+    // function call_exe
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[2];
+        p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
+        p[1] = obj_def_make("arguments", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "call_exe", parameters, vtype_from_name(inter, "CallResult"));
+    }
+    // function call_script
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[2];
+        p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
+        p[1] = obj_def_make("arguments", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "call_script", parameters, vtype_from_name(inter, "CallResult"));
     }
     // function path_resolve
     {
@@ -154,6 +187,14 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make("text", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "ask_yesno", parameters, vtype_from_name(inter, "Bool"));
+    }
+    // enum CopyMode
+    {
+        String n[2];
+        n[0] = "NoOverride";
+        n[1] = "Override";
+        Array<String> names = array_make(n, array_count(n));
+        define_enum(inter, "CopyMode", names, {});
     }
     // function exists
     {

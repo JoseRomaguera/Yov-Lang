@@ -1,17 +1,23 @@
 #include "inc.h"
 
-void main()
+int main()
 {
     yov_initialize();
     
 #if DEV
-    if (0) yov_transpile_core_definitions();
+    if (0) {
+        yov_transpile_core_definitions();
+        yov->settings.wait_end = true;
+    }
     else yov_run();
 #else
     yov_run();
 #endif
     
+    i32 exit_code = yov->exit_code;
     yov_shutdown();
+    
+    return exit_code;
 }
 
 #include "common.cpp"

@@ -4,6 +4,7 @@ yov [language options] script_to_execute [script arguments]
 Language options:
     -analyze          analyzes the script without executing it.
     -trace            prints each line of code as it executes (for debugging/tracing purposes).
+    -wait_end         displays a completion message and waits for the user to press ENTER before exiting.
     -user_assert      prompts the user for confirmation before performing any OS-level operation
                       (e.g. deleting a file).
 

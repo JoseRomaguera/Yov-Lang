@@ -12,10 +12,9 @@
 #include <shellapi.h>
 
 struct Windows {
-    HANDLE console_handle;
 };
 
-internal_fn void set_console_text_color(Severity severity)
+internal_fn void set_console_text_color(HANDLE std, Severity severity)
 {
     Windows* windows = (Windows*)yov->os.internal;
     
@@ -23,7 +22,7 @@ internal_fn void set_console_text_color(Severity severity)
     WORD saved_attributes;
     
     // Save current attributes
-    GetConsoleScreenBufferInfo(windows->console_handle, &consoleInfo);
+    GetConsoleScreenBufferInfo(std, &consoleInfo);
     saved_attributes = consoleInfo.wAttributes;
     
     i32 att;
@@ -41,7 +40,7 @@ internal_fn void set_console_text_color(Severity severity)
         att = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
     }
     
-    SetConsoleTextAttribute(windows->console_handle, (WORD)att);
+    SetConsoleTextAttribute(std, (WORD)att);
 }
 
 void os_setup_memory_info()
@@ -51,6 +50,10 @@ void os_setup_memory_info()
     yov->os.page_size = system_info.dwAllocationGranularity;
 }
 
+internal_fn HANDLE get_std_handle() {
+    return GetStdHandle(STD_OUTPUT_HANDLE);
+}
+
 void os_initialize()
 {
     SetConsoleOutputCP(CP_UTF8);
@@ -58,13 +61,11 @@ void os_initialize()
     
     yov->os.internal = arena_push_struct<Windows>(yov->static_arena);
     Windows* windows = (Windows*)yov->os.internal;
-    
-    windows->console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
 }
 
 void os_shutdown()
 {
-    set_console_text_color(Severity_Info);
+    set_console_text_color(get_std_handle(), Severity_Info);
 }
 
 void os_print(Severity severity, String text)
@@ -72,15 +73,18 @@ void os_print(Severity severity, String text)
     SCRATCH();
     Windows* windows = (Windows*)yov->os.internal;
     
-    set_console_text_color(severity);
+    HANDLE std = get_std_handle();
+    
+    set_console_text_color(std, severity);
     
     String text0 = string_copy(scratch.arena, text);
     
     DWORD written;
-    //WriteConsoleA(windows->console_handle, text0.data, (u32)text0.size, &written, NULL);
-    WriteFile(windows->console_handle, text0.data, (u32)text0.size, &written, NULL);
-    FlushFileBuffers(windows->console_handle);
-    OutputDebugStringA(text0.data);
+    WriteFile(std, text0.data, (u32)text0.size, &written, NULL);
+    FlushFileBuffers(std);
+    
+    //WriteConsoleA(std, text0.data, (u32)text0.size, &written, NULL);
+    //OutputDebugStringA(text0.data);
 }
 
 void* os_allocate_heap(u64 size) {
@@ -153,12 +157,10 @@ Result os_read_entire_file(Arena* arena, String path, RawBuffer* result)
     *result = {};
     String path0 = string_copy(scratch.arena, path);
     
-    Result res{};
     
     HANDLE file = CreateFile(path0.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE) {
-        res.message = string_from_last_error();
-        return res;
+        return result_failed_make(string_from_last_error());
     }
     
     RawBuffer buffer;
@@ -171,8 +173,7 @@ Result os_read_entire_file(Arena* arena, String path, RawBuffer* result)
     CloseHandle(file);
     
     *result = buffer;
-    res.success = true;
-    return res;
+    return RESULT_SUCCESS;
 }
 
 Result os_write_entire_file(String path, RawBuffer data)
@@ -181,19 +182,15 @@ Result os_write_entire_file(String path, RawBuffer data)
     String path0 = string_copy(scratch.arena, path);
     HANDLE file = CreateFile(path0.data, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     
-    Result res{};
-    
     if (file == INVALID_HANDLE_VALUE) {
-        res.message = string_from_last_error();
-        return res;
+        return result_failed_make(string_from_last_error());
     }
     
     WriteFile(file, data.data, (DWORD)data.size, NULL, NULL);
     
     CloseHandle(file);
     
-    res.success = true;
-    return res;
+    return RESULT_SUCCESS;
 }
 
 Result os_copy_file(String dst_path, String src_path, b32 override)
@@ -204,10 +201,9 @@ Result os_copy_file(String dst_path, String src_path, b32 override)
     
     b32 fail_if_exists = !override;
     
-    Result res{};
-    res.success = CopyFile(src_path0.data, dst_path0.data, fail_if_exists) != 0;
-    if (!res.success) res.message = string_from_last_error();
-    return res;
+    b32 success = CopyFile(src_path0.data, dst_path0.data, fail_if_exists) != 0;
+    if (!success) return result_failed_make(string_from_last_error());
+    return RESULT_SUCCESS;
 }
 
 Result os_move_file(String dst_path, String src_path)
@@ -216,10 +212,9 @@ Result os_move_file(String dst_path, String src_path)
     String dst_path0 = string_copy(scratch.arena, dst_path);
     String src_path0 = string_copy(scratch.arena, src_path);
     
-    Result res{};
-    res.success = MoveFile(src_path0.data, dst_path0.data) != 0;
-    if (!res.success) res.message = string_from_last_error();
-    return res;
+    b32 success = MoveFile(src_path0.data, dst_path0.data) != 0;
+    if (!success) return result_failed_make(string_from_last_error());
+    return RESULT_SUCCESS;
 }
 
 Result os_delete_file(String path)
@@ -228,13 +223,12 @@ Result os_delete_file(String path)
     String path0 = string_copy(scratch.arena, path);
     
     if (SetFileAttributes(path0.data, FILE_ATTRIBUTE_NORMAL) == 0) {
-        return Result { false, string_from_last_error() };
+        return result_failed_make(string_from_last_error());
     }
     
-    Result res{};
-    res.success = DeleteFile(path0.data) != 0;
-    if (!res.success) res.message = string_from_last_error();
-    return res;
+    b32 success = DeleteFile(path0.data) != 0;
+    if (!success) return result_failed_make(string_from_last_error());
+    return RESULT_SUCCESS;
 }
 
 internal_fn Result create_recursive_path(String path)
@@ -257,7 +251,7 @@ internal_fn Result create_recursive_path(String path)
         if (!CreateDirectory(folder0.data, NULL)) {
             DWORD error = GetLastError();
             if (error != ERROR_ALREADY_EXISTS) {
-                return Result{ false, string_from_win_error(error) };
+                return result_failed_make(string_from_win_error(error));
             }
         }
     }
@@ -270,23 +264,21 @@ Result os_create_directory(String path, b32 recursive)
     SCRATCH();
     String path0 = string_copy(scratch.arena, path);
     
-    Result res = RESULT_SUCCESS;
-    
 	if (recursive) {
-        res = create_recursive_path(path0);
+        Result res = create_recursive_path(path0);
         if (!res.success) return res;
     }
     
-    res.success = (b32)CreateDirectory(path0.data, NULL);
+    b32 success = (b32)CreateDirectory(path0.data, NULL);
     
     DWORD error = 0;
-    if (!res.success) {
+    if (!success) {
         error = GetLastError();
-        if (error == ERROR_ALREADY_EXISTS) res.success = true;
+        if (error == ERROR_ALREADY_EXISTS) success = true;
     }
     
-    if (!res.success) res.message = string_from_win_error(error);
-    return res;
+    if (!success) return result_failed_make(string_from_last_error());
+    return RESULT_SUCCESS;
 }
 
 internal_fn Result delete_directory_recursive(String path)
@@ -300,9 +292,7 @@ internal_fn Result delete_directory_recursive(String path)
     HANDLE find_handle = FindFirstFileA(path_querry.data, &find_data);
     
     if (find_handle == INVALID_HANDLE_VALUE) {
-        Result res{};
-        res.message = string_from_last_error();
-        return res;
+        return result_failed_make(string_from_last_error());
     }
     
     while (1)
@@ -319,7 +309,7 @@ internal_fn Result delete_directory_recursive(String path)
         {
             String file_path = string_format(scratch.arena, "%S/%S", path, file_name);
             
-            Result res{};
+            Result res;
             if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 res = delete_directory_recursive(file_path);
             } else {
@@ -332,22 +322,22 @@ internal_fn Result delete_directory_recursive(String path)
         if (FindNextFileA(find_handle, &find_data) == 0) {
             DWORD error = GetLastError();
             if (error != ERROR_NO_MORE_FILES) {
-                return Result{ false, string_from_last_error() };
+                return result_failed_make(string_from_last_error());
             }
             break;
         }
     }
     
     if (FindClose(find_handle) == 0) {
-        return Result{ false, string_from_last_error() };
+        return result_failed_make(string_from_last_error());
     }
     
     if (SetFileAttributesA(path.data, FILE_ATTRIBUTE_NORMAL) == 0) {
-        return Result{ false, string_from_last_error() };
+        return result_failed_make(string_from_last_error());
     }
     
     if (RemoveDirectoryA(path.data) == 0) {
-        return Result{ false, string_from_last_error() };
+        return result_failed_make(string_from_last_error());
     }
     
     return RESULT_SUCCESS;
@@ -365,8 +355,10 @@ internal_fn Result copy_directory_recursive(String dst_path, String src_path, b3
     // NOTE(Jose): All paths in parameters must be null terminated!!
     SCRATCH();
     
-    Result res = os_create_directory(dst_path, true);
-    if (!res.success) return res;
+    {
+        Result res = os_create_directory(dst_path, true);
+        if (!res.success) return res;
+    }
     
     String path_querry = string_format(scratch.arena, "%S\\*", src_path);
     
@@ -374,9 +366,7 @@ internal_fn Result copy_directory_recursive(String dst_path, String src_path, b3
     HANDLE find_handle = FindFirstFileA(path_querry.data, &find_data);
     
     if (find_handle == INVALID_HANDLE_VALUE) {
-        Result res{};
-        res.message = string_from_last_error();
-        return res;
+        return result_failed_make(string_from_last_error());
     }
     
     while (1)
@@ -394,7 +384,7 @@ internal_fn Result copy_directory_recursive(String dst_path, String src_path, b3
             String file_src = string_format(scratch.arena, "%S/%S", src_path, file_name);
             String file_dst = string_format(scratch.arena, "%S/%S", dst_path, file_name);
             
-            Result res{};
+            Result res;
             if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 res = copy_directory_recursive(file_dst, file_src, is_moving);
             } else {
@@ -407,18 +397,18 @@ internal_fn Result copy_directory_recursive(String dst_path, String src_path, b3
         if (FindNextFileA(find_handle, &find_data) == 0) {
             DWORD error = GetLastError();
             if (error != ERROR_NO_MORE_FILES) {
-                return Result{ false, string_from_last_error() };
+                return result_failed_make(string_from_last_error());
             }
             break;
         }
     }
     
     if (FindClose(find_handle) == 0) {
-        return Result{ false, string_from_last_error() };
+        return result_failed_make(string_from_last_error());
     }
     
     if (is_moving) {
-        res = delete_directory_recursive(src_path);
+        Result res = delete_directory_recursive(src_path);
         if (!res.success) return res;
     }
     
@@ -430,7 +420,7 @@ internal_fn Result copy_or_move_directory(String dst_path, String src_path, b32 
     // NOTE(Jose): All paths in parameters must be null terminated!!
     
     if (os_exists(dst_path)) {
-        return Result{ false, STR("The destination already exists") };
+        return result_failed_make("The destination already exists");
     }
     
     return copy_directory_recursive(dst_path, src_path, is_moving);
@@ -464,42 +454,133 @@ b32 os_ask_yesno(String title, String content)
     return MessageBox(0, content0.data, title0.data, MB_YESNO | MB_ICONQUESTION) == IDYES;
 }
 
-i32 os_call(String working_dir, String command)
+CallResult os_call(Arena* arena, String working_dir, String command, RedirectStdout redirect_stdout)
 {
-    SCRATCH();
+    SCRATCH(arena);
     
     String command0 = string_copy(scratch.arena, command);
     String working_dir0 = string_copy(scratch.arena, working_dir);
     
+    SECURITY_ATTRIBUTES security_attr = {};
+    security_attr.nLength = sizeof(SECURITY_ATTRIBUTES);
+    security_attr.bInheritHandle = true;
+    security_attr.lpSecurityDescriptor = NULL;
+    
+    HANDLE stdout_read = 0;
+    HANDLE stdout_write = 0;
+    
+    CallResult res{};
+    
+    if (!CreatePipe(&stdout_read, &stdout_write, &security_attr, 0)) {
+        res.result = result_failed_make(string_from_last_error());
+        return res;
+    }
+    
+    SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+    
     STARTUPINFO si = { sizeof(STARTUPINFO) };
+    
+    if (redirect_stdout == RedirectStdout_Ignore) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = NULL;
+        si.hStdError  = NULL;
+        si.hStdInput  = NULL;
+    }
+    else if (redirect_stdout == RedirectStdout_Script) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = stdout_write;
+        si.hStdError  = stdout_write;
+        si.hStdInput  = NULL;
+    }
+    
     PROCESS_INFORMATION pi;
     
-    if (!CreateProcessA(NULL, command0.data, NULL, NULL, FALSE, 0, NULL, working_dir0.data, &si, &pi)) {
-        return -1;
+    b32 inherit_handles = redirect_stdout != RedirectStdout_Console;
+    
+    if (!CreateProcessA(NULL, command0.data, NULL, NULL, inherit_handles, 0, NULL, working_dir0.data, &si, &pi)) {
+        res.result = result_failed_make(string_from_last_error());
+        return res;
     }
     
-    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(stdout_write);
     
-    DWORD _exit_code;
-    i32 exit_code;
-    if (GetExitCodeProcess(pi.hProcess, &_exit_code) == 0) {
-        exit_code = -1;
+    // Read stdout
+    {
+        StringBuilder builder = string_builder_make(scratch.arena);
+        
+        u32 buffer_size = 4096;
+        CHAR* buffer = (CHAR*)arena_push(scratch.arena, buffer_size);
+        
+        while (TRUE)
+        {
+            DWORD bytes_available = 0;
+            if (!PeekNamedPipe(stdout_read, NULL, 0, NULL, &bytes_available, NULL) || bytes_available == 0)
+            {
+                DWORD wait_result = WaitForSingleObject(pi.hProcess, 0);
+                
+                if (wait_result == WAIT_TIMEOUT) {
+                    Yield();
+                }
+                else {
+                    break;
+                }
+                
+                continue;
+            }
+            
+            DWORD bytes_read = 0;
+            BOOL success = ReadFile(stdout_read, buffer, buffer_size - 1, &bytes_read, NULL);
+            
+            if (!success || bytes_read <= 0) {
+                break;
+            }
+            
+            buffer[bytes_read] = '\0';
+            append(&builder, string_make(buffer, bytes_read));
+        }
+        
+        res.stdout = string_from_builder(arena, &builder);
     }
-    else {
-        exit_code = _exit_code;
+    
+    // Read exit code
+    {
+        DWORD _exit_code;
+        i32 exit_code;
+        if (GetExitCodeProcess(pi.hProcess, &_exit_code) == 0) {
+            exit_code = -1;
+        }
+        else {
+            exit_code = _exit_code;
+        }
+        
+        if (exit_code != 0) res.result = result_failed_make("Exited with code != 0", exit_code);
+        else {
+            res.result = RESULT_SUCCESS;
+            res.result.exit_code = exit_code;
+        }
     }
     
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
+    CloseHandle(stdout_read);
     
-    return exit_code;
+    return res;
 }
 
-i32 os_call_exe(String working_dir, String exe, String params)
+CallResult os_call_exe(Arena* arena, String working_dir, String exe, String args, RedirectStdout redirect_stdout)
 {
-    SCRATCH();
-    String command = string_format(scratch.arena, "\"%S.exe\" %S", exe, params);
-    return os_call(working_dir, command);
+    SCRATCH(arena);
+    String command = string_format(scratch.arena, "\"%S.exe\" %S", exe, args);
+    return os_call(arena, working_dir, command, redirect_stdout);
+}
+
+CallResult os_call_script(Arena* arena, String working_dir, String script, String args, RedirectStdout redirect_stdout)
+{
+    SCRATCH(arena);
+    String yov_args = yov_get_inherited_args(scratch.arena);
+    String yov_path = os_get_executable_path(scratch.arena);
+    String command = string_format(scratch.arena, "\"%S\" %S %S %S", yov_path, yov_args, script, args);
+    return os_call(arena, working_dir, command, redirect_stdout);
 }
 
 String os_get_working_path(Arena* arena)

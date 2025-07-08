@@ -15,42 +15,81 @@ internal_fn FunctionReturn intrinsic__println(Interpreter* inter, Array<Value> v
     return { value_void(), RESULT_SUCCESS };
 }
 
+internal_fn FunctionReturn return_from_external_call(Interpreter* inter, CallResult res)
+{
+    Value ret = object_alloc(inter, VType_CallResult);
+    Value ret_stdout = value_get_member(inter, ret, "stdout");
+    Value ret_exit_code = value_get_member(inter, ret, "exit_code");
+    
+    set_string(inter, ret_stdout, res.stdout);
+    set_int(ret_exit_code, res.result.exit_code);
+    
+    return { ret, res.result };
+}
+
 internal_fn FunctionReturn intrinsic__call(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
     SCRATCH();
     
-    i32 result = -1;
+    CallResult res = {};
+    
     String command_line = get_string(vars[0]);
     
-    Result res = user_assertion(inter, string_format(scratch.arena, "Call:\n%S", command_line));
+    res.result = user_assertion(inter, string_format(scratch.arena, "Call:\n%S", command_line));
     
-    if (res.success) {
-        result = os_call(get_cd_value(inter), command_line);
+    RedirectStdout redirect_stdout = get_calls_redirect_stdout(inter);
+    
+    if (res.result.success) {
+        res = os_call(scratch.arena, get_cd_value(inter), command_line, redirect_stdout);
     }
     
-    return { alloc_int(inter, result), RESULT_SUCCESS };
+    return return_from_external_call(inter, res);
 }
 
 internal_fn FunctionReturn intrinsic__call_exe(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
     SCRATCH();
     
-    i32 result = -1;
     String exe_name = get_string(vars[0]);
-    String params = get_string(vars[1]);
+    String args = get_string(vars[1]);
     
-    Result res = user_assertion(inter, string_format(scratch.arena, "Call Exe:\n%S %S", exe_name, params));
+    CallResult res{};
     
-    if (res.success) {
-        result = os_call_exe(get_cd_value(inter), exe_name, params);
+    res.result = user_assertion(inter, string_format(scratch.arena, "Call Exe:\n%S %S", exe_name, args));
+    
+    RedirectStdout redirect_stdout = get_calls_redirect_stdout(inter);
+    
+    if (res.result.success) {
+        res = os_call_exe(scratch.arena, get_cd_value(inter), exe_name, args, redirect_stdout);
     }
     
-    return { alloc_int(inter, result), RESULT_SUCCESS };
+    return return_from_external_call(inter, res);
+}
+
+internal_fn FunctionReturn intrinsic__call_script(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String script_name = get_string(vars[0]);
+    String args = get_string(vars[1]);
+    
+    CallResult res{};
+    
+    res.result = user_assertion(inter, string_format(scratch.arena, "Call Script:\n%S %S", script_name, args));
+    
+    RedirectStdout redirect_stdout = get_calls_redirect_stdout(inter);
+    
+    if (res.result.success) {
+        res = os_call_script(scratch.arena, get_cd_value(inter), script_name, args, redirect_stdout);
+    }
+    
+    return return_from_external_call(inter, res);
 }
 
 internal_fn FunctionReturn intrinsic__exit(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
-    interpreter_exit(inter);
+    i64 exit_code = get_int(vars[0]);
+    interpreter_exit(inter, (i32)exit_code);
     return { value_void(), RESULT_SUCCESS };
 }
 
@@ -69,7 +108,7 @@ internal_fn FunctionReturn intrinsic__set_cd(Interpreter* inter, Array<Value> va
     String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(value), path));
     set_string(inter, value, res);
     
-    return { value_void(), RESULT_SUCCESS };;
+    return { value_void(), RESULT_SUCCESS };
 }
 
 //- UTILS 
@@ -319,10 +358,13 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         // Core
         INTR("print", intrinsic__print),
         INTR("println", intrinsic__println),
-        INTR("call", intrinsic__call),
-        INTR("call_exe", intrinsic__call_exe),
         INTR("exit", intrinsic__exit),
         INTR("set_cd", intrinsic__set_cd),
+        
+        // External Calls
+        INTR("call", intrinsic__call),
+        INTR("call_exe", intrinsic__call_exe),
+        INTR("call_script", intrinsic__call_script),
         
         // String Utils
         INTR("path_resolve", intrinsic__path_resolve),
