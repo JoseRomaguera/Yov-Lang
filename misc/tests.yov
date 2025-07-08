@@ -1,0 +1,28 @@
+
+failed_count := 0;
+
+// Examples
+set_cd("../examples/");
+
+run_test("basics.yov", "", 0);
+run_test("default_definitions.yov", "", 0);
+run_test("errors.yov", "", 0);
+run_test("external_calls.yov", "", 0);
+run_test("file_system.yov", "", 0);
+run_test("script_args.yov", "-foo=A", 0);
+
+run_test :: (name: String, args: String, expected_exit_code: Int)
+{
+    calls.redirect_stdout = RedirectStdout.Script;
+    res := call_script(name, args);
+    if (res.exit_code != expected_exit_code) {
+        failed_count += 1;
+        println("-> Test failed: {name}");
+        println(res.stdout);
+    }
+    else {
+        println("Test succeded: {name}");
+    }
+}
+
+println("Failed: {failed_count}");

@@ -13,7 +13,7 @@ res := create_directory(invalid, false);
 if (!res) {
     if (ask_yesno("Failed, do you want to exit?")) {
         println("All right, bye");
-        exit();
+        exit(0);
     }
 }
 

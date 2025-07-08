@@ -567,6 +567,7 @@ struct Yov {
         b8 trace;
         b8 user_assert;
         b8 wait_end;
+        b8 no_user;
     } settings;
     
     struct {
@@ -595,6 +596,8 @@ String yov_get_line_sample(Arena* arena, CodeLocation code);
 b32 yov_read_args();
 ScriptArg* yov_find_arg(String name);
 String yov_get_inherited_args(Arena* arena);
+
+b32 yov_ask_yesno(String title, String message);
 
 void report_error_ex(CodeLocation code, String text, ...);
 

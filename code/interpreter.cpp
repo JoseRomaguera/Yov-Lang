@@ -1837,7 +1837,7 @@ void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, Str
 
 Result user_assertion(Interpreter* inter, String message)
 {
-    if (!inter->settings.user_assertion || os_ask_yesno("User Assertion", message)) return RESULT_SUCCESS;
+    if (!inter->settings.user_assertion || yov_ask_yesno("User Assertion", message)) return RESULT_SUCCESS;
     return result_failed_make("Operation denied by user");
 }
 

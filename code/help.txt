@@ -7,6 +7,7 @@ Language options:
     -wait_end         displays a completion message and waits for the user to press ENTER before exiting.
     -user_assert      prompts the user for confirmation before performing any OS-level operation
                       (e.g. deleting a file).
+    -no_user          disable all user prompts, automatically answer 'Yes' to all confirmations.
 
 Info options:
     -version, -v      displays the current version of Yov.

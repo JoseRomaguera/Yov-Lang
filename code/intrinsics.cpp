@@ -195,7 +195,7 @@ internal_fn FunctionReturn intrinsic__ask_yesno(Interpreter* inter, Array<Value>
 {
     String content = get_string(vars[0]);
     
-    b32 result = os_ask_yesno("Ask", content);
+    b32 result = yov_ask_yesno("Ask", content);
     return { alloc_bool(inter, result), RESULT_SUCCESS };
 }
 

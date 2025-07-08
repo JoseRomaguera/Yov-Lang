@@ -1681,6 +1681,7 @@ internal_fn b32 generate_program_args(Array<String> raw_args)
 #define YOV_ARG_TRACE STR("-trace")
 #define YOV_ARG_USER_ASSERT STR("-user_assert")
 #define YOV_ARG_WAIT_END STR("-wait_end")
+#define YOV_ARG_NO_USER STR("-no_user")
 
 b32 yov_read_args()
 {
@@ -1704,6 +1705,7 @@ b32 yov_read_args()
         else if (string_equals(arg, YOV_ARG_TRACE)) yov->settings.trace = true;
         else if (string_equals(arg, YOV_ARG_USER_ASSERT)) yov->settings.user_assert = true;
         else if (string_equals(arg, YOV_ARG_WAIT_END)) yov->settings.wait_end = true;
+        else if (string_equals(arg, YOV_ARG_NO_USER)) yov->settings.no_user = true;
         else if (string_equals(arg, "-help") || string_equals(arg, "-h")) {
             print_info("Yov Programming Language %S\n", YOV_VERSION);
             print_info("Location: %S\n\n", os_get_executable_path(scratch.arena));
@@ -1747,8 +1749,15 @@ String yov_get_inherited_args(Arena* arena)
     
     if (yov->settings.analyze_only) appendf(&builder, "%S ", YOV_ARG_ANALYZE);
     if (yov->settings.user_assert) appendf(&builder, "%S ", YOV_ARG_USER_ASSERT);
+    if (yov->settings.no_user) appendf(&builder, "%S ", YOV_ARG_NO_USER);
     
     return string_from_builder(arena, &builder);
+}
+
+b32 yov_ask_yesno(String title, String message)
+{
+    if (yov->settings.no_user) return true;
+    return os_ask_yesno(title, message);
 }
 
 void report_error_ex(CodeLocation code, String text, ...)
