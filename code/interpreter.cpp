@@ -789,6 +789,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     auto node = (OpNode_ForeachArrayStatement*)node0;
     
     scope_push(inter, ScopeType_Block, VType_Void, false);
+    DEFER(scope_pop(inter));
     
     Value array = interpret_expresion(inter, node->expresion, expresion_context_make(-1));
     if (is_unknown(array)) return;
@@ -804,10 +805,21 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     
     if (skip_ops(inter)) return;
     
+    if (scope_find_object_ref(inter, node->element_name, true) != nil_ref) {
+        report_object_duplicated(node->code, node->element_name);
+        return;
+    }
     Value element = lvalue_from_ref(scope_define_object_ref(inter, node->element_name, value_null(array_type.array_of)));
     
     Value index = value_nil();
-    if (node->index_name.size > 0) index = lvalue_from_ref(scope_define_object_ref(inter, node->index_name, alloc_int(inter, 0)));
+    if (node->index_name.size > 0) {
+        if (scope_find_object_ref(inter, node->index_name, true) != nil_ref) {
+            report_object_duplicated(node->code, node->index_name);
+            return;
+        }
+        
+        index = lvalue_from_ref(scope_define_object_ref(inter, node->index_name, alloc_int(inter, 0)));
+    }
     
     if (inter->mode == InterpreterMode_Execute)
     {
@@ -844,8 +856,6 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
         scope_pop(inter);
         scope->return_value = previous_return_value;
     }
-    
-    scope_pop(inter);
 }
 
 Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion)
@@ -3246,6 +3256,15 @@ void set_string(Interpreter* inter, Value value, String v)
     
     obj->value.data = new_data;
     obj->value.size = v.size;
+}
+
+void value_assign_FileInfo(Interpreter* inter, Value value, FileInfo info)
+{
+    Value mem;
+    mem = value_get_member(inter, value, "path");
+    set_string(inter, mem, info.path);
+    mem = value_get_member(inter, value, "is_directory");
+    set_bool(mem, info.is_directory);
 }
 
 //- GARBAGE COLLECTOR 

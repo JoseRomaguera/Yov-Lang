@@ -148,6 +148,46 @@ void arena_destroy_scratch(ScratchArena scratch)
     arena_pop_to(scratch.arena, scratch.start_position);
 }
 
+//- OS UTILS
+
+void file_info_set_path(FileInfo* info, String path)
+{
+    info->path = path;
+    info->folder = {};
+    info->name = {};
+    info->name_without_extension = {};
+    info->extension = {};
+    
+    if (path.size == 0) return;
+    
+    i32 start_name = (i32)path.size - 1;
+    
+    while (start_name > 0) {
+        if (path[start_name] == '/') {
+            start_name++;
+            break;
+        }
+        start_name--;
+    }
+    
+    info->folder = string_substring(path, 0, start_name);
+    info->name = string_substring(path, start_name, path.size - start_name);
+    
+    i32 start_extension = (i32)info->name.size - 1;
+    for (; start_extension >= 0; --start_extension)
+    {
+        if (info->name[start_extension] == '.') {
+            start_extension++;
+            break;
+        }
+    }
+    
+    if (start_extension >= 0 && start_extension < info->name.size) info->extension = string_substring(info->name, start_extension, info->name.size - start_extension);
+    
+    if (info->extension.size) info->name_without_extension = string_substring(info->name, 0, info->name.size - info->extension.size - 1);
+    else info->name_without_extension = info->name;
+}
+
 //- MATH 
 
 u64 u64_divide_high(u64 n0, u64 n1)
@@ -1770,7 +1810,7 @@ void report_error_ex(CodeLocation code, String text, ...)
     va_end(args);
     
     String line_sample = yov_get_line_sample(scratch.arena, code);
-    formatted_text = string_replace(scratch.arena, formatted_text, STR("{line}"), line_sample);
+    formatted_text = string_replace(scratch.arena, formatted_text, "{line}", line_sample);
     
     Report report;
     report.text = string_copy(yov->static_arena, formatted_text);

@@ -40,6 +40,7 @@ print       :: (text: String);
 println     :: (text: String);
 exit        :: (exit_code: Int);
 set_cd      :: (cd: String);
+assert      :: (result: Bool) -> Bool;
 
 // External Calls
 
@@ -50,7 +51,7 @@ CallResult :: struct {
 
 call        :: (command: String) -> CallResult;
 call_exe    :: (path: String, arguments: String) -> CallResult;
-call_script :: (path: String, arguments: String) -> CallResult;
+call_script :: (path: String, arguments: String, yov_arguments: String) -> CallResult;
 
 // String Utils
 path_resolve :: (path: String) -> String;
@@ -71,13 +72,20 @@ CopyMode :: enum {
     Override,
 }
 
-exists            :: (path: String) -> Bool;
-create_directory  :: (path: String, recursive: Bool) -> Bool;
-delete_directory  :: (path: String) -> Bool;
-copy_directory    :: (dst: String, src: String) -> Bool;
-move_directory    :: (dst: String, src: String) -> Bool;
-copy_file         :: (dst: String, src: String, mode: CopyMode) -> Bool;
-move_file         :: (dst: String, src: String) -> Bool;
-delete_file       :: (path: String) -> Bool;
-read_entire_file  :: (path: String, content: String&) -> Bool;
-write_entire_file :: (path: String, content: String) -> Bool;
+FileInfo :: struct {
+    path: String;
+    is_directory: Bool;
+}
+
+exists             :: (path: String) -> Bool;
+create_directory   :: (path: String, recursive: Bool) -> Bool;
+delete_directory   :: (path: String) -> Bool;
+copy_directory     :: (dst: String, src: String) -> Bool;
+move_directory     :: (dst: String, src: String) -> Bool;
+copy_file          :: (dst: String, src: String, mode: CopyMode) -> Bool;
+move_file          :: (dst: String, src: String) -> Bool;
+delete_file        :: (path: String) -> Bool;
+read_entire_file   :: (path: String, content: String&) -> Bool;
+write_entire_file  :: (path: String, content: String) -> Bool;
+file_get_info      :: (path: String) -> FileInfo;
+dir_get_files_info :: (path: String) -> FileInfo[];

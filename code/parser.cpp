@@ -1192,7 +1192,7 @@ OpNode* extract_function_definition(Parser* parser)
             block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
             
             parser_push_state(parser, block_tokens);
-            block = extract_block(parser);
+            block = extract_block(parser, true);
             parser_pop_state(parser);
             
             if (block->kind != OpKind_Block) {
@@ -1428,14 +1428,14 @@ OpNode* extract_import(Parser* parser)
     return node;
 }
 
-OpNode* extract_block(Parser* parser)
+OpNode* extract_block(Parser* parser, b32 between_braces)
 {
     SCRATCH();
     
     Token starting_token = peek_token(parser);
     Array<Token> block_tokens = parser_get_state(parser)->tokens;
     
-    if (starting_token.kind == TokenKind_OpenBrace)
+    if (between_braces && starting_token.kind == TokenKind_OpenBrace)
     {
         block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
         b32 close_bracket_found = block_tokens.count >= 2;
@@ -1446,11 +1446,6 @@ OpNode* extract_block(Parser* parser)
         }
         
         block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
-    }
-    
-    // Empty block
-    if (block_tokens.count == 0) {
-        return alloc_node(parser, OpKind_Block, starting_token.code);
     }
     
     parser_push_state(parser, block_tokens);
@@ -1509,7 +1504,7 @@ OpNode* extract_op(Parser* parser)
         if (kind == OpKind_Continue) node = extract_continue(parser);
         if (kind == OpKind_Break) node = extract_break(parser);
         if (kind == OpKind_Import) node = extract_import(parser);
-        if (kind == OpKind_Block) node = extract_block(parser);
+        if (kind == OpKind_Block) node = extract_block(parser, true);
         assert(node != NULL);
         if (node == NULL) return NULL;
         
@@ -1525,7 +1520,7 @@ OpNode* extract_op(Parser* parser)
 
 OpNode* generate_ast(Array<Token> tokens, b32 is_block) {
     Parser* parser = parser_alloc(tokens);
-    if (is_block) return extract_block(parser);
+    if (is_block) return extract_block(parser, false);
     else return extract_op(parser);
 }
 

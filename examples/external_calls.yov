@@ -40,9 +40,9 @@ calls.redirect_stdout = RedirectStdout.Script;
 
 // Use 'call_script' to run another Yov script
 println("-> 'call_script' (output = 0)");
-result = call_script("external_calls.yov", "-callee -output=0");
+result = call_script("external_calls.yov", "-callee -output=0", "");
 println("result = {result}\n");
 
 println("-> 'call_script' (output = 10)");
-result = call_script("external_calls.yov", "-callee -output=10");
+result = call_script("external_calls.yov", "-callee -output=10", "");
 println("result = {result}");

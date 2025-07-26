@@ -27,6 +27,48 @@ internal_fn FunctionReturn return_from_external_call(Interpreter* inter, CallRes
     return { ret, res.result };
 }
 
+internal_fn FunctionReturn intrinsic__exit(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    i64 exit_code = get_int(vars[0]);
+    interpreter_exit(inter, (i32)exit_code);
+    return { value_void(), RESULT_SUCCESS };
+}
+
+internal_fn FunctionReturn intrinsic__set_cd(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    Value value = get_cd(inter);
+    String path = get_string(vars[0]);
+    
+    if (os_path_is_absolute(path)) {
+        value_assign(inter, value, vars[0]);
+        return { value_void(), RESULT_SUCCESS };
+    }
+    
+    String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(value), path));
+    set_string(inter, value, res);
+    
+    return { value_void(), RESULT_SUCCESS };
+}
+
+internal_fn FunctionReturn intrinsic__assert(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    b32 result = get_bool(vars[0]);
+    
+    Result res = RESULT_SUCCESS;
+    if (!result) {
+        String line_sample = yov_get_line_sample(scratch.arena, code);
+        res = result_failed_make(string_format(yov->static_arena, "Assertion failed: %S", line_sample));
+    }
+    
+    return { alloc_bool(inter, result), res };
+}
+
+//- EXTERNAL CALLS 
+
 internal_fn FunctionReturn intrinsic__call(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
     SCRATCH();
@@ -72,43 +114,19 @@ internal_fn FunctionReturn intrinsic__call_script(Interpreter* inter, Array<Valu
     
     String script_name = get_string(vars[0]);
     String args = get_string(vars[1]);
+    String yov_args = get_string(vars[2]);
     
     CallResult res{};
     
-    res.result = user_assertion(inter, string_format(scratch.arena, "Call Script:\n%S %S", script_name, args));
+    res.result = user_assertion(inter, string_format(scratch.arena, "Call Script:\n%S %S %S", yov_args, script_name, args));
     
     RedirectStdout redirect_stdout = get_calls_redirect_stdout(inter);
     
     if (res.result.success) {
-        res = os_call_script(scratch.arena, get_cd_value(inter), script_name, args, redirect_stdout);
+        res = os_call_script(scratch.arena, get_cd_value(inter), script_name, args, yov_args, redirect_stdout);
     }
     
     return return_from_external_call(inter, res);
-}
-
-internal_fn FunctionReturn intrinsic__exit(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    i64 exit_code = get_int(vars[0]);
-    interpreter_exit(inter, (i32)exit_code);
-    return { value_void(), RESULT_SUCCESS };
-}
-
-internal_fn FunctionReturn intrinsic__set_cd(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    SCRATCH();
-    
-    Value value = get_cd(inter);
-    String path = get_string(vars[0]);
-    
-    if (os_path_is_absolute(path)) {
-        value_assign(inter, value, vars[0]);
-        return { value_void(), RESULT_SUCCESS };
-    }
-    
-    String res = path_resolve(scratch.arena, path_append(scratch.arena, get_string(value), path));
-    set_string(inter, value, res);
-    
-    return { value_void(), RESULT_SUCCESS };
 }
 
 //- UTILS 
@@ -350,6 +368,41 @@ internal_fn FunctionReturn intrinsic__read_entire_file(Interpreter* inter, Array
     return { alloc_bool(inter, res.success), res };
 }
 
+internal_fn FunctionReturn intrinsic__file_get_info(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String path = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    
+    FileInfo info;
+    Result res = os_file_get_info(scratch.arena, path, &info);
+    
+    Value ret = object_alloc(inter, VType_FileInfo);
+    if (res.success) value_assign_FileInfo(inter, ret, info);
+    
+    return { ret, res };
+}
+
+internal_fn FunctionReturn intrinsic__dir_get_files_info(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String path = path_absolute_to_cd(scratch.arena, inter, get_string(vars[0]));
+    
+    Array<FileInfo> infos;
+    Result res = os_dir_get_files_info(scratch.arena, path, &infos);
+    
+    Value ret = alloc_array(inter, VType_FileInfo, infos.count, false);
+    if (res.success) {
+        foreach(i, infos.count) {
+            Value element = value_get_element(inter, ret, i);
+            value_assign_FileInfo(inter, element, infos[i]);
+        }
+    }
+    
+    return { ret, res };
+}
+
 #define INTR(name, fn) { STR(name), fn }
 
 Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
@@ -360,6 +413,7 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("println", intrinsic__println),
         INTR("exit", intrinsic__exit),
         INTR("set_cd", intrinsic__set_cd),
+        INTR("assert", intrinsic__assert),
         
         // External Calls
         INTR("call", intrinsic__call),
@@ -389,6 +443,8 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("delete_file", intrinsic__delete_file),
         INTR("read_entire_file", intrinsic__read_entire_file),
         INTR("write_entire_file", intrinsic__write_entire_file),
+        INTR("file_get_info", intrinsic__file_get_info),
+        INTR("dir_get_files_info", intrinsic__dir_get_files_info),
     };
     
     return array_copy(arena, array_make(table, array_count(table)));

@@ -207,6 +207,52 @@ struct StringBuilder {
     u64 buffer_pos;
 };
 
+struct Date
+{
+	u32 year;
+	u32 month;
+	u32 day;
+	u32 hour;
+	u32 minute;
+	u32 second;
+	u32 millisecond;
+};
+
+#define date_highest date_make(u32_max, u32_max, u32_max, u32_max, u32_max, u32_max, u32_max)
+
+inline_fn Date date_make(u32 year = 0, u32 month = 0, u32 day = 0, u32 hour = 0, u32 minute = 0, u32 second = 0, u32 milliseconds = 0) {
+	Date date;
+	date.year = year;
+	date.month = month;
+	date.day = day;
+	date.hour = hour;
+	date.minute = minute;
+	date.second = second;
+	date.millisecond = milliseconds;
+	return date;
+}
+
+inline_fn b32 date_equals(Date d0, Date d1) {
+	return d0.year == d1.year &&
+		d0.month == d1.month &&
+		d0.day == d1.day &&
+		d0.hour == d1.hour &&
+		d0.minute == d1.minute &&
+		d0.second == d1.second &&
+		d0.millisecond == d1.millisecond;
+}
+
+inline_fn b32 date_less_than(Date d0, Date d1) {
+	if (d0.year != d1.year) return d0.year < d1.year;
+	if (d0.month != d1.month) return d0.month < d1.month;
+	if (d0.day != d1.day) return d0.day < d1.day;
+	if (d0.hour != d1.hour) return d0.hour < d1.hour;
+	if (d0.minute != d1.minute) return d0.minute < d1.minute;
+	if (d0.second != d1.second) return d0.second < d1.second;
+	if (d0.millisecond != d1.millisecond) return d0.millisecond < d1.millisecond;
+	return false;
+}
+
 //- ARENA
 
 struct Arena {
@@ -276,6 +322,23 @@ void* os_reserve_virtual_memory(u32 pages, b32 commit);
 void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count);
 void os_release_virtual_memory(void* address);
 
+struct FileInfo {
+    // Example of C:/Folder/foo.txt
+    String path; // C:/Folder/foo.txt
+    String folder; // C:/Folder/
+    String name; // foo.txt
+    String name_without_extension; // foo
+    String extension; // txt
+    
+    Date create_date;
+    Date last_write_date;
+    Date last_access_date;
+    
+    b32 is_directory;
+};
+
+void file_info_set_path(FileInfo* info, String path);
+
 b32 os_exists(String path);
 Result os_read_entire_file(Arena* arena, String path, RawBuffer* result);
 Result os_write_entire_file(String path, RawBuffer data);
@@ -286,6 +349,8 @@ Result os_create_directory(String path, b32 recursive);
 Result os_delete_directory(String path);
 Result os_copy_directory(String dst_path, String src_path);
 Result os_move_directory(String dst_path, String src_path);
+Result os_file_get_info(Arena* arena, String path, FileInfo* ret);
+Result os_dir_get_files_info(Arena* arena, String path, Array<FileInfo>* ret);
 
 b32 os_ask_yesno(String title, String content);
 
@@ -302,7 +367,7 @@ struct CallResult {
 
 CallResult os_call(Arena* arena, String working_dir, String command, RedirectStdout redirect_stdout);
 CallResult os_call_exe(Arena* arena, String working_dir, String exe, String args, RedirectStdout redirect_stdout);
-CallResult os_call_script(Arena* arena, String working_dir, String script, String args, RedirectStdout redirect_stdout);
+CallResult os_call_script(Arena* arena, String working_dir, String script, String args, String yov_args, RedirectStdout redirect_stdout);
 
 String os_get_working_path(Arena* arena);
 String os_get_executable_path(Arena* arena);
@@ -952,7 +1017,7 @@ OpNode* extract_return(Parser* parser);
 OpNode* extract_continue(Parser* parser);
 OpNode* extract_break(Parser* parser);
 OpNode* extract_import(Parser* parser);
-OpNode* extract_block(Parser* parser);
+OpNode* extract_block(Parser* parser, b32 between_braces);
 OpNode* extract_op(Parser* parser);
 
 OpNode* generate_ast(Array<Token> tokens, b32 is_block);
@@ -1041,6 +1106,7 @@ struct Value {
 #define VType_Context vtype_from_name(inter, "Context")
 #define VType_OS vtype_from_name(inter, "OS")
 #define VType_CallResult vtype_from_name(inter, "CallResult")
+#define VType_FileInfo vtype_from_name(inter, "FileInfo")
 
 #define VType_IntArray vtype_from_array_dimension(inter, VType_Int, 1)
 #define VType_BoolArray vtype_from_array_dimension(inter, VType_Bool, 1)
@@ -1370,6 +1436,8 @@ enum CopyMode {
 inline_fn CopyMode get_enum_CopyMode(Interpreter* inter, Value value) {
     return (CopyMode)get_enum_index(inter, value);
 }
+
+void value_assign_FileInfo(Interpreter* inter, Value value, FileInfo info);
 
 //- GARBAGE COLLECTOR
 

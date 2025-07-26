@@ -102,6 +102,14 @@ internal_fn void define_core(Interpreter* inter)
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "set_cd", parameters, VType_Void);
     }
+    // function assert
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("result", vtype_from_name(inter, "Bool"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "assert", parameters, vtype_from_name(inter, "Bool"));
+    }
     // struct CallResult
     {
         ObjectDefinition m[2];
@@ -130,9 +138,10 @@ internal_fn void define_core(Interpreter* inter)
     // function call_script
     {
         Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[2];
+        ObjectDefinition p[3];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("arguments", vtype_from_name(inter, "String"), false);
+        p[2] = obj_def_make("yov_arguments", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "call_script", parameters, vtype_from_name(inter, "CallResult"));
     }
@@ -195,6 +204,14 @@ internal_fn void define_core(Interpreter* inter)
         n[1] = "Override";
         Array<String> names = array_make(n, array_count(n));
         define_enum(inter, "CopyMode", names, {});
+    }
+    // struct FileInfo
+    {
+        ObjectDefinition m[2];
+        m[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
+        m[1] = obj_def_make("is_directory", vtype_from_name(inter, "Bool"), false);
+        Array<ObjectDefinition> members = array_make(m, array_count(m));
+        define_struct(inter, "FileInfo", members);
     }
     // function exists
     {
@@ -283,5 +300,21 @@ internal_fn void define_core(Interpreter* inter)
         p[1] = obj_def_make("content", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "write_entire_file", parameters, vtype_from_name(inter, "Bool"));
+    }
+    // function file_get_info
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "file_get_info", parameters, vtype_from_name(inter, "FileInfo"));
+    }
+    // function dir_get_files_info
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "dir_get_files_info", parameters, vtype_from_array_dimension(inter, vtype_from_name(inter, "FileInfo"), 1));
     }
 }

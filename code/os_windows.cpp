@@ -446,6 +446,117 @@ Result os_move_directory(String dst_path, String src_path)
     return copy_or_move_directory(dst_path0, src_path0, true);
 }
 
+inline_fn Date Date_from_SYSTEMTIME(SYSTEMTIME sys)
+{
+	Date date;
+	date.year = (u32)sys.wYear;
+	date.month = (u32)sys.wMonth;
+	date.day = (u32)sys.wDay;
+	date.hour = (u32)sys.wHour;
+	date.minute = (u32)sys.wMinute;
+	date.second = (u32)sys.wSecond;
+	date.millisecond = (u32)sys.wMilliseconds;
+	return date;
+}
+
+inline_fn Date Date_from_FILETIME(FILETIME file)
+{
+	SYSTEMTIME sys;
+	FileTimeToSystemTime(&file, &sys);
+	return Date_from_SYSTEMTIME(sys);
+}
+
+inline_fn FileInfo FileInfo_from_WIN32_FIND_DATAA(Arena* arena, WIN32_FIND_DATAA d, String path)
+{
+    FileInfo info{};
+    
+    info.is_directory = (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+    info.create_date = Date_from_FILETIME(d.ftCreationTime);
+    info.last_write_date = Date_from_FILETIME(d.ftLastWriteTime);
+    info.last_access_date = Date_from_FILETIME(d.ftLastAccessTime);
+    
+    const char* filename = (const char*)d.cFileName;
+    
+    SCRATCH(arena);
+    StringBuilder builder = string_builder_make(scratch.arena);
+    append(&builder, path);
+    if (path.size != 0 && path[path.size - 1] != '/') append_char(&builder, '/');
+    append(&builder, filename);
+    
+    file_info_set_path(&info, string_from_builder(arena, &builder));
+    return info;
+}
+
+Result os_file_get_info(Arena* arena, String path, FileInfo* ret)
+{
+    *ret = {};
+    FileInfo info = {};
+    
+    String path0 = string_copy(arena, path);
+    file_info_set_path(&info, path0);
+    
+    WIN32_FILE_ATTRIBUTE_DATA att;
+    if (!GetFileAttributesExA(path0.data, GetFileExInfoStandard, &att)) {
+        return result_failed_make(string_from_last_error());
+    }
+    
+    info.is_directory = (att.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+    
+    info.create_date      = Date_from_FILETIME(att.ftCreationTime);
+    info.last_write_date  = Date_from_FILETIME(att.ftLastWriteTime);
+    info.last_access_date = Date_from_FILETIME(att.ftLastAccessTime);
+    
+    *ret = info;
+    return RESULT_SUCCESS;
+}
+
+Result os_dir_get_files_info(Arena* arena, String path, Array<FileInfo>* ret)
+{
+    SCRATCH(arena);
+    
+    *ret = {};
+    
+    // Clear path
+    String path0;
+    {
+        StringBuilder builder = string_builder_make(scratch.arena);
+        
+        if (!os_path_is_absolute(path)) {
+            append(&builder, ".\\");
+        }
+        
+        foreach(i, path.size) {
+            if (path[i] == '/') append_char(&builder, '\\');
+            else append_char(&builder, path[i]);
+        }
+        
+        if (path[path.size - 1] != '/') append_char(&builder, '\\');
+        append_char(&builder, '*');
+        
+        path0 = string_from_builder(scratch.arena, &builder);
+    }
+    
+    WIN32_FIND_DATAA data;
+    HANDLE find = FindFirstFileA(path0.data, &data);
+    
+    if (find == INVALID_HANDLE_VALUE) return {};
+    
+    auto files = pooled_array_make<FileInfo>(scratch.arena, 32);
+    
+    while (1) {
+        if (!string_equals(data.cFileName, ".") && !string_equals(data.cFileName, "..")) {
+            array_add(&files, FileInfo_from_WIN32_FIND_DATAA(arena, data, path));
+        }
+        if (!FindNextFileA(find, &data)) break;
+    }
+    
+    FindClose(find);
+    
+    *ret = array_from_pooled_array(arena, files);
+    return RESULT_SUCCESS;
+}
+
+
 b32 os_ask_yesno(String title, String content)
 {
     SCRATCH();
@@ -574,12 +685,12 @@ CallResult os_call_exe(Arena* arena, String working_dir, String exe, String args
     return os_call(arena, working_dir, command, redirect_stdout);
 }
 
-CallResult os_call_script(Arena* arena, String working_dir, String script, String args, RedirectStdout redirect_stdout)
+CallResult os_call_script(Arena* arena, String working_dir, String script, String args, String yov_args, RedirectStdout redirect_stdout)
 {
     SCRATCH(arena);
-    String yov_args = yov_get_inherited_args(scratch.arena);
+    String inherited_yov_args = yov_get_inherited_args(scratch.arena);
     String yov_path = os_get_executable_path(scratch.arena);
-    String command = string_format(scratch.arena, "\"%S\" %S %S %S", yov_path, yov_args, script, args);
+    String command = string_format(scratch.arena, "\"%S\" %S %S %S %S", yov_path, inherited_yov_args, yov_args, script, args);
     return os_call(arena, working_dir, command, redirect_stdout);
 }
 
@@ -675,7 +786,7 @@ void os_console_wait()
     HANDLE window = GetConsoleWindow();
     
     while (1) {
-        if (window == GetForegroundWindow() && GetAsyncKeyState(VK_RETURN) & 0x8000) {
+        if (GetAsyncKeyState(VK_RETURN) & 0x8000) {
             return;
         }
         os_thread_sleep(50);
