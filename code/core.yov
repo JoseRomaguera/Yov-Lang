@@ -7,11 +7,17 @@ YovInfo :: struct {
     revision: Int;
 }
 
+Type :: struct {
+    ID: Int;
+    name: String;
+}
+
 Context :: struct {
     cd: String;
     script_dir: String;
     caller_dir: String;
     args: String[];
+    types: Type[];
 }
 
 OSKind :: enum {
@@ -36,11 +42,12 @@ os      :: OS();
 calls   :: CallsContext();
 
 // Core
-print       :: (text: String);
-println     :: (text: String);
-exit        :: (exit_code: Int);
-set_cd      :: (cd: String);
-assert      :: (result: Bool) -> Bool;
+typeof  :: (object: Any) -> Type;
+print   :: (object: Any);
+println :: (object: Any);
+exit    :: (exit_code: Int);
+set_cd  :: (cd: String);
+assert  :: (result: Bool) -> Bool;
 
 // External Calls
 

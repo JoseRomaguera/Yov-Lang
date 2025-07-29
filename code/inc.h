@@ -1097,10 +1097,12 @@ struct Value {
 
 #define VType_Unknown -1
 #define VType_Void 0
-#define VType_Int 1
-#define VType_Bool 2
-#define VType_String 3
+#define VType_Any 1
+#define VType_Int 2
+#define VType_Bool 3
+#define VType_String 4
 
+#define VType_Type vtype_from_name(inter, "Type")
 #define VType_CopyMode vtype_from_name(inter, "CopyMode")
 #define VType_YovInfo vtype_from_name(inter, "YovInfo")
 #define VType_Context vtype_from_name(inter, "Context")
@@ -1119,6 +1121,7 @@ global_var ObjectRef* nil_ref;
 enum VariableKind {
     VariableKind_Unknown,
     VariableKind_Void,
+    VariableKind_Any,
     VariableKind_Primitive,
     VariableKind_Array,
     VariableKind_Enum,
@@ -1273,6 +1276,8 @@ void interpreter_exit(Interpreter* inter, i32 exit_code);
 void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, Result result);
 Result user_assertion(Interpreter* inter, String message);
 
+b32 validate_assignment(Interpreter* inter, i32 dst_vtype, Value src);
+
 struct ExpresionContext {
     i32 expected_vtype;
 };
@@ -1381,8 +1386,9 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = 
 // new R = R   -> Ref
 // new R = Ref -> Error
 
-b32 value_assign(Interpreter* inter, Value dst, Value src);
-b32 value_assign_as_new(Interpreter* inter, Value dst, Value src);
+i32 value_get_expected_vtype(Value value);
+b32 value_assign(Interpreter* inter, Value* dst, Value src);
+b32 value_assign_as_new(Interpreter* inter, Value* dst, Value src);
 b32 value_assign_ref(Interpreter* inter, Value* dst, Value src);
 b32 value_assign_null(Interpreter* inter, Value* dst);
 b32 value_copy(Interpreter* inter, Value dst, Value src);
@@ -1438,6 +1444,7 @@ inline_fn CopyMode get_enum_CopyMode(Interpreter* inter, Value value) {
 }
 
 void value_assign_FileInfo(Interpreter* inter, Value value, FileInfo info);
+void value_assign_Type(Interpreter* inter, Value value, i32 vtype);
 
 //- GARBAGE COLLECTOR
 

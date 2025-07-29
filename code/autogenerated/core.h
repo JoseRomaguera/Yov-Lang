@@ -13,13 +13,22 @@ internal_fn void define_core(Interpreter* inter)
         Array<ObjectDefinition> members = array_make(m, array_count(m));
         define_struct(inter, "YovInfo", members);
     }
+    // struct Type
+    {
+        ObjectDefinition m[2];
+        m[0] = obj_def_make("ID", vtype_from_name(inter, "Int"), false);
+        m[1] = obj_def_make("name", vtype_from_name(inter, "String"), false);
+        Array<ObjectDefinition> members = array_make(m, array_count(m));
+        define_struct(inter, "Type", members);
+    }
     // struct Context
     {
-        ObjectDefinition m[4];
+        ObjectDefinition m[5];
         m[0] = obj_def_make("cd", vtype_from_name(inter, "String"), false);
         m[1] = obj_def_make("script_dir", vtype_from_name(inter, "String"), false);
         m[2] = obj_def_make("caller_dir", vtype_from_name(inter, "String"), false);
         m[3] = obj_def_make("args", vtype_from_array_dimension(inter, vtype_from_name(inter, "String"), 1), false);
+        m[4] = obj_def_make("types", vtype_from_array_dimension(inter, vtype_from_name(inter, "Type"), 1), false);
         Array<ObjectDefinition> members = array_make(m, array_count(m));
         define_struct(inter, "Context", members);
     }
@@ -70,11 +79,19 @@ internal_fn void define_core(Interpreter* inter)
     {
         ObjectRef* ref = scope_define_object_ref(inter, "calls", value_def(inter, vtype_from_name(inter, "CallsContext")));
     }
+    // function typeof
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("object", vtype_from_name(inter, "Any"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "typeof", parameters, vtype_from_name(inter, "Type"));
+    }
     // function print
     {
         Array<ObjectDefinition> parameters{};
         ObjectDefinition p[1];
-        p[0] = obj_def_make("text", vtype_from_name(inter, "String"), false);
+        p[0] = obj_def_make("object", vtype_from_name(inter, "Any"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "print", parameters, VType_Void);
     }
@@ -82,7 +99,7 @@ internal_fn void define_core(Interpreter* inter)
     {
         Array<ObjectDefinition> parameters{};
         ObjectDefinition p[1];
-        p[0] = obj_def_make("text", vtype_from_name(inter, "String"), false);
+        p[0] = obj_def_make("object", vtype_from_name(inter, "Any"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "println", parameters, VType_Void);
     }

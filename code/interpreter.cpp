@@ -20,12 +20,34 @@ Object* nil_obj = &_nil_obj;
 Object* null_obj = &_null_obj;
 ObjectRef* nil_ref = &_nil_ref;
 
+b32 validate_assignment(Interpreter* inter, i32 dst_vtype, Value src)
+{
+    SCRATCH();
+    if (dst_vtype == VType_Any) {
+        return true;
+    }
+    
+    i32 src_vtype = value_get_expected_vtype(src);
+    
+    if (dst_vtype != src_vtype) return false;
+    
+    if (is_null(src)) {
+        if (dst_vtype <= 0) return false;
+        if (dst_vtype == VType_Any) return false;
+    }
+    
+    return true;
+}
+
 internal_fn Value solve_binary_operation(Interpreter* inter, Value left, Value right, BinaryOperator op, CodeLocation code)
 {
     SCRATCH();
     
-    VariableType left_type = vtype_get(inter, left.vtype);
-    VariableType right_type = vtype_get(inter, right.vtype);
+    i32 left_vtype = value_get_expected_vtype(left);
+    i32 right_vtype = value_get_expected_vtype(right);
+    
+    VariableType left_type = vtype_get(inter, left_vtype);
+    VariableType right_type = vtype_get(inter, right_vtype);
     
     if (is_int(left) && is_int(right)) {
         if (op == BinaryOperator_Addition) return alloc_int(inter, get_int(left) + get_int(right));
@@ -79,6 +101,18 @@ internal_fn Value solve_binary_operation(Interpreter* inter, Value left, Value r
         }
     }
     
+    if (left_vtype == VType_Type && right_vtype == VType_Type)
+    {
+        i64 left_id = get_int(value_get_member(inter, left, "ID"));
+        i64 right_id = get_int(value_get_member(inter, right, "ID"));
+        if (op == BinaryOperator_Equals) {
+            return alloc_bool(inter, left_id == right_id);
+        }
+        else if (op == BinaryOperator_NotEquals) {
+            return alloc_bool(inter, left_id == right_id);
+        }
+    }
+    
     if ((is_string(left) && is_int(right)) || (is_int(left) && is_string(right)))
     {
         if (op == BinaryOperator_Addition)
@@ -118,12 +152,12 @@ internal_fn Value solve_binary_operation(Interpreter* inter, Value left, Value r
             for (u32 i = 0; i < left_count; ++i) {
                 Value dst = value_get_element(inter, array, i);
                 Value src = value_get_element(inter, left, i);
-                value_assign_as_new(inter, dst, src);
+                value_assign_as_new(inter, &dst, src);
             }
             for (u32 i = 0; i < right_count; ++i) {
                 Value dst = value_get_element(inter, array, left_count + i);
                 Value src = value_get_element(inter, right, i);
-                value_assign_as_new(inter, dst, src);
+                value_assign_as_new(inter, &dst, src);
             }
             return array;
         }
@@ -150,12 +184,12 @@ internal_fn Value solve_binary_operation(Interpreter* inter, Value left, Value r
         for (i32 i = 0; i < array_src_count; ++i) {
             Value dst = value_get_element(inter, array, i + array_offset);
             Value src = value_get_element(inter, array_src, i);
-            value_assign_as_new(inter, dst, src);
+            value_assign_as_new(inter, &dst, src);
         }
         
         i32 element_offset = (left_type.kind == VariableKind_Array) ? array_src_count : 0;
         Value dst = value_get_element(inter, array, element_offset);
-        value_assign_as_new(inter, dst, element);
+        value_assign_as_new(inter, &dst, element);
         
         return array;
     }
@@ -186,8 +220,8 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     
     if (node->kind == OpKind_Error) return value_nil();
     if (node->kind == OpKind_None) {
-        if (context.expected_vtype >= 0) return value_null(context.expected_vtype);
-        else return value_void();
+        if (context.expected_vtype <= VType_Any) return value_void();
+        return value_null(context.expected_vtype);
     }
     
     if (node->kind == OpKind_Binary)
@@ -322,14 +356,22 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     if (node->kind == OpKind_Symbol)
     {
         auto node0 = (OpNode_Symbol*)node;
-        ObjectRef* ref = scope_find_object_ref(inter, node0->identifier, true);
         
-        if (ref == nil_ref) {
-            report_object_not_found(node->code, node0->identifier);
+        Symbol symbol = find_symbol(inter, node0->identifier);
+        
+        if (symbol.type == SymbolType_ObjectRef) {
+            return lvalue_from_ref(symbol.ref);
+        }
+        else if (symbol.type == SymbolType_Type) {
+            i32 vtype = symbol.vtype;
+            Value type = object_alloc(inter, VType_Type);
+            value_assign_Type(inter, type, vtype);
+            return type;
+        }
+        else {
+            report_symbol_not_found(node->code, node0->identifier);
             return value_nil();
         }
-        
-        return lvalue_from_ref(ref);
     }
     
     if (node->kind == OpKind_MemberValue) {
@@ -481,7 +523,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
         Value array = alloc_array(inter, element_vtype, objects.count, true);
         foreach(i, objects.count) {
             Value dst = value_get_element(inter, array, i);
-            value_assign_as_new(inter, dst, objects[i]);
+            value_assign_as_new(inter, &dst, objects[i]);
         }
         
         return array;
@@ -539,34 +581,26 @@ Value interpret_assignment_for_object_definition(Interpreter* inter, OpNode_Obje
     if (vtype < 0) return value_nil();
     
     OpNode* assignment = node->assignment;
-    Value assignment_value = interpret_expresion(inter, assignment, expresion_context_make(vtype));
-    if (is_unknown(assignment_value)) return value_nil();
+    Value value = interpret_expresion(inter, assignment, expresion_context_make(vtype));
+    if (is_unknown(value)) return value_nil();
     
-    if (vtype == VType_Void) vtype = assignment_value.vtype;
+    if (vtype == VType_Void) vtype = value.vtype;
     
-    if (is_null(assignment_value.obj))
-    {
-        if (vtype <= 0) {
-            report_object_invalid_type(node->code, "void");
-            return value_nil();
-        }
-        
-        assignment_value = object_alloc(inter, vtype);
-    }
-    else
-    {
-        if (vtype < 0) {
-            vtype = assignment_value.vtype;
-        }
-        else {
-            if (assignment_value.vtype != vtype) {
-                report_type_missmatch_assign(node->code, string_from_vtype(scratch.arena, inter, assignment_value.vtype), string_from_vtype(scratch.arena, inter, vtype));
-                return value_nil();
-            }
-        }
+    if (!validate_assignment(inter, vtype, value)) {
+        i32 value_vtype = value_get_expected_vtype(value);
+        report_type_missmatch_assign(node->code, string_from_vtype(scratch.arena, inter, value_vtype), string_from_vtype(scratch.arena, inter, vtype));
+        return value_nil();
     }
     
-    return assignment_value;
+    if (is_null(value) && vtype > VType_Any) {
+        value = object_alloc(inter, vtype);
+    }
+    
+    if (vtype != value.vtype) {
+        value.vtype = vtype;
+    }
+    
+    return value;
 }
 
 void interpret_object_definition(Interpreter* inter, OpNode* node0)
@@ -581,10 +615,10 @@ void interpret_object_definition(Interpreter* inter, OpNode* node0)
         return;
     }
     
-    Value assignment_value = interpret_assignment_for_object_definition(inter, node, false);
-    if (is_unknown(assignment_value)) return;
+    Value value = interpret_assignment_for_object_definition(inter, node, false);
+    if (is_unknown(value)) return;
     
-    ObjectRef* ref = scope_define_object_ref(inter, identifier, assignment_value, node->is_constant);
+    ObjectRef* ref = scope_define_object_ref(inter, identifier, value, node->is_constant);
     
     if (inter->mode == InterpreterMode_Execute)
     {
@@ -622,14 +656,15 @@ void interpret_assignment(Interpreter* inter, OpNode* node0)
         if (is_unknown(assignment)) return;
     }
     
-    if (assignment.vtype != dst.vtype) {
-        report_type_missmatch_assign(assignment_node->code, string_from_vtype(scratch.arena, inter, assignment.vtype), string_from_vtype(scratch.arena, inter, dst.vtype));
+    if (!validate_assignment(inter, dst.vtype, assignment)) {
+        i32 value_vtype = value_get_expected_vtype(assignment);
+        report_type_missmatch_assign(assignment_node->code, string_from_vtype(scratch.arena, inter, value_vtype), string_from_vtype(scratch.arena, inter, dst.vtype));
         return;
     }
     
     if (is_unknown(assignment)) return;
     
-    if (!value_assign(inter, dst, assignment)) {
+    if (!value_assign(inter, &dst, assignment)) {
         assert(0);
     }
     
@@ -880,6 +915,9 @@ Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresio
             i32 expected_vtype = -1;
             if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
             objects[i] = interpret_expresion(inter, node->parameters[i], expresion_context_make(expected_vtype));
+            if (expected_vtype == VType_Any) {
+                objects[i].vtype = VType_Any;
+            }
             scope_add_temporal(inter, objects[i].obj);
         }
         
@@ -924,14 +962,19 @@ void interpret_return(Interpreter* inter, OpNode* node0)
     OpNode_Return* node = (OpNode_Return*)node0;
     Scope* scope = scope_find_returnable(inter);
     
-    scope->return_value = value_nil();
-    
     Value return_value = interpret_expresion(inter, node->expresion, expresion_context_make(scope->expected_return_vtype));
-    if (is_unknown(return_value)) return;
+    if (is_unknown(return_value)) {
+        scope->return_value = value_nil();
+        return;
+    }
+    
+    if (scope->expected_return_vtype == VType_Any) {
+        return_value.vtype = VType_Any;
+    }
     
     scope_add_temporal(inter, scope, return_value.obj);
     
-    if (return_value.vtype != scope->expected_return_vtype) {
+    if (!validate_assignment(inter, scope->expected_return_vtype, return_value)) {
         report_function_wrong_return_type(node->code, string_from_vtype(scratch.arena, inter, scope->expected_return_vtype));
         return;
     }
@@ -1527,17 +1570,27 @@ internal_fn void register_definitions(Interpreter* inter)
     // Void
     {
         t = {};
-        t.name = STR("void");
+        t.name = "void";
         t.kind = VariableKind_Void;
         t.vtype = list->count;
         assert(VType_Void == t.vtype);
         array_add(list, t);
     }
     
+    // Any
+    {
+        t = {};
+        t.name = "Any";
+        t.kind = VariableKind_Any;
+        t.vtype = list->count;
+        assert(VType_Any == t.vtype);
+        array_add(list, t);
+    }
+    
     // Int
     {
         t = {};
-        t.name = STR("Int");
+        t.name = "Int";
         t.kind = VariableKind_Primitive;
         t.vtype = list->count;
         assert(VType_Int == t.vtype);
@@ -1547,7 +1600,7 @@ internal_fn void register_definitions(Interpreter* inter)
     // Bool
     {
         t = {};
-        t.name = STR("Bool");
+        t.name = "Bool";
         t.kind = VariableKind_Primitive;
         t.vtype = list->count;
         assert(VType_Bool == t.vtype);
@@ -1557,7 +1610,7 @@ internal_fn void register_definitions(Interpreter* inter)
     // String
     {
         t = {};
-        t.name = STR("String");
+        t.name = "String";
         t.kind = VariableKind_Primitive;
         t.vtype = list->count;
         assert(VType_String == t.vtype);
@@ -1613,7 +1666,7 @@ internal_fn void register_definitions(Interpreter* inter)
     // Analyze initialize expresions
     if (inter->mode != InterpreterMode_Execute)
     {
-        for (i32 vtype = VType_Void + 1; vtype < inter->vtype_table.count; vtype++) {
+        for (i32 vtype = VType_Any + 1; vtype < inter->vtype_table.count; vtype++) {
             object_alloc(inter, vtype);
         }
     }
@@ -1689,6 +1742,21 @@ internal_fn void define_globals(Interpreter* inter)
             }
             
             member = value_get_member(inter, ref, "args");
+            value_assign_ref(inter, &member, array);
+        }
+        
+        // Types
+        {
+            Value array = alloc_array(inter, VType_Type, inter->vtype_table.count, false);
+            
+            for (auto it = pooled_array_make_iterator(&inter->vtype_table); it.valid; ++it) {
+                u32 index = it.index;
+                Value element = value_get_element(inter, array, index);
+                i32 vtype = it.value->vtype;
+                value_assign_Type(inter, element, vtype);
+            }
+            
+            member = value_get_member(inter, ref, "types");
             value_assign_ref(inter, &member, array);
         }
     }
@@ -1826,7 +1894,7 @@ void interpret(InterpreterSettings settings, InterpreterMode mode)
     }
     
 #if DEV && 0
-    if (inter->settings.execute) print_memory_usage(inter);
+    if (inter->mode == InterpreterMode_Analysis) print_memory_usage(inter);
 #endif
     
     assert(yov->error_count != 0 || inter->global_scope == inter->current_scope);
@@ -1949,6 +2017,8 @@ Scope* scope_push(Interpreter* inter, ScopeType type, i32 expected_return_vtype,
     
     if (scope == NULL) scope = scope_alloc(inter, type);
     
+    scope->return_value = value_void();
+    
     scope->expected_return_vtype = expected_return_vtype;
     scope->expected_return_reference = expected_return_reference;
     
@@ -2026,7 +2096,8 @@ ObjectRef* scope_define_object_ref(Interpreter* inter, String identifier, Value 
     ref->object = null_obj;
     ref->constant = constant;
     
-    value_assign_as_new(inter, lvalue_from_ref(ref), value);
+    Value lvalue = lvalue_from_ref(ref);
+    value_assign_as_new(inter, &lvalue, value);
     
     return ref;
 }
@@ -2164,6 +2235,16 @@ Symbol find_symbol(Interpreter* inter, String identifier)
     symbol.identifier = identifier;
     
     {
+        ObjectRef* ref = scope_find_object_ref(inter, identifier, true);
+        
+        if (ref != nil_ref) {
+            symbol.type = SymbolType_ObjectRef;
+            symbol.ref = ref;
+            return symbol;
+        }
+    }
+    
+    {
         FunctionDefinition* fn = find_function(inter, identifier);
         
         if (fn != NULL) {
@@ -2179,16 +2260,6 @@ Symbol find_symbol(Interpreter* inter, String identifier)
         if (vtype >= 0) {
             symbol.type = SymbolType_Type;
             symbol.vtype = vtype;
-            return symbol;
-        }
-    }
-    
-    {
-        ObjectRef* ref = scope_find_object_ref(inter, identifier, true);
-        
-        if (ref != nil_ref) {
-            symbol.type = SymbolType_ObjectRef;
-            symbol.ref = ref;
             return symbol;
         }
     }
@@ -2231,8 +2302,9 @@ Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
         if (is_unknown(parameters[i])) return value_nil();
     }
     
-    foreach(i, parameters.count) {
-        if (parameters[i].vtype != fn->parameters[i].vtype) {
+    foreach(i, parameters.count)
+    {
+        if (!validate_assignment(inter, fn->parameters[i].vtype, parameters[i])) {
             report_function_wrong_parameter_type(code, fn->identifier, string_from_vtype(scratch.arena, inter, fn->parameters[i].vtype), i + 1);
             return value_nil();
         }
@@ -2261,7 +2333,7 @@ Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
         resolved_line = string_from_builder(scratch.arena, &builder);
     }
     
-    b32 is_intrinsic = fn->intrinsic_fn != NULL;
+    b32 is_intrinsic = fn->is_intrinsic;
     
     if (is_intrinsic && inter->mode != InterpreterMode_Execute) {
         if (fn->return_vtype == VType_Void) return value_void();
@@ -2293,7 +2365,7 @@ Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
     
     if (is_unknown(ret.return_value)) return value_nil();
     
-    if (ret.return_value.vtype != fn->return_vtype)
+    if (fn->return_vtype != VType_Void && ret.return_value.vtype == VType_Void)
     {
         CodeLocation fn_code = (fn->defined_fn == NULL) ? code : fn->defined_fn->code;
         report_function_no_return(fn_code, fn->identifier);
@@ -2351,9 +2423,15 @@ b32 vtype_is_struct(Interpreter* inter, i32 vtype) {
 
 i32 vtype_from_name(Interpreter* inter, String name)
 {
+    u32 dimensions = 0;
+    while (name.size > 2 && name[name.size - 1] == ']' && name[name.size - 2] == '[') {
+        name = string_substring(name, 0, name.size - 2);
+        dimensions++;
+    }
+    
     foreach(i, inter->vtype_table.count) {
         if (string_equals(inter->vtype_table[i].name, name)) {
-            return i;
+            return vtype_from_array_dimension(inter, i, dimensions);
         }
     }
     return -1;
@@ -2629,6 +2707,10 @@ String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw)
         return "null";
     }
     
+    if (value.vtype == VType_Any) {
+        value.vtype = value.obj->vtype;
+    }
+    
     i32 vtype = value.vtype;
     
     if (vtype == VType_String) {
@@ -2700,44 +2782,63 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw) {
     return string_from_value(arena, inter, rvalue_from_obj(obj), raw);
 }
 
-b32 value_assign(Interpreter* inter, Value dst, Value src)
+i32 value_get_expected_vtype(Value value)
 {
-    if (dst.kind == ValueKind_Reference) {
+    if (is_unknown(value)) return VType_Unknown;
+    if (is_void(value)) return VType_Void;
+    if (value.vtype == VType_Any) {
+        Object* obj = value.obj;
+        if (is_unknown(obj) || is_null(obj)) return VType_Unknown;
+        return obj->vtype;
+    }
+    return value.vtype;
+}
+
+b32 value_assign(Interpreter* inter, Value* dst, Value src)
+{
+    if (dst->kind == ValueKind_Reference) {
         assert(0);
         return false;
     }
-    if (is_null(dst)) {
+    if (is_null(*dst)) {
         assert(0);
         return false;
     }
-    if (is_const(dst)) {
+    if (is_const(*dst)) {
         assert(0);
         return false;
     }
     
-    if (src.kind == ValueKind_RValue || src.kind == ValueKind_LValue) {
-        return value_copy(inter, dst, src);
+    if (src.kind == ValueKind_RValue || src.kind == ValueKind_LValue)
+    {
+        if (dst->vtype == VType_Any) {
+            Value new_value = object_alloc(inter, src.vtype);
+            if (!value_assign_ref(inter, dst, new_value)) return false;
+        }
+        return value_copy(inter, *dst, src);
     }
     else if (src.kind == ValueKind_Reference) {
-        return value_assign_ref(inter, &dst, src);
+        return value_assign_ref(inter, dst, src);
     }
     assert(0);
     return false;
 }
 
-b32 value_assign_as_new(Interpreter* inter, Value dst, Value src)
+b32 value_assign_as_new(Interpreter* inter, Value* dst, Value src)
 {
-    if (!is_null(dst)) {
+    if (!is_null(*dst)) {
         assert(0);
         return false;
     }
     
     if (src.kind == ValueKind_RValue || src.kind == ValueKind_Reference) {
-        return value_assign_ref(inter, &dst, src);
+        return value_assign_ref(inter, dst, src);
     }
-    else if (src.kind == ValueKind_LValue) {
-        if (!value_assign_ref(inter, &dst, object_alloc(inter, dst.vtype))) return false;
-        return value_copy(inter, dst, src);
+    else if (src.kind == ValueKind_LValue)
+    {
+        Value new_object = object_alloc(inter, value_get_expected_vtype(src));
+        if (!value_assign_ref(inter, dst, new_object)) return false;
+        return value_copy(inter, *dst, src);
     }
     
     assert(0);
@@ -2747,18 +2848,15 @@ b32 value_assign_as_new(Interpreter* inter, Value dst, Value src)
 b32 value_assign_ref(Interpreter* inter, Value* dst, Value src)
 {
     if (dst->kind == ValueKind_Reference) {
-        // TODO(Jose): 
         assert(0);
         return false;
     }
-    if (dst->vtype != src.vtype) {
-        // TODO(Jose): 
+    if (dst->vtype != VType_Any && dst->vtype != src.vtype) {
         assert(0);
         return false;
     }
     // TODO(Jose): if (dst->is_constant) {
     if (0) {
-        // TODO(Jose): 
         assert(0);
         return false;
     }
@@ -2795,7 +2893,7 @@ b32 value_copy(Interpreter* inter, Value dst, Value src)
         return false;
     }
     
-    if (dst.vtype != src.vtype) {
+    if (dst.vtype != VType_Any && dst.vtype != src.vtype) {
         assert(0);
         return false;
     }
@@ -3267,6 +3365,16 @@ void value_assign_FileInfo(Interpreter* inter, Value value, FileInfo info)
     set_bool(mem, info.is_directory);
 }
 
+void value_assign_Type(Interpreter* inter, Value value, i32 vtype)
+{
+    VariableType type = vtype_get(inter, vtype);
+    Value mem;
+    mem = value_get_member(inter, value, "ID");
+    set_int(mem, vtype);
+    mem = value_get_member(inter, value, "name");
+    set_string(inter, mem, type.name);
+}
+
 //- GARBAGE COLLECTOR 
 
 u32 object_generate_id(Interpreter* inter) {
@@ -3276,6 +3384,8 @@ u32 object_generate_id(Interpreter* inter) {
 Value object_alloc(Interpreter* inter, i32 vtype)
 {
     SCRATCH();
+    
+    assert(vtype > VType_Any);
     
     u32 ID = object_generate_id(inter);
     
@@ -3435,6 +3545,11 @@ void object_copy(Interpreter* inter, Object* dst, Object* src)
     }
     
     if (is_unknown(src) || is_null(src)) {
+        assert(0);
+        return;
+    }
+    
+    if (src->vtype != dst->vtype) {
         assert(0);
         return;
     }

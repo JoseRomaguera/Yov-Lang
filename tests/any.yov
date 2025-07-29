@@ -1,0 +1,26 @@
+
+a: Any = 5;
+a = "Hello";
+a = false;
+
+b := a;
+b = "Hello";
+
+c: String = b;
+
+assert(typeof(a) == Bool);
+assert(typeof(b) == String);
+assert(typeof(c) == String);
+
+res := function_modify_param(5);
+assert(typeof(res) == Bool);
+res = "str";
+res = 5;
+
+function_modify_param :: (param: Any) -> Any {
+    assert(typeof(param) == Int);
+    param = "str";
+    param = 5;
+    param = false;
+    return param;
+}

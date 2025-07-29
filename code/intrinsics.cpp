@@ -2,16 +2,40 @@
 
 //- CORE 
 
+internal_fn FunctionReturn intrinsic__typeof(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    Value value = vars[0];
+    i32 vtype = value_get_expected_vtype(value);
+    
+    Value type = value_nil();
+    Result res = result_failed_make("Unknown type");
+    
+    if (vtype >= 0) {
+        res = RESULT_SUCCESS;
+        type = object_alloc(inter, VType_Type);
+        value_assign_Type(inter, type, vtype);
+    }
+    
+    return { type, res };
+}
+
 internal_fn FunctionReturn intrinsic__print(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
-    print_info("%S", get_string(vars[0]));
+    SCRATCH();
+    String str = string_from_value(scratch.arena, inter, vars[0]);
+    print_info(str);
     
     return { value_void(), RESULT_SUCCESS };
 }
 
 internal_fn FunctionReturn intrinsic__println(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
-    print_info("%S\n", get_string(vars[0]));
+    SCRATCH();
+    String str = string_from_value(scratch.arena, inter, vars[0]);
+    print_info("%S\n", str);
+    
     return { value_void(), RESULT_SUCCESS };
 }
 
@@ -42,7 +66,7 @@ internal_fn FunctionReturn intrinsic__set_cd(Interpreter* inter, Array<Value> va
     String path = get_string(vars[0]);
     
     if (os_path_is_absolute(path)) {
-        value_assign(inter, value, vars[0]);
+        value_assign(inter, &value, vars[0]);
         return { value_void(), RESULT_SUCCESS };
     }
     
@@ -362,7 +386,7 @@ internal_fn FunctionReturn intrinsic__read_entire_file(Interpreter* inter, Array
     
     if (res.success) {
         String content_str = string_make((char*)content.data, content.size);
-        value_assign(inter, dst, alloc_string(inter, content_str));
+        value_assign(inter, &dst, alloc_string(inter, content_str));
     }
     
     return { alloc_bool(inter, res.success), res };
@@ -409,6 +433,7 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
 {
     IntrinsicDefinition table[] = {
         // Core
+        INTR("typeof", intrinsic__typeof),
         INTR("print", intrinsic__print),
         INTR("println", intrinsic__println),
         INTR("exit", intrinsic__exit),

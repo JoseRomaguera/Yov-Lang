@@ -327,11 +327,6 @@ OpNode* extract_expresion(Parser* parser)
             node->bool_literal = (b8)string_equals(token.value, STR("true"));
             return node;
         }
-        else if (token.kind == TokenKind_Identifier) {
-            auto node = (OpNode_Symbol*)alloc_node(parser, OpKind_Symbol, token.code);
-            node->identifier = token.value;
-            return node;
-        }
         else if (token.kind == TokenKind_StringLiteral)
         {
             PooledArray<OpNode*> expresions = pooled_array_make<OpNode*>(scratch.arena, 8);
@@ -441,6 +436,29 @@ OpNode* extract_expresion(Parser* parser)
             
             auto node = (OpNode_NumericLiteral*)alloc_node(parser, OpKind_CodepointLiteral, token.code);
             node->codepoint_literal = v;
+            return node;
+        }
+    }
+    
+    // Symbol
+    if (tokens.count >= 1 && tokens.count % 2 == 1 && tokens[0].kind == TokenKind_Identifier)
+    {
+        Token token = tokens[0];
+        
+        b32 valid = true;
+        for (u32 i = 1; i < tokens.count; ++i) {
+            b32 expect_open = i % 2 == 1;
+            TokenKind expected = expect_open ? TokenKind_OpenBracket : TokenKind_CloseBracket;
+            if (tokens[i].kind != expected) {
+                valid = false;
+                break;
+            }
+        }
+        
+        if (valid)
+        {
+            auto node = (OpNode_Symbol*)alloc_node(parser, OpKind_Symbol, token.code);
+            node->identifier = string_from_tokens(yov->static_arena, tokens);
             return node;
         }
     }
@@ -677,7 +695,7 @@ OpNode* extract_expresion(Parser* parser)
                 Array<Token> value_tokens = array_subarray(tokens, 0, starting_token);
                 Array<Token> indexing_tokens = array_subarray(tokens, starting_token + 1, tokens.count - starting_token - 2);
                 
-                if (value_tokens.count > 0)
+                if (value_tokens.count > 0 && indexing_tokens.count > 0)
                 {
                     OpNode* value_node = extract_expresion_from_array(parser, value_tokens);
                     OpNode* index_node = extract_expresion_from_array(parser, indexing_tokens);
