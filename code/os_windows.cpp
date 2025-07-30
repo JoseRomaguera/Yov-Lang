@@ -840,16 +840,18 @@ Result os_env_get(Arena* arena, String* out, String name)
     *out = "";
     String name0 = string_copy(scratch.arena, name);
     
-    DWORD size = GetEnvironmentVariable(name0.data, NULL, 0);
+    // "size" includes null-terminator
+    DWORD buffer_size = GetEnvironmentVariable(name0.data, NULL, 0);
     
-    if (size <= 0) {
+    if (buffer_size <= 0) {
         return result_failed_make(string_from_last_error());
     }
     
-    out->data = (char*)arena_push(arena, size + 1);
+    out->data = (char*)arena_push(arena, buffer_size);
+    // This new size does not include null-terminator, thanks Windows for the confusion
+    DWORD size = GetEnvironmentVariable(name0.data, out->data, (DWORD)buffer_size);
     out->size = size;
     
-    GetEnvironmentVariable(name0.data, out->data, (DWORD)out->size);
     return RESULT_SUCCESS;
 }
 

@@ -21,17 +21,6 @@ internal_fn FunctionReturn intrinsic__typeof(Interpreter* inter, Array<Value> va
     return { type, res };
 }
 
-internal_fn FunctionReturn intrinsic__env(Interpreter* inter, Array<Value> vars, CodeLocation code)
-{
-    SCRATCH();
-    
-    String name = get_string(vars[0]);
-    String value;
-    Result res = os_env_get(scratch.arena, &value, name);
-    
-    return { alloc_string(inter, value), res };
-}
-
 internal_fn FunctionReturn intrinsic__print(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
     SCRATCH();
@@ -100,6 +89,51 @@ internal_fn FunctionReturn intrinsic__assert(Interpreter* inter, Array<Value> va
     }
     
     return { alloc_bool(inter, result), res };
+}
+
+internal_fn FunctionReturn intrinsic__env(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String name = get_string(vars[0]);
+    String value;
+    Result res = os_env_get(scratch.arena, &value, name);
+    
+    return { alloc_string(inter, value), res };
+}
+
+internal_fn FunctionReturn intrinsic__env_path(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String name = get_string(vars[0]);
+    String value;
+    Result res = os_env_get(scratch.arena, &value, name);
+    if (!res.success) return { alloc_string(inter, ""), res };
+    
+    value = path_resolve(scratch.arena, value);
+    
+    return { alloc_string(inter, value), res };
+}
+
+internal_fn FunctionReturn intrinsic__env_array(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String name = get_string(vars[0]);
+    String value;
+    Result res = os_env_get(scratch.arena, &value, name);
+    if (!res.success) return { alloc_array(inter, VType_String, 0, false), res };
+    
+    Array<String> values = string_split(scratch.arena, value, ";");
+    Value array = alloc_array(inter, VType_String, values.count, false);
+    
+    foreach(i, values.count) {
+        Value element = value_get_element(inter, array, i);
+        set_string(inter, element, values[i]);
+    }
+    
+    return { array, res };
 }
 
 //- EXTERNAL CALLS 
@@ -478,12 +512,15 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
     IntrinsicDefinition table[] = {
         // Core
         INTR("typeof", intrinsic__typeof),
-        INTR("env", intrinsic__env),
         INTR("print", intrinsic__print),
         INTR("println", intrinsic__println),
         INTR("exit", intrinsic__exit),
         INTR("set_cd", intrinsic__set_cd),
         INTR("assert", intrinsic__assert),
+        
+        INTR("env", intrinsic__env),
+        INTR("env_path", intrinsic__env_path),
+        INTR("env_array", intrinsic__env_array),
         
         // External Calls
         INTR("call", intrinsic__call),

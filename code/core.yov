@@ -44,12 +44,15 @@ calls   :: CallsContext();
 // Core
 
 typeof  :: (object: Any) -> Type;
-env     :: (name: String) -> String;
 print   :: (object: Any);
 println :: (object: Any);
 exit    :: (exit_code: Int);
 set_cd  :: (cd: String);
 assert  :: (result: Bool) -> Bool;
+
+env       :: (name: String) -> String;
+env_path  :: (name: String) -> String;
+env_array :: (name: String) -> String[];
 
 // External Calls
 

@@ -88,14 +88,6 @@ internal_fn void define_core(Interpreter* inter)
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "typeof", parameters, vtype_from_name(inter, "Type"));
     }
-    // function env
-    {
-        Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[1];
-        p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
-        parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "env", parameters, vtype_from_name(inter, "String"));
-    }
     // function print
     {
         Array<ObjectDefinition> parameters{};
@@ -135,6 +127,30 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make("result", vtype_from_name(inter, "Bool"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "assert", parameters, vtype_from_name(inter, "Bool"));
+    }
+    // function env
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "env", parameters, vtype_from_name(inter, "String"));
+    }
+    // function env_path
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "env_path", parameters, vtype_from_name(inter, "String"));
+    }
+    // function env_array
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "env_array", parameters, vtype_from_array_dimension(inter, vtype_from_name(inter, "String"), 1));
     }
     // struct CallResult
     {
