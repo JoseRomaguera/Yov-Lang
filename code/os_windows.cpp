@@ -569,6 +569,14 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
 {
     SCRATCH(arena);
     
+    if (working_dir.size == 0) working_dir = ".";
+    
+    String env_separator = "\"===>YOV SEPARATOR<===\"";
+    
+    if (redirect_stdout == RedirectStdout_ImportEnv) {
+        command = string_format(scratch.arena, "cmd.exe /c \"\"%S\" && echo %S && set\"", command, env_separator);
+    }
+    
     String command0 = string_copy(scratch.arena, command);
     String working_dir0 = string_copy(scratch.arena, working_dir);
     
@@ -597,7 +605,7 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
         si.hStdError  = NULL;
         si.hStdInput  = NULL;
     }
-    else if (redirect_stdout == RedirectStdout_Script) {
+    else if (redirect_stdout == RedirectStdout_Script || redirect_stdout == RedirectStdout_ImportEnv) {
         si.dwFlags |= STARTF_USESTDHANDLES;
         si.hStdOutput = stdout_write;
         si.hStdError  = stdout_write;
@@ -608,7 +616,13 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
     
     b32 inherit_handles = redirect_stdout != RedirectStdout_Console;
     
-    if (!CreateProcessA(NULL, command0.data, NULL, NULL, inherit_handles, 0, NULL, working_dir0.data, &si, &pi)) {
+    u32 creation_flags = 0;
+    
+    if (redirect_stdout == RedirectStdout_ImportEnv) {
+        creation_flags |= CREATE_NO_WINDOW;
+    }
+    
+    if (!CreateProcessA(NULL, command0.data, NULL, NULL, inherit_handles, creation_flags, NULL, working_dir0.data, &si, &pi)) {
         res.result = result_failed_make(string_from_last_error());
         return res;
     }
@@ -651,6 +665,17 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
         }
         
         res.stdout = string_from_builder(arena, &builder);
+        
+        if (res.stdout.size > 0) {
+            if (res.stdout[res.stdout.size - 1] == '\n') {
+                res.stdout.size--;
+            }
+        }
+        if (res.stdout.size > 0) {
+            if (res.stdout[res.stdout.size - 1] == '\r') {
+                res.stdout.size--;
+            }
+        }
     }
     
     // Read exit code
@@ -668,6 +693,40 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
         else {
             res.result = RESULT_SUCCESS;
             res.result.exit_code = exit_code;
+        }
+    }
+    
+    // Import env
+    if (res.result.exit_code == 0 && redirect_stdout == RedirectStdout_ImportEnv)
+    {
+        Array<String> split = string_split(scratch.arena, res.stdout, env_separator);
+        if (split.count != 2) {
+            res.result = result_failed_make("Wrong environment format");
+            return res;
+        }
+        
+        Array<String> envs = string_split(scratch.arena, split[1], "\r\n");
+        foreach(i, envs.count)
+        {
+            String env = envs[i];
+            
+            i64 equals_index = -1;
+            for (i64 i = 0; i < env.size; i++) {
+                if (env[i] == '=') {
+                    equals_index = i;
+                    break;
+                }
+            }
+            
+            if (equals_index < 0) continue;
+            
+            String name = string_substring(env, 0, equals_index);
+            String value = string_substring(env, equals_index + 1, env.size - equals_index - 1);
+            
+            name = string_copy(scratch.arena, name);
+            value = string_copy(scratch.arena, value);
+            
+            SetEnvironmentVariableA(name.data, value.data);
         }
     }
     
@@ -775,6 +834,25 @@ Array<String> os_get_args(Arena* arena)
     return array_from_pooled_array(arena, list);
 }
 
+Result os_env_get(Arena* arena, String* out, String name)
+{
+    SCRATCH(arena);
+    *out = "";
+    String name0 = string_copy(scratch.arena, name);
+    
+    DWORD size = GetEnvironmentVariable(name0.data, NULL, 0);
+    
+    if (size <= 0) {
+        return result_failed_make(string_from_last_error());
+    }
+    
+    out->data = (char*)arena_push(arena, size + 1);
+    out->size = size;
+    
+    GetEnvironmentVariable(name0.data, out->data, (DWORD)out->size);
+    return RESULT_SUCCESS;
+}
+
 void os_thread_sleep(u64 millis) {
     Sleep((DWORD)millis);
 }
@@ -791,6 +869,81 @@ void os_console_wait()
         }
         os_thread_sleep(50);
     }
+}
+
+u32 os_msvc_get_env_imported() {
+    SCRATCH();
+    CallResult res = os_call(scratch.arena, {}, "cl", RedirectStdout_Script);
+    if (res.result.exit_code != 0) return MSVC_Env_None;
+    
+    String out = res.stdout;
+    
+    for (i64 i = 0; i < out.size - 3; i++) {
+        if (out[i] != 'x') continue;
+        String arch = string_substring(out, i, 3);
+        if (string_equals(arch, "x64")) return MSVC_Env_x64;
+        if (string_equals(arch, "x86")) return MSVC_Env_x86;
+        if (string_equals(arch, "x32")) return MSVC_Env_x86;
+    }
+    
+    return MSVC_Env_None;
+}
+
+Result os_msvc_find_path(Arena* arena, String* out)
+{
+    SCRATCH(arena);
+    *out = {};
+    
+    char* program_files_path_buffer = (char*)arena_push(scratch.arena, MAX_PATH);
+    if (!ExpandEnvironmentStringsA("%ProgramFiles(x86)%", program_files_path_buffer, MAX_PATH)) {
+        return result_failed_make(string_from_last_error());
+    }
+    
+    String program_files_path = path_resolve(scratch.arena, program_files_path_buffer);
+    String vs_where_path = string_format(scratch.arena, "%S/Microsoft Visual Studio/Installer/vswhere.exe", program_files_path);
+    String vs_where_command = string_format(scratch.arena, "\"%S\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath", vs_where_path);
+    
+    CallResult call_res = os_call(scratch.arena, {}, vs_where_command, RedirectStdout_Script);
+    if (!call_res.result.success) return call_res.result;
+    
+    *out = path_resolve(arena, call_res.stdout);
+    return RESULT_SUCCESS;
+}
+
+Result os_msvc_import_env(u32 mode)
+{
+    SCRATCH();
+    
+    Result res = RESULT_SUCCESS;
+    
+    // Check if its already initialized
+    if (os_msvc_get_env_imported() == mode) {
+        //print_info("MSVC Env already imported for %s\n", mode == MSVC_Env_x64 ? "x64" : "x86");
+        return res;
+    }
+    
+    // Find batch path
+    String batch_path = {};
+    {
+        String vs_path;
+        res = os_msvc_find_path(scratch.arena, &vs_path);
+        if (!res.success) return res;
+        
+        String batch_name = (mode == MSVC_Env_x86) ? "vcvars32" : "vcvars64";
+        batch_path = string_format(scratch.arena, "%S/VC/Auxiliary/Build/%S.bat", vs_path, batch_name);
+    }
+    
+    // Execute
+    CallResult call_res = os_call(scratch.arena, {}, batch_path, RedirectStdout_ImportEnv);
+    if (!call_res.result.success) return call_res.result;
+    
+    if (os_msvc_get_env_imported() != mode) {
+        return result_failed_make("MSVC environment is not imported properly");
+    }
+    
+    //print_info("MSVC Env ready for %s\n", mode == MSVC_Env_x64 ? "x64" : "x86");
+    
+    return res;
 }
 
 #endif

@@ -29,6 +29,13 @@ b32 validate_assignment(Interpreter* inter, i32 dst_vtype, Value src)
     
     i32 src_vtype = value_get_expected_vtype(src);
     
+    if (inter->mode != InterpreterMode_Execute)
+    {
+        if (src.vtype == VType_Any) {
+            src_vtype = dst_vtype;
+        }
+    }
+    
     if (dst_vtype != src_vtype) return false;
     
     if (is_null(src)) {
@@ -442,7 +449,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     }
     
     if (node->kind == OpKind_FunctionCall) {
-        return interpret_function_call(inter, node, true);
+        return interpret_function_call(inter, node, &context);
     }
     
     if (node->kind == OpKind_ArrayExpresion)
@@ -893,7 +900,7 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     }
 }
 
-Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion)
+Value interpret_function_call(Interpreter* inter, OpNode* node0, ExpresionContext* expresion_context)
 {
     SCRATCH();
     auto node = (OpNode_FunctionCall*)node0;
@@ -923,7 +930,7 @@ Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresio
         
         if (skip_ops(inter)) return value_nil();
         
-        return call_function(inter, fn, objects, node, is_expresion);
+        return call_function(inter, fn, objects, node, expresion_context);
     }
     
     if (symbol.type == SymbolType_Type)
@@ -1047,7 +1054,7 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     else if (node->kind == OpKind_WhileStatement) interpret_while_statement(inter, node);
     else if (node->kind == OpKind_ForStatement) interpret_for_statement(inter, node);
     else if (node->kind == OpKind_ForeachArrayStatement) interpret_foreach_array_statement(inter, node);
-    else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, false);
+    else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, NULL);
     else if (node->kind == OpKind_Return) interpret_return(inter, node);
     else if (node->kind == OpKind_Continue) interpret_continue(inter, node);
     else if (node->kind == OpKind_Break) interpret_break(inter, node);
@@ -1392,6 +1399,34 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
         else define_function(inter, node->code, node->identifier, parameters, return_vtype, return_reference, defined_fn);
     }
     
+    // Assign intrinsic functions
+    {
+        Array<IntrinsicDefinition> table = get_intrinsics_table(scratch.arena);
+        
+        for (auto it = pooled_array_make_iterator(&inter->functions); it.valid; ++it)
+        {
+            FunctionDefinition* fn = it.value;
+            if (!fn->is_intrinsic) continue;
+            
+            IntrinsicDefinition* intr = NULL;
+            
+            foreach(i, table.count) {
+                IntrinsicDefinition* intr0 = &table[i];
+                if (string_equals(intr0->name, fn->identifier)) {
+                    intr = intr0;
+                    break;
+                }
+            }
+            
+            if (intr == NULL) {
+                report_intrinsic_not_resolved(fn->code, fn->identifier);
+                continue;
+            }
+            
+            fn->intrinsic.fn = intr->fn;
+        }
+    }
+    
     // Args
     foreach(i, block->ops.count)
     {
@@ -1633,34 +1668,6 @@ internal_fn void register_definitions(Interpreter* inter)
         
         OpNode_Block* block = (OpNode_Block*)ast;
         interpret_definitions(block, inter, only_definitions);
-    }
-    
-    // Assign intrinsic functions
-    {
-        Array<IntrinsicDefinition> table = get_intrinsics_table(scratch.arena);
-        
-        for (auto it = pooled_array_make_iterator(&inter->functions); it.valid; ++it)
-        {
-            FunctionDefinition* fn = it.value;
-            if (!fn->is_intrinsic) continue;
-            
-            IntrinsicDefinition* intr = NULL;
-            
-            foreach(i, table.count) {
-                IntrinsicDefinition* intr0 = &table[i];
-                if (string_equals(intr0->name, fn->identifier)) {
-                    intr = intr0;
-                    break;
-                }
-            }
-            
-            if (intr == NULL) {
-                report_intrinsic_not_resolved(fn->code, fn->identifier);
-                continue;
-            }
-            
-            fn->intrinsic_fn = intr->fn;
-        }
     }
     
     // Analyze initialize expresions
@@ -2285,7 +2292,7 @@ ArgDefinition* find_arg_definition_by_name(Interpreter* inter, String name)
     return NULL;
 }
 
-Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node, b32 is_expresion)
+Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node, ExpresionContext* expresion_context)
 {
     SCRATCH();
     
@@ -2335,15 +2342,27 @@ Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
     
     b32 is_intrinsic = fn->is_intrinsic;
     
-    if (is_intrinsic && inter->mode != InterpreterMode_Execute) {
-        if (fn->return_vtype == VType_Void) return value_void();
-        return object_alloc(inter, fn->return_vtype);
+    if (is_intrinsic && inter->mode != InterpreterMode_Execute)
+    {
+        i32 vtype = fn->return_vtype;
+        if (vtype == VType_Any)
+        {
+            if (expresion_context != NULL) {
+                vtype = expresion_context->expected_vtype;
+            }
+            if (vtype <= VType_Any) vtype = VType_Int;
+        }
+        
+        if (vtype == VType_Void) return value_void();
+        Value value = object_alloc(inter, vtype);
+        value.vtype = fn->return_vtype;
+        return value;
     }
     
     FunctionReturn ret{};
     
     if (is_intrinsic) {
-        ret = fn->intrinsic_fn(inter, parameters, code);
+        ret = fn->intrinsic.fn(inter, parameters, code);
     }
     else {
         ret.return_value = value_void();
@@ -2372,7 +2391,7 @@ Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
         return value_nil();
     }
     
-    if (!ret.error_result.success && !is_expresion) {
+    if (!ret.error_result.success && expresion_context == NULL) {
         interpreter_report_runtime_error(inter, code, resolved_line, ret.error_result);
         return ret.return_value;
     }

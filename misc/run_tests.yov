@@ -1,4 +1,6 @@
 
+println("Running tests...");
+
 failed_count := 0;
 
 // Examples

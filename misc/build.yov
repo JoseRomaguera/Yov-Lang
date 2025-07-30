@@ -98,16 +98,15 @@ set_cd(root_path);
     msvc += "/I code/ /link ";
     for (flag : lflags) msvc += "/{flag} ";
     
-    calls.redirect_stdout = .Ignore;
-    res := call("cl");
-    
-    if (res.exit_code != 0)
-    {
-        println("MSVC environment is not initialized.\nPlease run the Visual Studio environment setup script before continuing. e.g:");
-        println("C:/Program Files/Microsoft Visual Studio/.../.../VC/Auxiliary/Build/vcvars64.bat");
-        exit(-1);
-    }
+    msvc_import_env_x64();
     
     calls.redirect_stdout = .Console;
     call(msvc);
+    
+    set_cd(root_path);
+}
+// Run tests
+if (mode == .Dist) {
+    calls.redirect_stdout = .Console;
+    res := call_script("misc/run_tests.yov", "", "");
 }

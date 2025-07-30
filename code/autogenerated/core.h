@@ -49,10 +49,11 @@ internal_fn void define_core(Interpreter* inter)
     }
     // enum RedirectStdout
     {
-        String n[3];
+        String n[4];
         n[0] = "Console";
         n[1] = "Ignore";
         n[2] = "Script";
+        n[3] = "ImportEnv";
         Array<String> names = array_make(n, array_count(n));
         define_enum(inter, "RedirectStdout", names, {});
     }
@@ -86,6 +87,14 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make("object", vtype_from_name(inter, "Any"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "typeof", parameters, vtype_from_name(inter, "Type"));
+    }
+    // function env
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[1];
+        p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "env", parameters, vtype_from_name(inter, "String"));
     }
     // function print
     {
@@ -178,6 +187,15 @@ internal_fn void define_core(Interpreter* inter)
         p[1] = obj_def_make("cursor", vtype_from_name(inter, "Int"), true);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "str_get_codepoint", parameters, vtype_from_name(inter, "Int"));
+    }
+    // function str_split
+    {
+        Array<ObjectDefinition> parameters{};
+        ObjectDefinition p[2];
+        p[0] = obj_def_make("str", vtype_from_name(inter, "String"), false);
+        p[1] = obj_def_make("separator", vtype_from_name(inter, "String"), false);
+        parameters = array_make(p, array_count(p));
+        define_intrinsic_function(inter, {}, "str_split", parameters, vtype_from_array_dimension(inter, vtype_from_name(inter, "String"), 1));
     }
     // function yov_require
     {
@@ -333,5 +351,15 @@ internal_fn void define_core(Interpreter* inter)
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
         define_intrinsic_function(inter, {}, "dir_get_files_info", parameters, vtype_from_array_dimension(inter, vtype_from_name(inter, "FileInfo"), 1));
+    }
+    // function msvc_import_env_x64
+    {
+        Array<ObjectDefinition> parameters{};
+        define_intrinsic_function(inter, {}, "msvc_import_env_x64", parameters, vtype_from_name(inter, "Bool"));
+    }
+    // function msvc_import_env_x86
+    {
+        Array<ObjectDefinition> parameters{};
+        define_intrinsic_function(inter, {}, "msvc_import_env_x86", parameters, vtype_from_name(inter, "Bool"));
     }
 }

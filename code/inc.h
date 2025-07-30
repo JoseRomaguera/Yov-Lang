@@ -358,6 +358,7 @@ enum RedirectStdout {
     RedirectStdout_Console,
     RedirectStdout_Ignore,
     RedirectStdout_Script,
+    RedirectStdout_ImportEnv,
 };
 
 struct CallResult {
@@ -377,8 +378,18 @@ b32 os_path_is_directory(String path);
 
 Array<String> os_get_args(Arena* arena);
 
+Result os_env_get(Arena* arena, String* out, String name);
+
 void os_thread_sleep(u64 millis);
 void os_console_wait();
+
+#define MSVC_Env_None 0
+#define MSVC_Env_x64 2
+#define MSVC_Env_x86 3
+
+u32    os_msvc_get_env_imported();
+Result os_msvc_find_path(String* out);
+Result os_msvc_import_env(u32 mode);
 
 //- MATH 
 
@@ -1180,8 +1191,11 @@ struct FunctionDefinition {
     b32 return_reference;
     
     CodeLocation code;
-    IntrinsicFunction* intrinsic_fn;
     OpNode_Block* defined_fn;
+    
+    struct {
+        IntrinsicFunction* fn;
+    } intrinsic;
     
     b8 is_intrinsic;
 };
@@ -1296,7 +1310,7 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0);
 void interpret_while_statement(Interpreter* inter, OpNode* node0);
 void interpret_for_statement(Interpreter* inter, OpNode* node0);
 void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0);
-Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 is_expresion);
+Value interpret_function_call(Interpreter* inter, OpNode* node0, ExpresionContext* expresion_context);
 i32 interpret_object_type(Interpreter* inter, OpNode* node0, b32 allow_reference);
 void interpret_return(Interpreter* inter, OpNode* node0);
 void interpret_continue(Interpreter* inter, OpNode* node0);
@@ -1336,7 +1350,7 @@ void define_intrinsic_function(Interpreter* inter, CodeLocation code, String ide
 Symbol find_symbol(Interpreter* inter, String identifier);
 FunctionDefinition* find_function(Interpreter* inter, String identifier);
 ArgDefinition* find_arg_definition_by_name(Interpreter* inter, String name);
-Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node, b32 is_expresion);
+Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node, ExpresionContext* expresion_context);
 
 VariableType vtype_get(Interpreter* inter, i32 vtype);
 b32 vtype_is_enum(Interpreter* inter, i32 vtype);

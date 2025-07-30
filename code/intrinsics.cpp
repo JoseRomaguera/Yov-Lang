@@ -21,6 +21,17 @@ internal_fn FunctionReturn intrinsic__typeof(Interpreter* inter, Array<Value> va
     return { type, res };
 }
 
+internal_fn FunctionReturn intrinsic__env(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String name = get_string(vars[0]);
+    String value;
+    Result res = os_env_get(scratch.arena, &value, name);
+    
+    return { alloc_string(inter, value), res };
+}
+
 internal_fn FunctionReturn intrinsic__print(Interpreter* inter, Array<Value> vars, CodeLocation code)
 {
     SCRATCH();
@@ -181,6 +192,23 @@ internal_fn FunctionReturn intrinsic__str_get_codepoint(Interpreter* inter, Arra
     scope_add_temporal(inter, last_scope, ret.obj);
     
     return { ret, RESULT_SUCCESS };
+}
+
+internal_fn FunctionReturn intrinsic__str_split(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    
+    String str = get_string(vars[0]);
+    String separator = get_string(vars[1]);
+    Array<String> result = string_split(scratch.arena, str, separator);
+    
+    Value array = alloc_array(inter, VType_String, result.count, true);
+    foreach(i, result.count) {
+        Value member = value_get_element(inter, array, i);
+        value_assign_ref(inter, &member, alloc_string(inter, result[i]));
+    }
+    
+    return { array, RESULT_SUCCESS };
 }
 
 //- YOV 
@@ -427,6 +455,22 @@ internal_fn FunctionReturn intrinsic__dir_get_files_info(Interpreter* inter, Arr
     return { ret, res };
 }
 
+//- MSVC 
+
+internal_fn FunctionReturn intrinsic__msvc_import_env_x64(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    Result res = os_msvc_import_env(MSVC_Env_x64);
+    return { alloc_bool(inter, res.success), res };
+}
+
+internal_fn FunctionReturn intrinsic__msvc_import_env_x86(Interpreter* inter, Array<Value> vars, CodeLocation code)
+{
+    SCRATCH();
+    Result res = os_msvc_import_env(MSVC_Env_x86);
+    return { alloc_bool(inter, res.success), res };
+}
+
 #define INTR(name, fn) { STR(name), fn }
 
 Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
@@ -434,6 +478,7 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
     IntrinsicDefinition table[] = {
         // Core
         INTR("typeof", intrinsic__typeof),
+        INTR("env", intrinsic__env),
         INTR("print", intrinsic__print),
         INTR("println", intrinsic__println),
         INTR("exit", intrinsic__exit),
@@ -448,6 +493,7 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         // String Utils
         INTR("path_resolve", intrinsic__path_resolve),
         INTR("str_get_codepoint", intrinsic__str_get_codepoint),
+        INTR("str_split", intrinsic__str_split),
         
         // Yov
         INTR("yov_require", intrinsic__yov_require),
@@ -470,6 +516,10 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("write_entire_file", intrinsic__write_entire_file),
         INTR("file_get_info", intrinsic__file_get_info),
         INTR("dir_get_files_info", intrinsic__dir_get_files_info),
+        
+        // MSVC
+        INTR("msvc_import_env_x64", intrinsic__msvc_import_env_x64),
+        INTR("msvc_import_env_x86", intrinsic__msvc_import_env_x86),
     };
     
     return array_copy(arena, array_make(table, array_count(table)));

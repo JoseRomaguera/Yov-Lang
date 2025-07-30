@@ -29,7 +29,7 @@ OS :: struct {
 }
 
 RedirectStdout :: enum {
-    Console, Ignore, Script
+    Console, Ignore, Script, ImportEnv
 }
 
 CallsContext :: struct {
@@ -42,7 +42,9 @@ os      :: OS();
 calls   :: CallsContext();
 
 // Core
+
 typeof  :: (object: Any) -> Type;
+env     :: (name: String) -> String;
 print   :: (object: Any);
 println :: (object: Any);
 exit    :: (exit_code: Int);
@@ -63,6 +65,7 @@ call_script :: (path: String, arguments: String, yov_arguments: String) -> CallR
 // String Utils
 path_resolve :: (path: String) -> String;
 str_get_codepoint :: (str: String, cursor: Int&) -> Int;
+str_split :: (str: String, separator: String) -> String[];
 
 // Yov
 yov_require     :: (major: Int, minor: Int);
@@ -96,3 +99,8 @@ read_entire_file   :: (path: String, content: String&) -> Bool;
 write_entire_file  :: (path: String, content: String) -> Bool;
 file_get_info      :: (path: String) -> FileInfo;
 dir_get_files_info :: (path: String) -> FileInfo[];
+
+// MSVC
+
+msvc_import_env_x64 :: () -> Bool;
+msvc_import_env_x86 :: () -> Bool;

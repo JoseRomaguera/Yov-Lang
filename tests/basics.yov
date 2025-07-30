@@ -32,3 +32,11 @@ inter1 := "str0 is empty = {str0.size == 0}";
 assert(inter0 == "str0.size = 11");
 assert(inter1 == "str0 is empty = false");
 
+// Intrinsics
+
+path := env("PATH");
+paths := str_split(path, ";");
+
+for (p: paths) {
+    p = path_resolve(p);
+}
