@@ -18,8 +18,7 @@ expr_name :: arg -> String {
 
 println("Reading file: {src_path}");
 
-raw: String;
-read_entire_file(src_path, &raw);
+raw := read_entire_file(src_path);
 
 println("Processing text");
 
@@ -27,8 +26,9 @@ lines: String[];
 {
     line: String;
     cursor := 0;
+    codepoint := 0;
     while (cursor < raw.size) {
-        codepoint := str_get_codepoint(raw, &cursor);
+        codepoint, cursor = str_get_codepoint(raw, cursor);
         
         if (codepoint == '\r') continue;
         

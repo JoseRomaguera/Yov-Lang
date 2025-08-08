@@ -1,4 +1,10 @@
 
+Result :: struct {
+    failed: Bool;
+    message: String;
+    code: Int;
+}
+
 YovInfo :: struct {
     path: String;
     version: String;
@@ -47,33 +53,33 @@ typeof  :: (object: Any) -> Type;
 print   :: (object: Any);
 println :: (object: Any);
 exit    :: (exit_code: Int);
-set_cd  :: (cd: String);
-assert  :: (result: Bool) -> Bool;
+set_cd  :: (cd: String) -> Result;
+assert  :: (result: Bool) -> Result;
+failed :: (message: String, exit_code: Int) -> Result;
 
-env       :: (name: String) -> String;
-env_path  :: (name: String) -> String;
-env_array :: (name: String) -> String[];
+env            :: (name: String) -> (value: String, result: Result);
+env_path       :: (name: String) -> (value: String, result: Result);
+env_path_array :: (name: String) -> (value: String[], result: Result);
 
 // External Calls
 
-CallResult :: struct {
+CallOutput :: struct {
     stdout: String;
-    exit_code: Int;
 }
 
-call        :: (command: String) -> CallResult;
-call_exe    :: (path: String, arguments: String) -> CallResult;
-call_script :: (path: String, arguments: String, yov_arguments: String) -> CallResult;
+call        :: (command: String) -> (out: CallOutput, result: Result);
+call_exe    :: (path: String, arguments: String) -> (out: CallOutput, result: Result);
+call_script :: (path: String, arguments: String, yov_arguments: String) -> (out: CallOutput, result: Result);
 
 // String Utils
 path_resolve :: (path: String) -> String;
-str_get_codepoint :: (str: String, cursor: Int&) -> Int;
+str_get_codepoint :: (str: String, cursor: Int) -> (codepoint: Int, next_cursor: Int);
 str_split :: (str: String, separator: String) -> String[];
 
 // Yov
-yov_require     :: (major: Int, minor: Int);
-yov_require_min :: (major: Int, minor: Int);
-yov_require_max :: (major: Int, minor: Int);
+yov_require     :: (major: Int, minor: Int) -> Result;
+yov_require_min :: (major: Int, minor: Int) -> Result;
+yov_require_max :: (major: Int, minor: Int) -> Result;
 
 // User
 ask_yesno :: (text: String) -> Bool;
@@ -91,19 +97,19 @@ FileInfo :: struct {
 }
 
 exists             :: (path: String) -> Bool;
-create_directory   :: (path: String, recursive: Bool) -> Bool;
-delete_directory   :: (path: String) -> Bool;
-copy_directory     :: (dst: String, src: String) -> Bool;
-move_directory     :: (dst: String, src: String) -> Bool;
-copy_file          :: (dst: String, src: String, mode: CopyMode) -> Bool;
-move_file          :: (dst: String, src: String) -> Bool;
-delete_file        :: (path: String) -> Bool;
-read_entire_file   :: (path: String, content: String&) -> Bool;
-write_entire_file  :: (path: String, content: String) -> Bool;
-file_get_info      :: (path: String) -> FileInfo;
-dir_get_files_info :: (path: String) -> FileInfo[];
+create_directory   :: (path: String, recursive: Bool) -> Result;
+delete_directory   :: (path: String) -> Result;
+copy_directory     :: (dst: String, src: String) -> Result;
+move_directory     :: (dst: String, src: String) -> Result;
+copy_file          :: (dst: String, src: String, mode: CopyMode) -> Result;
+move_file          :: (dst: String, src: String) -> Result;
+delete_file        :: (path: String) -> Result;
+read_entire_file   :: (path: String) -> (content: String, result: Result);
+write_entire_file  :: (path: String, content: String) -> Result;
+file_get_info      :: (path: String) -> (info: FileInfo, result: Result);
+dir_get_files_info :: (path: String) -> (infos: FileInfo[], result: Result);
 
 // MSVC
 
-msvc_import_env_x64 :: () -> Bool;
-msvc_import_env_x86 :: () -> Bool;
+msvc_import_env_x64 :: () -> Result;
+msvc_import_env_x86 :: () -> Result;

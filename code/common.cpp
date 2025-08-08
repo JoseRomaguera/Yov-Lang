@@ -1,8 +1,8 @@
 #include "inc.h"
 
-void assertion_failed(const char* text)
+void assertion_failed(const char* text, const char* file, u32 line)
 {
-    os_print(Severity_Error, STR(text));
+    os_print(Severity_Error, text);
     *((u8*)0) = 0;
 }
 
@@ -1310,6 +1310,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_Block) return sizeof(OpNode_Block);
     if (kind == OpKind_Assignment) return sizeof(OpNode_Assignment);
     if (kind == OpKind_Symbol) return sizeof(OpNode_Symbol);
+    if (kind == OpKind_ParameterList) return sizeof(OpNode_ParameterList);
     if (kind == OpKind_Indexing) return sizeof(OpNode_Indexing);
     if (kind == OpKind_IfStatement) return sizeof(OpNode_IfStatement);
     if (kind == OpKind_WhileStatement) return sizeof(OpNode_WhileStatement);
@@ -1460,6 +1461,7 @@ void yov_initialize()
     initialize_scratch_arenas();
     
     os_initialize();
+    yov->timer_start = os_timer_get();
     
     yov->scripts = pooled_array_make<YovScript>(yov->static_arena, 8);
     yov->reports = pooled_array_make<Report>(yov->static_arena, 32);
@@ -1519,7 +1521,7 @@ void yov_shutdown()
     yov = NULL;
 }
 
-void yov_set_exit_code(i32 exit_code)
+void yov_set_exit_code(i64 exit_code)
 {
     if (yov->exit_code_is_set) return;
     yov->exit_code_is_set = true;
@@ -1606,7 +1608,7 @@ i32 yov_import_script(String path)
     assert(os_path_is_absolute(path));
     
     RawBuffer raw_file;
-    if (!os_read_entire_file(yov->static_arena, path, &raw_file).success) {
+    if (os_read_entire_file(yov->static_arena, path, &raw_file).failed) {
         report_error(NO_CODE, "File '%S' not found\n", path);
         return -1;
     }

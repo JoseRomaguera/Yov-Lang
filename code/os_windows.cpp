@@ -59,6 +59,10 @@ void os_initialize()
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     
+    LARGE_INTEGER _windows_clock_frequency;
+    QueryPerformanceFrequency(&_windows_clock_frequency);
+    yov->timer_frequency = _windows_clock_frequency.QuadPart;
+    
     yov->os.internal = arena_push_struct<Windows>(yov->static_arena);
     Windows* windows = (Windows*)yov->os.internal;
 }
@@ -88,7 +92,7 @@ void os_print(Severity severity, String text)
 }
 
 void* os_allocate_heap(u64 size) {
-    return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+    return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size_t)size);
 }
 
 void os_free_heap(void* address) {
@@ -100,7 +104,7 @@ void* os_reserve_virtual_memory(u32 pages, b32 commit)
     u64 bytes = (u64)pages * yov->os.page_size;
     u32 flags = MEM_RESERVE;
     if (commit) flags |= MEM_COMMIT;
-    return VirtualAlloc(NULL, bytes, flags, PAGE_READWRITE);
+    return VirtualAlloc(NULL, (size_t)bytes, flags, PAGE_READWRITE);
 }
 void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count)
 {
@@ -108,7 +112,7 @@ void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count)
     u64 byte_offset = (u64)page_offset * page_size;
     u8* ptr = (u8*)address + byte_offset;
     u64 bytes = (u64)page_count * page_size;
-    VirtualAlloc(ptr, bytes, MEM_COMMIT, PAGE_READWRITE);
+    VirtualAlloc(ptr, (size_t)bytes, MEM_COMMIT, PAGE_READWRITE);
 }
 void os_release_virtual_memory(void* address)
 {
@@ -118,23 +122,24 @@ void os_release_virtual_memory(void* address)
 internal_fn String string_from_win_error(DWORD error)
 {
     if (error == 0) return {};
-    if (error == ERROR_FILE_NOT_FOUND) return STR("File not found");
-    if (error == ERROR_PATH_NOT_FOUND) return STR("Path not found");
-    if (error == ERROR_BAD_PATHNAME) return STR("Invalid path");
-    if (error == ERROR_INVALID_NAME) return STR("Invalid name");
-    if (error == ERROR_ACCESS_DENIED) return STR("Access denied");
-    if (error == ERROR_NOT_ENOUGH_MEMORY) return STR("Not enough memory");
-    if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) return STR("Operation blocked by other process");
-    if (error == ERROR_FILENAME_EXCED_RANGE) return STR("Path exceded limit");
-    if (error == ERROR_FILE_EXISTS) return STR("File already exists");
-    if (error == ERROR_ALREADY_EXISTS) return STR("Already exists");
-    if (error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL ) return STR("Disk is full");
-    if (error == ERROR_WRITE_PROTECT) return STR("Can't write");
-    if (error == ERROR_OPERATION_ABORTED) return STR("Operation aborted");
-    if (error == ERROR_VIRUS_INFECTED) return STR("Operation aborted, virus detected");
-    if (error == ERROR_FILE_TOO_LARGE) return STR("File too large");
-    if (error == ERROR_DIRECTORY) return STR("It's a directory");
-    return STR("Unknown error");
+    if (error == ERROR_FILE_NOT_FOUND) return "File not found";
+    if (error == ERROR_PATH_NOT_FOUND) return "Path not found";
+    if (error == ERROR_BAD_PATHNAME) return "Invalid path";
+    if (error == ERROR_INVALID_NAME) return "Invalid name";
+    if (error == ERROR_ACCESS_DENIED) return "Access denied";
+    if (error == ERROR_NOT_ENOUGH_MEMORY) return "Not enough memory";
+    if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) return "Operation blocked by other process";
+    if (error == ERROR_FILENAME_EXCED_RANGE) return "Path exceded limit";
+    if (error == ERROR_FILE_EXISTS) return "File already exists";
+    if (error == ERROR_ALREADY_EXISTS) return "Already exists";
+    if (error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL ) return "Disk is full";
+    if (error == ERROR_WRITE_PROTECT) return "Can't write";
+    if (error == ERROR_OPERATION_ABORTED) return "Operation aborted";
+    if (error == ERROR_VIRUS_INFECTED) return "Operation aborted, virus detected";
+    if (error == ERROR_FILE_TOO_LARGE) return "File too large";
+    if (error == ERROR_DIRECTORY) return "It's a directory";
+    if (error == ERROR_ENVVAR_NOT_FOUND) return "Environment variable not found";
+    return "Unknown WinAPI error";
 }
 
 internal_fn String string_from_last_error()
@@ -266,7 +271,7 @@ Result os_create_directory(String path, b32 recursive)
     
 	if (recursive) {
         Result res = create_recursive_path(path0);
-        if (!res.success) return res;
+        if (res.failed) return res;
     }
     
     b32 success = (b32)CreateDirectory(path0.data, NULL);
@@ -316,7 +321,7 @@ internal_fn Result delete_directory_recursive(String path)
                 res = os_delete_file(file_path);
             }
             
-            if (!res.success) return res;
+            if (res.failed) return res;
         }
         
         if (FindNextFileA(find_handle, &find_data) == 0) {
@@ -357,7 +362,7 @@ internal_fn Result copy_directory_recursive(String dst_path, String src_path, b3
     
     {
         Result res = os_create_directory(dst_path, true);
-        if (!res.success) return res;
+        if (res.failed) return res;
     }
     
     String path_querry = string_format(scratch.arena, "%S\\*", src_path);
@@ -391,7 +396,7 @@ internal_fn Result copy_directory_recursive(String dst_path, String src_path, b3
                 res = os_copy_file(file_dst, file_src, false);
             }
             
-            if (!res.success) return res;
+            if (res.failed) return res;
         }
         
         if (FindNextFileA(find_handle, &find_data) == 0) {
@@ -409,7 +414,7 @@ internal_fn Result copy_directory_recursive(String dst_path, String src_path, b3
     
     if (is_moving) {
         Result res = delete_directory_recursive(src_path);
-        if (!res.success) return res;
+        if (res.failed) return res;
     }
     
     return RESULT_SUCCESS;
@@ -565,7 +570,7 @@ b32 os_ask_yesno(String title, String content)
     return MessageBox(0, content0.data, title0.data, MB_YESNO | MB_ICONQUESTION) == IDYES;
 }
 
-CallResult os_call(Arena* arena, String working_dir, String command, RedirectStdout redirect_stdout)
+CallOutput os_call(Arena* arena, String working_dir, String command, RedirectStdout redirect_stdout)
 {
     SCRATCH(arena);
     
@@ -588,7 +593,7 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
     HANDLE stdout_read = 0;
     HANDLE stdout_write = 0;
     
-    CallResult res{};
+    CallOutput res{};
     
     if (!CreatePipe(&stdout_read, &stdout_write, &security_attr, 0)) {
         res.result = result_failed_make(string_from_last_error());
@@ -692,12 +697,12 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
         if (exit_code != 0) res.result = result_failed_make("Exited with code != 0", exit_code);
         else {
             res.result = RESULT_SUCCESS;
-            res.result.exit_code = exit_code;
+            res.result.code = exit_code;
         }
     }
     
     // Import env
-    if (res.result.exit_code == 0 && redirect_stdout == RedirectStdout_ImportEnv)
+    if (res.result.code == 0 && redirect_stdout == RedirectStdout_ImportEnv)
     {
         Array<String> split = string_split(scratch.arena, res.stdout, env_separator);
         if (split.count != 2) {
@@ -737,14 +742,14 @@ CallResult os_call(Arena* arena, String working_dir, String command, RedirectStd
     return res;
 }
 
-CallResult os_call_exe(Arena* arena, String working_dir, String exe, String args, RedirectStdout redirect_stdout)
+CallOutput os_call_exe(Arena* arena, String working_dir, String exe, String args, RedirectStdout redirect_stdout)
 {
     SCRATCH(arena);
     String command = string_format(scratch.arena, "\"%S.exe\" %S", exe, args);
     return os_call(arena, working_dir, command, redirect_stdout);
 }
 
-CallResult os_call_script(Arena* arena, String working_dir, String script, String args, String yov_args, RedirectStdout redirect_stdout)
+CallOutput os_call_script(Arena* arena, String working_dir, String script, String args, String yov_args, RedirectStdout redirect_stdout)
 {
     SCRATCH(arena);
     String inherited_yov_args = yov_get_inherited_args(scratch.arena);
@@ -875,8 +880,8 @@ void os_console_wait()
 
 u32 os_msvc_get_env_imported() {
     SCRATCH();
-    CallResult res = os_call(scratch.arena, {}, "cl", RedirectStdout_Script);
-    if (res.result.exit_code != 0) return MSVC_Env_None;
+    CallOutput res = os_call(scratch.arena, {}, "cl", RedirectStdout_Script);
+    if (res.result.code != 0) return MSVC_Env_None;
     
     String out = res.stdout;
     
@@ -905,8 +910,8 @@ Result os_msvc_find_path(Arena* arena, String* out)
     String vs_where_path = string_format(scratch.arena, "%S/Microsoft Visual Studio/Installer/vswhere.exe", program_files_path);
     String vs_where_command = string_format(scratch.arena, "\"%S\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath", vs_where_path);
     
-    CallResult call_res = os_call(scratch.arena, {}, vs_where_command, RedirectStdout_Script);
-    if (!call_res.result.success) return call_res.result;
+    CallOutput call_res = os_call(scratch.arena, {}, vs_where_command, RedirectStdout_Script);
+    if (call_res.result.failed) return call_res.result;
     
     *out = path_resolve(arena, call_res.stdout);
     return RESULT_SUCCESS;
@@ -929,15 +934,15 @@ Result os_msvc_import_env(u32 mode)
     {
         String vs_path;
         res = os_msvc_find_path(scratch.arena, &vs_path);
-        if (!res.success) return res;
+        if (res.failed) return res;
         
         String batch_name = (mode == MSVC_Env_x86) ? "vcvars32" : "vcvars64";
         batch_path = string_format(scratch.arena, "%S/VC/Auxiliary/Build/%S.bat", vs_path, batch_name);
     }
     
     // Execute
-    CallResult call_res = os_call(scratch.arena, {}, batch_path, RedirectStdout_ImportEnv);
-    if (!call_res.result.success) return call_res.result;
+    CallOutput call_res = os_call(scratch.arena, {}, batch_path, RedirectStdout_ImportEnv);
+    if (call_res.result.failed) return call_res.result;
     
     if (os_msvc_get_env_imported() != mode) {
         return result_failed_make("MSVC environment is not imported properly");
@@ -946,6 +951,13 @@ Result os_msvc_import_env(u32 mode)
     //print_info("MSVC Env ready for %s\n", mode == MSVC_Env_x64 ? "x64" : "x86");
     
     return res;
+}
+
+u64 os_timer_get()
+{
+    LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+    return now.QuadPart - yov->timer_start;
 }
 
 #endif

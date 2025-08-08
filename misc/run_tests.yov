@@ -32,15 +32,16 @@ failed_count := 0;
 }
 
 println("Failed: {failed_count}");
+exit(failed_count);
 
-run_test :: (name: String, args: String, expected_exit_code: Int)
+run_test :: (name: String, args: String, expected_code: Int)
 {
     calls.redirect_stdout = RedirectStdout.Script;
-    res := call_script(name, args, "-no_user");
-    if (res.exit_code != expected_exit_code) {
+    out, res := call_script(name, args, "-no_user");
+    if (res.code != expected_code) {
         failed_count += 1;
         println("-> Test failed: {name}");
-        println(res.stdout);
+        println(out.stdout);
     }
     else {
         println("Test succeded: {name}");

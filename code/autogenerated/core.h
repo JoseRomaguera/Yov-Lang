@@ -2,6 +2,15 @@
 
 internal_fn void define_core(Interpreter* inter)
 {
+    // struct Result
+    {
+        ObjectDefinition m[3];
+        m[0] = obj_def_make("failed", vtype_from_name(inter, "Bool"), false);
+        m[1] = obj_def_make("message", vtype_from_name(inter, "String"), false);
+        m[2] = obj_def_make("code", vtype_from_name(inter, "Int"), false);
+        Array<ObjectDefinition> members = array_make(m, array_count(m));
+        define_struct(inter, "Result", members);
+    }
     // struct YovInfo
     {
         ObjectDefinition m[5];
@@ -27,8 +36,8 @@ internal_fn void define_core(Interpreter* inter)
         m[0] = obj_def_make("cd", vtype_from_name(inter, "String"), false);
         m[1] = obj_def_make("script_dir", vtype_from_name(inter, "String"), false);
         m[2] = obj_def_make("caller_dir", vtype_from_name(inter, "String"), false);
-        m[3] = obj_def_make("args", vtype_from_array_dimension(inter, vtype_from_name(inter, "String"), 1), false);
-        m[4] = obj_def_make("types", vtype_from_array_dimension(inter, vtype_from_name(inter, "Type"), 1), false);
+        m[3] = obj_def_make("args", vtype_from_dimension(inter, vtype_from_name(inter, "String"), 1), false);
+        m[4] = obj_def_make("types", vtype_from_dimension(inter, vtype_from_name(inter, "Type"), 1), false);
         Array<ObjectDefinition> members = array_make(m, array_count(m));
         define_struct(inter, "Context", members);
     }
@@ -66,187 +75,273 @@ internal_fn void define_core(Interpreter* inter)
     }
     // global yov
     {
-        ObjectRef* ref = scope_define_object_ref(inter, "yov", value_def(inter, vtype_from_name(inter, "YovInfo")));
+        Value value = scope_define_value(inter, "yov", value_def(inter, vtype_from_name(inter, "YovInfo")));
     }
     // global context
     {
-        ObjectRef* ref = scope_define_object_ref(inter, "context", value_def(inter, vtype_from_name(inter, "Context")));
+        Value value = scope_define_value(inter, "context", value_def(inter, vtype_from_name(inter, "Context")));
     }
     // global os
     {
-        ObjectRef* ref = scope_define_object_ref(inter, "os", value_def(inter, vtype_from_name(inter, "OS")));
+        Value value = scope_define_value(inter, "os", value_def(inter, vtype_from_name(inter, "OS")));
     }
     // global calls
     {
-        ObjectRef* ref = scope_define_object_ref(inter, "calls", value_def(inter, vtype_from_name(inter, "CallsContext")));
+        Value value = scope_define_value(inter, "calls", value_def(inter, vtype_from_name(inter, "CallsContext")));
     }
     // function typeof
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("object", vtype_from_name(inter, "Any"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "typeof", parameters, vtype_from_name(inter, "Type"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Type"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "typeof", parameters, returns);
     }
     // function print
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("object", vtype_from_name(inter, "Any"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "print", parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "print", parameters, returns);
     }
     // function println
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("object", vtype_from_name(inter, "Any"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "println", parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "println", parameters, returns);
     }
     // function exit
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("exit_code", vtype_from_name(inter, "Int"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "exit", parameters, VType_Void);
+        define_intrinsic_function(inter, {}, "exit", parameters, returns);
     }
     // function set_cd
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("cd", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "set_cd", parameters, VType_Void);
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "set_cd", parameters, returns);
     }
     // function assert
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("result", vtype_from_name(inter, "Bool"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "assert", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "assert", parameters, returns);
+    }
+    // function failed
+    {
+        Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
+        ObjectDefinition p[2];
+        p[0] = obj_def_make("message", vtype_from_name(inter, "String"), false);
+        p[1] = obj_def_make("exit_code", vtype_from_name(inter, "Int"), false);
+        parameters = array_make(p, array_count(p));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "failed", parameters, returns);
     }
     // function env
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "env", parameters, vtype_from_name(inter, "String"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("value", vtype_from_name(inter, "String"), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "env", parameters, returns);
     }
     // function env_path
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "env_path", parameters, vtype_from_name(inter, "String"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("value", vtype_from_name(inter, "String"), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "env_path", parameters, returns);
     }
-    // function env_array
+    // function env_path_array
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("name", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "env_array", parameters, vtype_from_array_dimension(inter, vtype_from_name(inter, "String"), 1));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("value", vtype_from_dimension(inter, vtype_from_name(inter, "String"), 1), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "env_path_array", parameters, returns);
     }
-    // struct CallResult
+    // struct CallOutput
     {
-        ObjectDefinition m[2];
+        ObjectDefinition m[1];
         m[0] = obj_def_make("stdout", vtype_from_name(inter, "String"), false);
-        m[1] = obj_def_make("exit_code", vtype_from_name(inter, "Int"), false);
         Array<ObjectDefinition> members = array_make(m, array_count(m));
-        define_struct(inter, "CallResult", members);
+        define_struct(inter, "CallOutput", members);
     }
     // function call
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("command", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "call", parameters, vtype_from_name(inter, "CallResult"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("out", vtype_from_name(inter, "CallOutput"), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "call", parameters, returns);
     }
     // function call_exe
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("arguments", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "call_exe", parameters, vtype_from_name(inter, "CallResult"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("out", vtype_from_name(inter, "CallOutput"), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "call_exe", parameters, returns);
     }
     // function call_script
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[3];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("arguments", vtype_from_name(inter, "String"), false);
         p[2] = obj_def_make("yov_arguments", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "call_script", parameters, vtype_from_name(inter, "CallResult"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("out", vtype_from_name(inter, "CallOutput"), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "call_script", parameters, returns);
     }
     // function path_resolve
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "path_resolve", parameters, vtype_from_name(inter, "String"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "String"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "path_resolve", parameters, returns);
     }
     // function str_get_codepoint
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("str", vtype_from_name(inter, "String"), false);
-        p[1] = obj_def_make("cursor", vtype_from_name(inter, "Int"), true);
+        p[1] = obj_def_make("cursor", vtype_from_name(inter, "Int"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "str_get_codepoint", parameters, vtype_from_name(inter, "Int"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("codepoint", vtype_from_name(inter, "Int"), false);
+        r[1] = obj_def_make("next_cursor", vtype_from_name(inter, "Int"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "str_get_codepoint", parameters, returns);
     }
     // function str_split
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("str", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("separator", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "str_split", parameters, vtype_from_array_dimension(inter, vtype_from_name(inter, "String"), 1));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_dimension(inter, vtype_from_name(inter, "String"), 1), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "str_split", parameters, returns);
     }
     // function yov_require
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("major", vtype_from_name(inter, "Int"), false);
         p[1] = obj_def_make("minor", vtype_from_name(inter, "Int"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "yov_require", parameters, VType_Void);
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "yov_require", parameters, returns);
     }
     // function yov_require_min
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("major", vtype_from_name(inter, "Int"), false);
         p[1] = obj_def_make("minor", vtype_from_name(inter, "Int"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "yov_require_min", parameters, VType_Void);
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "yov_require_min", parameters, returns);
     }
     // function yov_require_max
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("major", vtype_from_name(inter, "Int"), false);
         p[1] = obj_def_make("minor", vtype_from_name(inter, "Int"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "yov_require_max", parameters, VType_Void);
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "yov_require_max", parameters, returns);
     }
     // function ask_yesno
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("text", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "ask_yesno", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Bool"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "ask_yesno", parameters, returns);
     }
     // enum CopyMode
     {
@@ -267,115 +362,173 @@ internal_fn void define_core(Interpreter* inter)
     // function exists
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "exists", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Bool"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "exists", parameters, returns);
     }
     // function create_directory
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("recursive", vtype_from_name(inter, "Bool"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "create_directory", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "create_directory", parameters, returns);
     }
     // function delete_directory
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "delete_directory", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "delete_directory", parameters, returns);
     }
     // function copy_directory
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("dst", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("src", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "copy_directory", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "copy_directory", parameters, returns);
     }
     // function move_directory
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("dst", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("src", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "move_directory", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "move_directory", parameters, returns);
     }
     // function copy_file
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[3];
         p[0] = obj_def_make("dst", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("src", vtype_from_name(inter, "String"), false);
         p[2] = obj_def_make("mode", vtype_from_name(inter, "CopyMode"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "copy_file", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "copy_file", parameters, returns);
     }
     // function move_file
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("dst", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("src", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "move_file", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "move_file", parameters, returns);
     }
     // function delete_file
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "delete_file", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "delete_file", parameters, returns);
     }
     // function read_entire_file
     {
         Array<ObjectDefinition> parameters{};
-        ObjectDefinition p[2];
+        Array<ObjectDefinition> returns{};
+        ObjectDefinition p[1];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
-        p[1] = obj_def_make("content", vtype_from_name(inter, "String"), true);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "read_entire_file", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("content", vtype_from_name(inter, "String"), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "read_entire_file", parameters, returns);
     }
     // function write_entire_file
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[2];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         p[1] = obj_def_make("content", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "write_entire_file", parameters, vtype_from_name(inter, "Bool"));
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "write_entire_file", parameters, returns);
     }
     // function file_get_info
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "file_get_info", parameters, vtype_from_name(inter, "FileInfo"));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("info", vtype_from_name(inter, "FileInfo"), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "file_get_info", parameters, returns);
     }
     // function dir_get_files_info
     {
         Array<ObjectDefinition> parameters{};
+        Array<ObjectDefinition> returns{};
         ObjectDefinition p[1];
         p[0] = obj_def_make("path", vtype_from_name(inter, "String"), false);
         parameters = array_make(p, array_count(p));
-        define_intrinsic_function(inter, {}, "dir_get_files_info", parameters, vtype_from_array_dimension(inter, vtype_from_name(inter, "FileInfo"), 1));
+        ObjectDefinition r[2];
+        r[0] = obj_def_make("infos", vtype_from_dimension(inter, vtype_from_name(inter, "FileInfo"), 1), false);
+        r[1] = obj_def_make("result", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "dir_get_files_info", parameters, returns);
     }
     // function msvc_import_env_x64
     {
         Array<ObjectDefinition> parameters{};
-        define_intrinsic_function(inter, {}, "msvc_import_env_x64", parameters, vtype_from_name(inter, "Bool"));
+        Array<ObjectDefinition> returns{};
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "msvc_import_env_x64", parameters, returns);
     }
     // function msvc_import_env_x86
     {
         Array<ObjectDefinition> parameters{};
-        define_intrinsic_function(inter, {}, "msvc_import_env_x86", parameters, vtype_from_name(inter, "Bool"));
+        Array<ObjectDefinition> returns{};
+        ObjectDefinition r[1];
+        r[0] = obj_def_make("return", vtype_from_name(inter, "Result"), false);
+        returns = array_make(r, array_count(r));
+        define_intrinsic_function(inter, {}, "msvc_import_env_x86", parameters, returns);
     }
 }

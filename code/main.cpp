@@ -14,10 +14,10 @@ int main()
     yov_run();
 #endif
     
-    i32 exit_code = yov->exit_code;
+    i64 exit_code = yov->exit_code;
     yov_shutdown();
     
-    return exit_code;
+    return (i32)exit_code;
 }
 
 #include "common.cpp"

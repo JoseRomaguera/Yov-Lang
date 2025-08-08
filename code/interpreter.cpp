@@ -1,224 +1,77 @@
 #include "inc.h"
 
-constexpr Object _make_object(i32 vtype) {
+constexpr Object _make_object(VariableType* vtype) {
     Object obj{};
     obj.vtype = vtype;
     return obj;
 }
-constexpr ObjectRef _make_object_ref(i32 vtype, Object* obj) {
+constexpr ObjectRef _make_object_ref(VariableType* vtype, Object* obj) {
     ObjectRef ref{};
     ref.vtype = vtype;
     ref.object = obj;
     return ref;
 }
+constexpr VariableType _make_vtype(VTypeID ID, VariableType* child, const char* name, u32 name_size) {
+    VariableType type{};
+    type.ID = ID;
+    type.name.size = name_size;
+    type.name.data = (char*)name;
+    type.kind = VariableKind_Unknown;
+    type.child_next = child;
+    type.child_base = child;
+    return type;
+}
 
-read_only Object _nil_obj = _make_object(VType_Unknown);
-read_only Object _null_obj = _make_object(VType_Void);
-read_only ObjectRef _nil_ref = _make_object_ref(VType_Unknown, nil_obj);
+read_only VariableType _nil_vtype = _make_vtype(VTypeID_Unknown, &_nil_vtype, "Unknown", sizeof("Unknown"));
+read_only VariableType _void_vtype = _make_vtype(VTypeID_Void, &_nil_vtype, "void", sizeof("void"));
+
+read_only Object _nil_obj = _make_object(&_nil_vtype);
+read_only Object _null_obj = _make_object(&_void_vtype);
+read_only ObjectRef _nil_ref = _make_object_ref(&_nil_vtype, nil_obj);
+
+VariableType* nil_vtype = &_nil_vtype;
+VariableType* void_vtype = &_void_vtype;
 
 Object* nil_obj = &_nil_obj;
 Object* null_obj = &_null_obj;
 ObjectRef* nil_ref = &_nil_ref;
 
-b32 validate_assignment(Interpreter* inter, i32 dst_vtype, Value src)
-{
-    SCRATCH();
-    if (dst_vtype == VType_Any) {
-        return true;
-    }
-    
-    i32 src_vtype = value_get_expected_vtype(src);
-    
-    if (inter->mode != InterpreterMode_Execute)
-    {
-        if (src.vtype == VType_Any) {
-            src_vtype = dst_vtype;
-        }
-    }
-    
-    if (dst_vtype != src_vtype) return false;
-    
-    if (is_null(src)) {
-        if (dst_vtype <= 0) return false;
-        if (dst_vtype == VType_Any) return false;
-    }
-    
-    return true;
+ExpresionContext ExpresionContext_from_void() {
+    ExpresionContext ctx{};
+    ctx.vtype = void_vtype;
+    return ctx;
 }
 
-internal_fn Value solve_binary_operation(Interpreter* inter, Value left, Value right, BinaryOperator op, CodeLocation code)
-{
-    SCRATCH();
-    
-    i32 left_vtype = value_get_expected_vtype(left);
-    i32 right_vtype = value_get_expected_vtype(right);
-    
-    VariableType left_type = vtype_get(inter, left_vtype);
-    VariableType right_type = vtype_get(inter, right_vtype);
-    
-    if (is_int(left) && is_int(right)) {
-        if (op == BinaryOperator_Addition) return alloc_int(inter, get_int(left) + get_int(right));
-        if (op == BinaryOperator_Substraction) return alloc_int(inter, get_int(left) - get_int(right));
-        if (op == BinaryOperator_Multiplication) return alloc_int(inter, get_int(left) * get_int(right));
-        if (op == BinaryOperator_Division || op == BinaryOperator_Modulo) {
-            i64 divisor = get_int(right);
-            if (divisor == 0) {
-                report_zero_division(code);
-                return alloc_int(inter, i64_max);
-            }
-            if (op == BinaryOperator_Modulo) return alloc_int(inter, get_int(left) % divisor);
-            return alloc_int(inter, get_int(left) / divisor);
-        }
-        if (op == BinaryOperator_Equals) return alloc_bool(inter, get_int(left) == get_int(right));
-        if (op == BinaryOperator_NotEquals) return alloc_bool(inter, get_int(left) != get_int(right));
-        if (op == BinaryOperator_LessThan) return alloc_bool(inter, get_int(left) < get_int(right));
-        if (op == BinaryOperator_LessEqualsThan) return alloc_bool(inter, get_int(left) <= get_int(right));
-        if (op == BinaryOperator_GreaterThan) return alloc_bool(inter, get_int(left) > get_int(right));
-        if (op == BinaryOperator_GreaterEqualsThan) return alloc_bool(inter, get_int(left) >= get_int(right));
-    }
-    
-    if (is_bool(left) && is_bool(right)) {
-        if (op == BinaryOperator_LogicalOr) return alloc_bool(inter, get_bool(left) || get_bool(right));
-        if (op == BinaryOperator_LogicalAnd) return alloc_bool(inter, get_bool(left) && get_bool(right));
-    }
-    
-    if (is_string(left) && is_string(right))
-    {
-        if (op == BinaryOperator_Addition) {
-            String str = string_format(scratch.arena, "%S%S", get_string(left), get_string(right));
-            return alloc_string(inter, str);
-        }
-        else if (op == BinaryOperator_Division)
-        {
-            if (os_path_is_absolute(get_string(right))) {
-                report_right_path_cant_be_absolute(code);
-                return left;
-            }
-            
-            String str = path_append(scratch.arena, get_string(left), get_string(right));
-            str = path_resolve(scratch.arena, str);
-            
-            return alloc_string(inter, str);
-        }
-        else if (op == BinaryOperator_Equals) {
-            return alloc_bool(inter, (b8)string_equals(get_string(left), get_string(right)));
-        }
-        else if (op == BinaryOperator_NotEquals) {
-            return alloc_bool(inter, !(b8)string_equals(get_string(left), get_string(right)));
-        }
-    }
-    
-    if (left_vtype == VType_Type && right_vtype == VType_Type)
-    {
-        i64 left_id = get_int(value_get_member(inter, left, "ID"));
-        i64 right_id = get_int(value_get_member(inter, right, "ID"));
-        if (op == BinaryOperator_Equals) {
-            return alloc_bool(inter, left_id == right_id);
-        }
-        else if (op == BinaryOperator_NotEquals) {
-            return alloc_bool(inter, left_id == right_id);
-        }
-    }
-    
-    if ((is_string(left) && is_int(right)) || (is_int(left) && is_string(right)))
-    {
-        if (op == BinaryOperator_Addition)
-        {
-            Value string_value = is_string(left) ? left : right;
-            Value codepoint_value = is_int(left) ? left : right;
-            
-            String codepoint_str = string_from_codepoint(scratch.arena, (u32)get_int(codepoint_value));
-            
-            String left_str = is_string(left) ? get_string(left) : codepoint_str;
-            String right_str = is_string(right) ? get_string(right) : codepoint_str;
-            
-            String str = string_format(scratch.arena, "%S%S", left_str, right_str);
-            return alloc_string(inter, str);
-        }
-    }
-    
-    if (is_enum(inter, left) && is_enum(inter, right)) {
-        if (op == BinaryOperator_Equals) {
-            return alloc_bool(inter, get_enum_index(inter, left) == get_enum_index(inter, right));
-        }
-        else if (op == BinaryOperator_NotEquals) {
-            return alloc_bool(inter, get_enum_index(inter, left) != get_enum_index(inter, right));
-        }
-    }
-    
-    if (left_type.array_of == right_type.array_of && left_type.kind == VariableKind_Array && right_type.kind == VariableKind_Array)
-    {
-        i32 element_vtype = left_type.array_of;
-        VariableType element_type = vtype_get(inter, element_vtype);
-        
-        i32 left_count = get_array(left).count;
-        i32 right_count = get_array(right).count;
-        
-        if (op == BinaryOperator_Addition) {
-            Value array = alloc_array(inter, element_vtype, left_count + right_count, true);
-            for (u32 i = 0; i < left_count; ++i) {
-                Value dst = value_get_element(inter, array, i);
-                Value src = value_get_element(inter, left, i);
-                value_assign_as_new(inter, &dst, src);
-            }
-            for (u32 i = 0; i < right_count; ++i) {
-                Value dst = value_get_element(inter, array, left_count + i);
-                Value src = value_get_element(inter, right, i);
-                value_assign_as_new(inter, &dst, src);
-            }
-            return array;
-        }
-    }
-    
-    if ((left_type.kind == VariableKind_Array && right_type.kind != VariableKind_Array) || (left_type.kind != VariableKind_Array && right_type.kind == VariableKind_Array))
-    {
-        VariableType array_type = (left_type.kind == VariableKind_Array) ? left_type : right_type;
-        VariableType element_type = (left_type.kind == VariableKind_Array) ? right_type : left_type;
-        
-        if (array_type.array_of != element_type.vtype) {
-            report_type_missmatch_append(code, element_type.name, array_type.name);
-            return value_nil();
-        }
-        
-        Value array_src = (left_type.kind == VariableKind_Array) ? left : right;
-        Value element = (left_type.kind == VariableKind_Array) ? right : left;
-        
-        i32 array_src_count = get_array(array_src).count;
-        Value array = alloc_array(inter, element_type.vtype, array_src_count + 1, true);
-        
-        i32 array_offset = (left_type.kind == VariableKind_Array) ? 0 : 1;
-        
-        for (i32 i = 0; i < array_src_count; ++i) {
-            Value dst = value_get_element(inter, array, i + array_offset);
-            Value src = value_get_element(inter, array_src, i);
-            value_assign_as_new(inter, &dst, src);
-        }
-        
-        i32 element_offset = (left_type.kind == VariableKind_Array) ? array_src_count : 0;
-        Value dst = value_get_element(inter, array, element_offset);
-        value_assign_as_new(inter, &dst, element);
-        
-        return array;
-    }
-    
-    report_invalid_binary_op(code, string_from_vtype(scratch.arena, inter, left_type.vtype), string_from_binary_operator(op), string_from_vtype(scratch.arena, inter, right_type.vtype));
-    return value_nil();
+ExpresionContext ExpresionContext_from_inference(Interpreter* inter) {
+    ExpresionContext ctx{};
+    ctx.vtype = VType_Any;
+    return ctx;
 }
 
-internal_fn Value solve_signed_operation(Interpreter* inter, Value expresion, BinaryOperator op, CodeLocation code)
+ExpresionContext ExpresionContext_from_vtype(VariableType* vtype) {
+    ExpresionContext ctx{};
+    ctx.vtype = vtype;
+    return ctx;
+}
+
+Array<Value> interpret_destination_expresion(Arena* arena, Interpreter* inter, OpNode* node0, ExpresionContext context)
 {
-    SCRATCH();
-    
-    if (is_int(expresion)) {
-        if (op == BinaryOperator_Addition) return expresion;
-        if (op == BinaryOperator_Substraction) return alloc_int(inter, -get_int(expresion));
+    if (node0->kind == OpKind_ParameterList)
+    {
+        auto node = (OpNode_ParameterList*)node0;
+        
+        Array<Value> values = array_make<Value>(arena, node->nodes.count);
+        
+        foreach(i, values.count) {
+            values[i] = interpret_expresion(inter, node->nodes[i], ExpresionContext_from_void());
+            scope_add_temporal(inter, values[i].obj);
+        }
+        
+        return values;
     }
     
-    if (is_bool(expresion)) {
-        if (op == BinaryOperator_LogicalNot) return alloc_bool(inter, !get_bool(expresion));
-    }
-    
-    return value_nil();
+    Value expresion_result = interpret_expresion(inter, node0, context);
+    return value_unpack(arena, inter, expresion_result);
 }
 
 Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext context)
@@ -226,22 +79,22 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     SCRATCH();
     
     if (node->kind == OpKind_Error) return value_nil();
-    if (node->kind == OpKind_None) {
-        if (context.expected_vtype <= VType_Any) return value_void();
-        return value_null(context.expected_vtype);
-    }
+    if (node->kind == OpKind_None) return value_void();
     
     if (node->kind == OpKind_Binary)
     {
         auto node0 = (OpNode_Binary*)node;
         Value left = interpret_expresion(inter, node0->left, context);
-        Value right = interpret_expresion(inter, node0->right, expresion_context_make(left.vtype));
+        scope_add_temporal(inter, left.obj);
+        
+        Value right = interpret_expresion(inter, node0->right, ExpresionContext_from_vtype(value_get_expected_vtype(left)));
+        scope_add_temporal(inter, right.obj);
         
         if (is_unknown(left) || is_unknown(right)) return value_nil();
         
         BinaryOperator op = node0->op;
         
-        Value result = solve_binary_operation(inter, left, right, op, node->code);
+        Value result = run_binary_operation(inter, left, right, op, node->code);
         
         if (is_unknown(result)) return value_nil();
         
@@ -257,18 +110,18 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     if (node->kind == OpKind_Sign)
     {
         auto node0 = (OpNode_Sign*)node;
-        Value expresion = interpret_expresion(inter, node0->expresion, context);
+        Value value = interpret_expresion(inter, node0->expresion, context);
         BinaryOperator op = node0->op;
         
-        Value result = solve_signed_operation(inter, expresion, op, node0->code);
+        Value result = run_signed_operation(inter, value, op, node0->code);
         
         if (is_unknown(result)) {
-            report_invalid_signed_op(node->code, string_from_binary_operator(op), string_from_value(scratch.arena, inter, expresion));
+            report_invalid_signed_op(node->code, string_from_binary_operator(op), string_from_value(scratch.arena, inter, value));
             return value_nil();
         }
         
         if (inter->mode == InterpreterMode_Execute && inter->settings.print_execution) {
-            String expresion_string = string_from_value(scratch.arena, inter, expresion);
+            String expresion_string = string_from_value(scratch.arena, inter, value);
             String result_string = string_from_value(scratch.arena, inter, result);
             log_trace(node->code, "%S %S = %S", string_from_binary_operator(op), expresion_string, result_string);
         }
@@ -329,7 +182,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
                     
                     if (codepoint == '\\') append(&builder, "\\");
                     else if (codepoint == '%') append(&builder, "%");
-                    else { assert(0); }
+                    else { invalid_codepath(); }
                     
                     continue;
                 }
@@ -337,12 +190,12 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
                 if (codepoint == '%')
                 {
                     if (expresion_index >= node0->expresions.count) {
-                        assert(0);
+                        invalid_codepath();
                     }
                     else
                     {
                         OpNode* expresion_node = node0->expresions[expresion_index++];
-                        Value expresion_result = interpret_expresion(inter, expresion_node, expresion_context_make(VType_Unknown));
+                        Value expresion_result = interpret_expresion(inter, expresion_node, ExpresionContext_from_void());
                         if (is_unknown(expresion_result)) return value_nil();
                         if (is_void(expresion_result)) append(&builder, "");
                         else append(&builder, string_from_value(scratch.arena, inter, expresion_result));
@@ -370,9 +223,8 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
             return lvalue_from_ref(symbol.ref);
         }
         else if (symbol.type == SymbolType_Type) {
-            i32 vtype = symbol.vtype;
             Value type = object_alloc(inter, VType_Type);
-            value_assign_Type(inter, type, vtype);
+            value_assign_Type(inter, type, symbol.vtype);
             return type;
         }
         else {
@@ -395,8 +247,8 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
             if (expresion_node->kind == OpKind_Symbol)
                 identifier = ((OpNode_Symbol*)expresion_node)->identifier;
             
-            if (identifier.size == 0 && context.expected_vtype > 0) {
-                identifier = string_from_vtype(scratch.arena, inter, context.expected_vtype);
+            if (identifier.size == 0 && context.vtype->ID > VTypeID_Any) {
+                identifier = context.vtype->name;
             }
             
             Symbol symbol = find_symbol(inter, identifier);
@@ -412,7 +264,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
                 Value member = value_get_member(inter, lvalue_from_ref(ref), member_name);
                 
                 if (is_unknown(member)) {
-                    report_member_not_found_in_object(node->code, member_name, string_from_vtype(scratch.arena, inter, ref->vtype));
+                    report_member_not_found_in_object(node->code, member_name, ref->vtype->name);
                 }
                 
                 return member;
@@ -423,7 +275,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
                 Value member = vtype_get_member(inter, symbol.vtype, member_name);
                 
                 if (is_unknown(member)) {
-                    report_member_not_found_in_type(node->code, member_name, string_from_vtype(scratch.arena, inter, symbol.vtype));
+                    report_member_not_found_in_type(node->code, member_name, symbol.vtype->name);
                 }
                 
                 return member;
@@ -439,7 +291,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
             Value member = value_get_member(inter, ret, member_name);
             
             if (is_unknown(member)) {
-                report_member_not_found_in_object(node->code, member_name, string_from_vtype(scratch.arena, inter, ret.vtype));
+                report_member_not_found_in_object(node->code, member_name, ret.vtype->name);
             }
             
             return member;
@@ -449,7 +301,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     }
     
     if (node->kind == OpKind_FunctionCall) {
-        return interpret_function_call(inter, node, &context);
+        return interpret_function_call(inter, node, true);
     }
     
     if (node->kind == OpKind_ArrayExpresion)
@@ -457,47 +309,47 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
         auto node0 = (OpNode_ArrayExpresion*)node;
         Array<Value> objects{};
         
-        i32 explicit_vtype = -1;
+        VariableType* explicit_vtype = nil_vtype;
         
         if (node0->type->kind == OpKind_ObjectType) {
             explicit_vtype = interpret_object_type(inter, node0->type, false);
-            if (explicit_vtype < 0) return value_nil();
+            if (explicit_vtype->ID == VTypeID_Unknown) return value_nil();
         }
         
-        i32 element_vtype = explicit_vtype;
-        if (element_vtype < 0) element_vtype = vtype_from_array_element(inter, context.expected_vtype);
+        VariableType* element_vtype = explicit_vtype;
+        if (element_vtype->ID == VTypeID_Unknown) element_vtype = context.vtype->child_next;
         
         if (!node0->is_empty)
         {
             objects = array_make<Value>(scratch.arena, node0->nodes.count);
             foreach(i, objects.count) {
-                objects[i] = interpret_expresion(inter, node0->nodes[i], expresion_context_make(element_vtype));
+                objects[i] = interpret_expresion(inter, node0->nodes[i], ExpresionContext_from_vtype(element_vtype));
                 if (is_unknown(objects[i])) return value_nil();
             }
         }
         
-        if (element_vtype < 0 && objects.count > 0) element_vtype = objects[0].vtype;
+        if (element_vtype->ID == VTypeID_Unknown && objects.count > 0) element_vtype = objects[0].vtype;
         
-        if (element_vtype <= 0) {
+        if (element_vtype->ID <= VTypeID_Void) {
             report_unknown_array_definition(node->code);
             return value_nil();
         }
         
-        i32 base_vtype = vtype_from_array_base(inter, element_vtype);
+        VariableType* base_vtype = (element_vtype->kind == VariableKind_Array) ? element_vtype->child_base : element_vtype;
         
         if (node0->is_empty)
         {
             u32 starting_dimensions = 0;
             
-            if (explicit_vtype >= 0) {
-                decode_vtype(explicit_vtype, NULL, &starting_dimensions);
+            if (explicit_vtype->ID != VTypeID_Unknown) {
+                starting_dimensions = explicit_vtype->array_dimensions;
             }
             
             Array<i64> dimensions = array_make<i64>(scratch.arena, node0->nodes.count + starting_dimensions);
             
             foreach(i, node0->nodes.count)
             {
-                Value dim = interpret_expresion(inter, node0->nodes[i], expresion_context_make(VType_Int));
+                Value dim = interpret_expresion(inter, node0->nodes[i], ExpresionContext_from_vtype(VType_Int));
                 if (is_unknown(dim)) return value_nil();
                 
                 if (!is_int(dim)) {
@@ -521,8 +373,8 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
         
         // Assert same vtype
         for (i32 i = 1; i < objects.count; ++i) {
-            if (objects[i].vtype != element_vtype) {
-                report_type_missmatch_array_expr(node->code, string_from_vtype(scratch.arena, inter, element_vtype), string_from_vtype(scratch.arena, inter, objects[i].vtype));
+            if (objects[i].vtype->ID != element_vtype->ID) {
+                report_type_missmatch_array_expr(node->code, element_vtype->name, objects[i].vtype->name);
                 return value_nil();
             }
         }
@@ -550,9 +402,9 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
             return value_nil();
         }
         
-        VariableType type = vtype_get(inter, value.vtype);
+        const VariableType* type = value.vtype;
         
-        if (type.kind == VariableKind_Array)
+        if (type->kind == VariableKind_Array)
         {
             if (inter->mode == InterpreterMode_Execute)
             {
@@ -572,7 +424,7 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
             }
         }
         
-        report_indexing_not_allowed(node->code, string_from_vtype(scratch.arena, inter, type.vtype));
+        report_indexing_not_allowed(node->code, type->name);
         return value_nil();
     }
     
@@ -580,57 +432,61 @@ Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext con
     return value_nil();
 }
 
-Value interpret_assignment_for_object_definition(Interpreter* inter, OpNode_ObjectDefinition* node, b32 allow_reference)
-{
-    SCRATCH();
-    
-    i32 vtype = interpret_object_type(inter, node->type, allow_reference);
-    if (vtype < 0) return value_nil();
-    
-    OpNode* assignment = node->assignment;
-    Value value = interpret_expresion(inter, assignment, expresion_context_make(vtype));
-    if (is_unknown(value)) return value_nil();
-    
-    if (vtype == VType_Void) vtype = value.vtype;
-    
-    if (!validate_assignment(inter, vtype, value)) {
-        i32 value_vtype = value_get_expected_vtype(value);
-        report_type_missmatch_assign(node->code, string_from_vtype(scratch.arena, inter, value_vtype), string_from_vtype(scratch.arena, inter, vtype));
-        return value_nil();
-    }
-    
-    if (is_null(value) && vtype > VType_Any) {
-        value = object_alloc(inter, vtype);
-    }
-    
-    if (vtype != value.vtype) {
-        value.vtype = vtype;
-    }
-    
-    return value;
-}
-
 void interpret_object_definition(Interpreter* inter, OpNode* node0)
 {
     SCRATCH();
     
     auto node = (OpNode_ObjectDefinition*)node0;
-    String identifier = node->object_name;
     
-    if (find_symbol(inter, identifier).type != SymbolType_None) {
-        report_symbol_duplicated(node->code, identifier);
+    Array<String> identifiers = node->names;
+    
+    // Validation for duplicated symbols
+    foreach(i, identifiers.count) {
+        String identifier = identifiers[i];
+        
+        if (find_symbol(inter, identifier).type != SymbolType_None) {
+            report_symbol_duplicated(node->code, identifier);
+            return;
+        }
+    }
+    
+    // Explicit type
+    VariableType* definition_vtype = interpret_object_type(inter, node->type, false);
+    if (definition_vtype->ID == VTypeID_Unknown) return;
+    b32 inference_type = definition_vtype == void_vtype || definition_vtype->ID == VTypeID_Any;
+    
+    // Assignment expresion
+    ExpresionContext context = inference_type ? ExpresionContext_from_inference(inter) : ExpresionContext_from_vtype(definition_vtype);
+    Value src = interpret_expresion(inter, node->assignment, context);
+    if (is_unknown(src)) return;
+    
+    // Inference
+    VariableType* assignment_vtype = definition_vtype;
+    if (inference_type) {
+        assignment_vtype = value_get_expected_vtype(src);
+        if (definition_vtype == void_vtype) definition_vtype = src.vtype;
+    }
+    
+    if (definition_vtype->ID <= VTypeID_Void || assignment_vtype->ID <= VTypeID_Any) {
+        report_error(node->code, "Unresolved object type for definition");
         return;
     }
     
-    Value value = interpret_assignment_for_object_definition(inter, node, false);
-    if (is_unknown(value)) return;
+    // Default assignment
+    if (is_void(src)) src = object_alloc(inter, definition_vtype);
     
-    ObjectRef* ref = scope_define_object_ref(inter, identifier, value, node->is_constant);
+    // Define objects with null values
+    Array<Value> dst_values = array_make<Value>(scratch.arena, identifiers.count);
+    Array<VariableType*> dst_vtypes = vtype_unpack(scratch.arena, inter, definition_vtype, identifiers.count);
     
-    if (inter->mode == InterpreterMode_Execute)
-    {
-        if (inter->settings.print_execution) log_trace(node->code, "%S %S", string_from_vtype(scratch.arena, inter, ref->vtype), ref->identifier);
+    foreach(i, identifiers.count) {
+        Value null_value = value_null(dst_vtypes[i]);
+        String identifier = identifiers[i];
+        dst_values[i] = scope_define_value(inter, identifier, null_value, false);// TODO(Jose): node->is_constant);
     }
+    
+    Array<Value> src_values = value_unpack(scratch.arena, inter, src);
+    run_multiple_assignment(inter, dst_values, src_values, BinaryOperator_None, node->code);
 }
 
 void interpret_assignment(Interpreter* inter, OpNode* node0)
@@ -638,47 +494,25 @@ void interpret_assignment(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_Assignment*)node0;
     
-    Value dst = interpret_expresion(inter, node->destination, expresion_context_make(-1));
-    if (is_unknown(dst)) return;
+    Array<Value> dst_values = interpret_destination_expresion(scratch.arena, inter, node->destination, ExpresionContext_from_void());
+    if (dst_values.count == 0) return;
     
-    if (dst.kind != ValueKind_LValue) {
-        report_expr_expects_lvalue(node->code);
-        return;
+    foreach(i, dst_values.count) {
+        Value dst = dst_values[i];
+        if (is_unknown(dst)) return;
+        scope_add_temporal(inter, dst.obj);
     }
     
-    if (is_const(dst)) {
-        report_assignment_is_constant(node->code, string_from_value(scratch.arena, inter, dst));
-        return;
-    }
-    
-    OpNode* assignment_node = node->source;
+    VariableType* dst_vtype = value_get_expected_vtype(dst_values[0]);
+    ExpresionContext context = ExpresionContext_from_vtype(dst_vtype);
+    CodeLocation code = node->source->code;
     BinaryOperator op = node->binary_operator;
     
-    Value assignment = interpret_expresion(inter, assignment_node, expresion_context_make(dst.vtype));
+    Value src = interpret_expresion(inter, node->source, context);
+    if (is_unknown(src)) return;
     
-    if (is_unknown(assignment)) return;
-    
-    if (op != BinaryOperator_None) {
-        assignment = solve_binary_operation(inter, dst, assignment, op, assignment_node->code);
-        if (is_unknown(assignment)) return;
-    }
-    
-    if (!validate_assignment(inter, dst.vtype, assignment)) {
-        i32 value_vtype = value_get_expected_vtype(assignment);
-        report_type_missmatch_assign(assignment_node->code, string_from_vtype(scratch.arena, inter, value_vtype), string_from_vtype(scratch.arena, inter, dst.vtype));
-        return;
-    }
-    
-    if (is_unknown(assignment)) return;
-    
-    if (!value_assign(inter, &dst, assignment)) {
-        assert(0);
-    }
-    
-    if (inter->mode == InterpreterMode_Execute)
-    {
-        // TODO(Jose): log_trace(assignment_node->code, "%S = %S", dst->identifier, string_from_ref(scratch.arena, inter, ref));
-    }
+    Array<Value> src_values = value_unpack(scratch.arena, inter, src);
+    run_multiple_assignment(inter, dst_values, src_values, op, code);
 }
 
 void interpret_if_statement(Interpreter* inter, OpNode* node0)
@@ -686,7 +520,7 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_IfStatement*)node0;
     
-    Value expresion = interpret_expresion(inter, node->expresion, expresion_context_make(VType_Bool));
+    Value expresion = interpret_expresion(inter, node->expresion, ExpresionContext_from_vtype(VType_Bool));
     
     if (is_unknown(expresion)) return;
     
@@ -699,7 +533,7 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
         log_trace(node->code, "if (%S)", string_from_value(scratch.arena, inter, expresion));
         b32 result = get_bool(expresion);
         
-        scope_push(inter, ScopeType_Block, VType_Void, false);
+        scope_push(inter, ScopeType_Block);
         if (result) interpret_op(inter, node, node->success);
         else interpret_op(inter, node, node->failure);
         scope_pop(inter);
@@ -707,23 +541,14 @@ void interpret_if_statement(Interpreter* inter, OpNode* node0)
     else {
         
         Scope* scope = scope_find_returnable(inter);
-        Value previous_return_value = scope->return_value;
         
-        scope_push(inter, ScopeType_Block, VType_Void, false);
+        scope_push(inter, ScopeType_Block);
         interpret_op(inter, node, node->success);
         scope_pop(inter);
-        Value success_return_value = scope->return_value;
-        scope->return_value = previous_return_value;
         
-        scope_push(inter, ScopeType_Block, VType_Void, false);
+        scope_push(inter, ScopeType_Block);
         interpret_op(inter, node, node->failure);
         scope_pop(inter);
-        Value failed_return_value = scope->return_value;
-        scope->return_value = previous_return_value;
-        
-        if (is_valid(success_return_value) && is_valid(failed_return_value)) {
-            scope->return_value = success_return_value;
-        }
     }
     
 }
@@ -737,7 +562,7 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
     
     while (!break_requested)
     {
-        Value expresion = interpret_expresion(inter, node->expresion, expresion_context_make(VType_Bool));
+        Value expresion = interpret_expresion(inter, node->expresion, ExpresionContext_from_vtype(VType_Bool));
         if (skip_ops(inter)) return;
         
         if (!is_bool(expresion)) {
@@ -751,20 +576,17 @@ void interpret_while_statement(Interpreter* inter, OpNode* node0)
             
             if (!get_bool(expresion)) break;
             
-            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration);
             interpret_op(inter, node, node->content);
-            if (inter->current_scope->loop_iteration_break_requested)
-                break_requested = true;
+            if (inter->current_scope->break_requested) break_requested = true;
             scope_pop(inter);
         }
         else
         {
             Scope* scope = scope_find_returnable(inter);
-            Value previous_return_value = scope->return_value;
-            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration);
             interpret_op(inter, node, node->content);
             scope_pop(inter);
-            scope->return_value = previous_return_value;
             break;
         }
         
@@ -777,7 +599,7 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_ForStatement*)node0;
     
-    scope_push(inter, ScopeType_Block, VType_Void, false);
+    scope_push(inter, ScopeType_Block);
     
     interpret_op(inter, node, node->initialize_sentence);
     
@@ -785,7 +607,7 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
     
     while (!break_requested)
     {
-        Value expresion = interpret_expresion(inter, node->condition_expresion, expresion_context_make(VType_Bool));
+        Value expresion = interpret_expresion(inter, node->condition_expresion, ExpresionContext_from_vtype(VType_Bool));
         if (skip_ops(inter)) return;
         
         if (!is_bool(expresion)) {
@@ -799,10 +621,9 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
             
             if (!get_bool(expresion)) break;
             
-            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration);
             interpret_op(inter, node, node->content);
-            if (inter->current_scope->loop_iteration_break_requested)
-                break_requested = true;
+            if (inter->current_scope->break_requested) break_requested = true;
             scope_pop(inter);
             
             interpret_op(inter, node, node->update_sentence);
@@ -810,12 +631,10 @@ void interpret_for_statement(Interpreter* inter, OpNode* node0)
         else
         {
             Scope* scope = scope_find_returnable(inter);
-            Value previous_return_value = scope->return_value;
-            scope_push(inter, ScopeType_LoopIteration, VType_Void, false);
+            scope_push(inter, ScopeType_LoopIteration);
             interpret_op(inter, node, node->content);
             scope_pop(inter);
             interpret_op(inter, node, node->update_sentence);
-            scope->return_value = previous_return_value;
             break;
         }
         
@@ -830,37 +649,37 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
     SCRATCH();
     auto node = (OpNode_ForeachArrayStatement*)node0;
     
-    scope_push(inter, ScopeType_Block, VType_Void, false);
+    scope_push(inter, ScopeType_Block);
     DEFER(scope_pop(inter));
     
-    Value array = interpret_expresion(inter, node->expresion, expresion_context_make(-1));
+    Value array = interpret_expresion(inter, node->expresion, ExpresionContext_from_void());
     if (is_unknown(array)) return;
     
     scope_add_temporal(inter, array.obj);
     
-    VariableType array_type = vtype_get(inter, array.vtype);
+    VariableType* array_type = array.vtype;
     
-    if (array_type.kind != VariableKind_Array) {
+    if (array_type->kind != VariableKind_Array) {
         report_for_expects_an_array(node->code);
         return;
     }
     
     if (skip_ops(inter)) return;
     
-    if (scope_find_object_ref(inter, node->element_name, true) != nil_ref) {
+    if (is_valid(scope_find_value(inter, node->element_name, true))) {
         report_object_duplicated(node->code, node->element_name);
         return;
     }
-    Value element = lvalue_from_ref(scope_define_object_ref(inter, node->element_name, value_null(array_type.array_of)));
+    Value element = scope_define_value(inter, node->element_name, value_null(array_type->child_next));
     
     Value index = value_nil();
     if (node->index_name.size > 0) {
-        if (scope_find_object_ref(inter, node->index_name, true) != nil_ref) {
+        if (is_valid(scope_find_value(inter, node->index_name, true))) {
             report_object_duplicated(node->code, node->index_name);
             return;
         }
         
-        index = lvalue_from_ref(scope_define_object_ref(inter, node->index_name, alloc_int(inter, 0)));
+        index = scope_define_value(inter, node->index_name, alloc_int(inter, 0));
     }
     
     if (inter->mode == InterpreterMode_Execute)
@@ -877,10 +696,9 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
             
             if (inter->settings.print_execution) log_trace(node->code, "for each[%l] (%S)", i, string_from_value(scratch.arena, inter, element));
             
-            scope_push(inter, ScopeType_Block, VType_Void, false);
+            scope_push(inter, ScopeType_Block);
             interpret_op(inter, node, node->content);
-            if (inter->current_scope->loop_iteration_break_requested)
-                break_requested = true;
+            if (inter->current_scope->break_requested) break_requested = true;
             scope_pop(inter);
             
             if (skip_ops(inter)) return;
@@ -892,15 +710,13 @@ void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0)
         if (is_valid(index)) set_int(index, 0);
         
         Scope* scope = scope_find_returnable(inter);
-        Value previous_return_value = scope->return_value;
-        scope_push(inter, ScopeType_Block, VType_Void, false);
+        scope_push(inter, ScopeType_Block);
         interpret_op(inter, node, node->content);
         scope_pop(inter);
-        scope->return_value = previous_return_value;
     }
 }
 
-Value interpret_function_call(Interpreter* inter, OpNode* node0, ExpresionContext* expresion_context)
+Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 from_expression)
 {
     SCRATCH();
     auto node = (OpNode_FunctionCall*)node0;
@@ -919,10 +735,10 @@ Value interpret_function_call(Interpreter* inter, OpNode* node0, ExpresionContex
         Array<Value> objects = array_make<Value>(scratch.arena, node->parameters.count);
         
         foreach(i, objects.count) {
-            i32 expected_vtype = -1;
+            VariableType* expected_vtype = nil_vtype;
             if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
-            objects[i] = interpret_expresion(inter, node->parameters[i], expresion_context_make(expected_vtype));
-            if (expected_vtype == VType_Any) {
+            objects[i] = interpret_expresion(inter, node->parameters[i], ExpresionContext_from_vtype(expected_vtype));
+            if (expected_vtype->ID == VTypeID_Any) {
                 objects[i].vtype = VType_Any;
             }
             scope_add_temporal(inter, objects[i].obj);
@@ -930,13 +746,16 @@ Value interpret_function_call(Interpreter* inter, OpNode* node0, ExpresionContex
         
         if (skip_ops(inter)) return value_nil();
         
-        return call_function(inter, fn, objects, node, expresion_context);
+        Value return_value = run_function_call(inter, fn, objects, node);
+        
+        if (!from_expression) {
+            run_ignored_values(inter, value_unpack(scratch.arena, inter, return_value), node->code);
+        }
+        
+        return return_value;
     }
     
-    if (symbol.type == SymbolType_Type)
-    {
-        VariableType type = vtype_get(inter, symbol.vtype);
-        
+    if (symbol.type == SymbolType_Type) {
         return object_alloc(inter, symbol.vtype);
     }
     
@@ -949,17 +768,17 @@ Value interpret_function_call(Interpreter* inter, OpNode* node0, ExpresionContex
     return value_nil();
 }
 
-i32 interpret_object_type(Interpreter* inter, OpNode* node0, b32 allow_reference)
+VariableType* interpret_object_type(Interpreter* inter, OpNode* node0, b32 allow_reference)
 {
     OpNode_ObjectType* node = (OpNode_ObjectType*)node0;
     if (!allow_reference && node->is_reference) {
         report_reftype_invalid(node->code);
-        return VType_Unknown;
+        return nil_vtype;
     }
-    if (node->name.size == 0) return VType_Void;
-    i32 vtype = vtype_from_name(inter, node->name);
-    vtype = vtype_from_array_dimension(inter, vtype, node->array_dimensions);
-    if (vtype < 0) report_object_type_not_found(node->code, node->name);
+    if (node->name.size == 0) return void_vtype;
+    VariableType* vtype = vtype_from_name(inter, node->name);
+    vtype = vtype_from_dimension(inter, vtype, node->array_dimensions);
+    if (vtype == nil_vtype) report_object_type_not_found(node->code, node->name);
     return vtype;
 }
 
@@ -969,36 +788,46 @@ void interpret_return(Interpreter* inter, OpNode* node0)
     OpNode_Return* node = (OpNode_Return*)node0;
     Scope* scope = scope_find_returnable(inter);
     
-    Value return_value = interpret_expresion(inter, node->expresion, expresion_context_make(scope->expected_return_vtype));
-    if (is_unknown(return_value)) {
-        scope->return_value = value_nil();
+    scope->return_requested = true;
+    
+    VariableType* expected_return_vtype = void_vtype;
+    b32 expected_return_reference = false;
+    Value return_value = value_nil();
+    
+    if (scope->fn != NULL && scope->fn->returns.count == 1) {
+        ObjectDefinition* def = &scope->fn->returns[0];
+        expected_return_vtype = def->vtype;
+        expected_return_reference = def->is_reference;
+        return_value = scope_find_value(inter, def->name, true);
+    }
+    
+    Value value = interpret_expresion(inter, node->expresion, ExpresionContext_from_vtype(expected_return_vtype));
+    if (is_unknown(value)) return;
+    
+    if (expected_return_vtype->ID == VTypeID_Any) {
+        value.vtype = VType_Any;
+    }
+    
+    if (!validate_assignment(inter, expected_return_vtype, value)) {
+        report_function_wrong_return_type(node->code, expected_return_vtype->name);
         return;
     }
     
-    if (scope->expected_return_vtype == VType_Any) {
-        return_value.vtype = VType_Any;
-    }
+    b32 return_is_reference = value.kind == ValueKind_Reference;
     
-    scope_add_temporal(inter, scope, return_value.obj);
-    
-    if (!validate_assignment(inter, scope->expected_return_vtype, return_value)) {
-        report_function_wrong_return_type(node->code, string_from_vtype(scratch.arena, inter, scope->expected_return_vtype));
-        return;
-    }
-    
-    b32 return_is_reference = return_value.kind == ValueKind_Reference;
-    
-    if (return_is_reference && !scope->expected_return_reference) {
+    if (return_is_reference && !expected_return_reference) {
         report_function_expects_no_ref_as_return(node->code);
         return;
     }
     
-    if (!return_is_reference && scope->expected_return_reference) {
+    if (!return_is_reference && expected_return_reference) {
         report_function_expects_ref_as_return(node->code);
         return;
     }
     
-    scope->return_value = return_value;
+    if (is_valid(return_value)) {
+        value_assign(inter, &return_value, value);
+    }
 }
 
 void interpret_continue(Interpreter* inter, OpNode* node0)
@@ -1009,7 +838,7 @@ void interpret_continue(Interpreter* inter, OpNode* node0)
         return;
     }
     
-    scope->loop_iteration_continue_requested = true;
+    scope->continue_requested = true;
 }
 
 void interpret_break(Interpreter* inter, OpNode* node0)
@@ -1020,7 +849,7 @@ void interpret_break(Interpreter* inter, OpNode* node0)
         return;
     }
     
-    scope->loop_iteration_break_requested = true;
+    scope->break_requested = true;
 }
 
 void interpret_block(Interpreter* inter, OpNode* block0, b32 push_scope)
@@ -1028,7 +857,7 @@ void interpret_block(Interpreter* inter, OpNode* block0, b32 push_scope)
     auto block = (OpNode_Block*)block0;
     assert(block->kind == OpKind_Block);
     
-    if (push_scope) scope_push(inter, ScopeType_Block, VType_Void, false);
+    if (push_scope) scope_push(inter, ScopeType_Block);
     
     Array<OpNode*> ops = block->ops;
     
@@ -1054,7 +883,7 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
     else if (node->kind == OpKind_WhileStatement) interpret_while_statement(inter, node);
     else if (node->kind == OpKind_ForStatement) interpret_for_statement(inter, node);
     else if (node->kind == OpKind_ForeachArrayStatement) interpret_foreach_array_statement(inter, node);
-    else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, NULL);
+    else if (node->kind == OpKind_FunctionCall) interpret_function_call(inter, node, false);
     else if (node->kind == OpKind_Return) interpret_return(inter, node);
     else if (node->kind == OpKind_Continue) interpret_continue(inter, node);
     else if (node->kind == OpKind_Break) interpret_break(inter, node);
@@ -1114,8 +943,8 @@ internal_fn Array<String> get_struct_dependencies(Arena* arena, Interpreter* int
     
     foreach(i, node->members.count) {
         OpNode_ObjectDefinition* member = node->members[i];
-        i32 member_vtype = vtype_from_name(inter, member->type->name);
-        if (member_vtype >= 0) continue;
+        VariableType* member_vtype = vtype_from_name(inter, member->type->name);
+        if (member_vtype->ID != VTypeID_Unknown) continue;
         
         foreach(j, struct_nodes.count) {
             OpNode_StructDefinition* struct0 = struct_nodes[j];
@@ -1227,10 +1056,10 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
                 continue;
             }
             
-            Value value = interpret_expresion(inter, value_node, expresion_context_make(VType_Int));
+            Value value = interpret_expresion(inter, value_node, ExpresionContext_from_vtype(VType_Int));
             
             if (is_unknown(value)) continue;
-            if (value.vtype != VType_Int) {
+            if (value.vtype->ID != VTypeID_Int) {
                 report_enum_value_expects_an_int(node->code);
                 valid = false;
                 continue;
@@ -1303,36 +1132,42 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
                 valid = false;
             }
             
-            Array<ObjectDefinition> members = array_make<ObjectDefinition>(yov->static_arena, node->members.count);
+            PooledArray<ObjectDefinition> members = pooled_array_make<ObjectDefinition>(scratch.arena, 8);
             
-            foreach(i, members.count) {
-                OpNode_ObjectDefinition* member = node->members[i];
-                members[i].name = member->object_name;
+            foreach(i, node->members.count) {
+                OpNode_ObjectDefinition* member_node = node->members[i];
                 
-                if (string_equals(member->type->name, name)) {
+                if (string_equals(member_node->type->name, name)) {
                     report_struct_recursive(node->code);
                     valid = false;
                     continue;
                 }
                 
-                if (member->type->name.size == 0) {
+                if (member_node->type->name.size == 0) {
                     report_struct_implicit_member_type(node->code);
                     valid = false;
                     continue;
                 }
                 
-                members[i].vtype = interpret_object_type(inter, member->type, false);
-                if (members[i].vtype < 0) {
+                VariableType* vtype = interpret_object_type(inter, member_node->type, false);
+                if (vtype->ID == VTypeID_Unknown) {
                     valid = false;
                     continue;
                 }
                 
-                members[i].default_value = member->assignment;
+                foreach(j, member_node->names.count)
+                {
+                    ObjectDefinition def = {};
+                    def.name = member_node->names[j];
+                    def.vtype = vtype;
+                    def.default_value = member_node->assignment;
+                    array_add(&members, def);
+                }
             }
             
             if (!valid) continue;
             
-            define_struct(inter, name, members);
+            define_struct(inter, name, array_from_pooled_array(yov->static_arena, members), false);
         }
     }
     
@@ -1358,29 +1193,77 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
             OpNode_ObjectDefinition* param_node = node->parameters[i];
             ObjectDefinition* def = &parameters[i];
             
-            Value assignment_result = interpret_assignment_for_object_definition(inter, param_node, true);
-            if (is_unknown(assignment_result)) {
+            VariableType* vtype = interpret_object_type(inter, param_node->type, true);
+            
+            if (vtype == void_vtype || vtype == nil_vtype) {
                 valid = false;
                 continue;
             }
             
-            def->vtype = assignment_result.vtype;
-            def->name = param_node->object_name;
+            if (param_node->names.count != 1) {
+                report_error(param_node->code, "Parameters requires a single name per definition");
+                valid = false;
+                continue;
+            }
+            
+            def->vtype = vtype;
+            def->name = param_node->names[0];
             def->default_value = param_node->assignment;
             def->is_reference = param_node->type->is_reference;
         }
         
-        i32 return_vtype = VType_Void;
-        b32 return_reference = false;
+        PooledArray<ObjectDefinition> returns_list = pooled_array_make<ObjectDefinition>(scratch.arena, 8);
         
-        if (node->return_node->kind == OpKind_ObjectType) {
-            return_vtype = interpret_object_type(inter, node->return_node, true);
-            if (return_vtype < 0) valid = false;
-            return_reference = ((OpNode_ObjectType*)node->return_node)->is_reference;
+        foreach(i, node->returns.count)
+        {
+            OpNode* return_node0 = node->returns[i];
+            
+            if (return_node0->kind == OpKind_ObjectType)
+            {
+                OpNode_ObjectType* return_node = (OpNode_ObjectType*)return_node0;
+                
+                ObjectDefinition def = {};
+                def.vtype = interpret_object_type(inter, return_node, true);
+                def.name = "return";
+                def.default_value = NULL;
+                def.is_reference = return_node->is_reference;
+                array_add(&returns_list, def);
+            }
+            else if (return_node0->kind == OpKind_ObjectDefinition)
+            {
+                OpNode_ObjectDefinition* return_node = (OpNode_ObjectDefinition*)return_node0;
+                
+                VariableType* vtype = interpret_object_type(inter, return_node->type, true);
+                
+                if (vtype == void_vtype) {
+                    Value assignment = interpret_expresion(inter, return_node->assignment, ExpresionContext_from_inference(inter));
+                    vtype = value_get_expected_vtype(assignment);
+                }
+                
+                if (vtype == void_vtype || vtype == nil_vtype) {
+                    report_error(return_node->code, "Unresolved return type");
+                    valid = false;
+                    continue;
+                }
+                
+                ObjectDefinition def = {};
+                def.vtype = vtype;
+                def.default_value = return_node->assignment;
+                def.is_reference = return_node->type->is_reference;
+                foreach(i, return_node->names.count) {
+                    def.name = return_node->names[i];
+                    array_add(&returns_list, def);
+                }
+            }
+            else {
+                invalid_codepath();
+            }
         }
         
+        Array<ObjectDefinition> returns = array_from_pooled_array(scratch.arena, returns_list);
+        
         OpNode_Block* defined_fn = NULL;
-        b8 is_intrinsic = false;
+        b32 is_intrinsic = false;
         
         if (node->block->kind == OpKind_Block) {
             defined_fn = (OpNode_Block*)node->block;
@@ -1390,13 +1273,13 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
         }
         else {
             valid = false;
-            assert(0);
+            invalid_codepath();
         }
         
         if (!valid) continue;
         
-        if (is_intrinsic) define_intrinsic_function(inter, node->code, node->identifier, parameters, return_vtype);
-        else define_function(inter, node->code, node->identifier, parameters, return_vtype, return_reference, defined_fn);
+        if (is_intrinsic) define_intrinsic_function(inter, node->code, node->identifier, parameters, returns);
+        else define_function(inter, node->code, node->identifier, parameters, returns, defined_fn);
     }
     
     // Assign intrinsic functions
@@ -1441,24 +1324,24 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
         b32 has_explicit_vtype = false;
         String description = {};
         
-        i32 vtype = VType_Bool;
+        VariableType* vtype = VType_Bool;
         
         if (node->type->kind == OpKind_ObjectType) {
             vtype = interpret_object_type(inter, node->type, false);
-            if (vtype < 0) continue;
+            if (vtype->ID == VTypeID_Unknown) continue;
             has_explicit_vtype = true;
         }
         
         if (node->name->kind == OpKind_Assignment)
         {
             OpNode_Assignment* assignment = (OpNode_Assignment*)node->name;
-            Value value = interpret_expresion(inter, assignment->source, expresion_context_make(VType_String));
+            Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_String));
             if (is_unknown(value)) {
                 valid = false;
             }
             else if (!is_string(value)) {
                 valid = false;
-                report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, value.vtype), string_from_vtype(scratch.arena, inter, VType_String));
+                report_type_missmatch_assign(assignment->code, value.vtype->name, VType_String->name);
             }
             else {
                 name = get_string(value);
@@ -1471,13 +1354,13 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
         if (node->description->kind == OpKind_Assignment)
         {
             OpNode_Assignment* assignment = (OpNode_Assignment*)node->description;
-            Value value = interpret_expresion(inter, assignment->source, expresion_context_make(VType_String));
+            Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_String));
             if (is_unknown(value)) {
                 valid = false;
             }
             else if (!is_string(value)) {
                 valid = false;
-                report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, value.vtype), string_from_vtype(scratch.arena, inter, VType_String));
+                report_type_missmatch_assign(assignment->code, value.vtype->name, VType_String->name);
             }
             else {
                 description = get_string(value);
@@ -1487,13 +1370,13 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
         if (node->required->kind == OpKind_Assignment)
         {
             OpNode_Assignment* assignment = (OpNode_Assignment*)node->required;
-            Value value = interpret_expresion(inter, assignment->source, expresion_context_make(VType_Bool));
+            Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_Bool));
             if (is_unknown(value)) {
                 valid = false;
             }
             else if (!is_bool(value)) {
                 valid = false;
-                report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, value.vtype), string_from_vtype(scratch.arena, inter, VType_Bool));
+                report_type_missmatch_assign(assignment->code, value.vtype->name, VType_Bool->name);
             }
             else {
                 required = get_bool(value);
@@ -1503,11 +1386,11 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
         if (node->default_value->kind == OpKind_Assignment)
         {
             OpNode_Assignment* assignment = (OpNode_Assignment*)node->default_value;
-            default_value = interpret_expresion(inter, assignment->source, expresion_context_make(vtype));
+            default_value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(vtype));
             if (is_unknown(default_value)) continue;
             
             if (has_explicit_vtype && vtype != default_value.vtype) {
-                report_type_missmatch_assign(assignment->code, string_from_vtype(scratch.arena, inter, default_value.vtype), string_from_vtype(scratch.arena, inter, vtype));
+                report_type_missmatch_assign(assignment->code, default_value.vtype->name, vtype->name);
                 continue;
             }
             
@@ -1542,7 +1425,7 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
             {
                 if (script_arg->value.size <= 0)
                 {
-                    if (vtype == VType_Bool) {
+                    if (vtype->ID == VTypeID_Bool) {
                         value = alloc_bool(inter, true);
                     }
                 }
@@ -1568,8 +1451,7 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
             value = object_alloc(inter, vtype);
         }
         
-        ObjectRef* ref = scope_define_object_ref(inter, node->identifier, value, true);
-        
+        scope_define_value(inter, node->identifier, value, true);
         
         //print_info("Arg %S: name=%S, required=%s\n", node->identifier, name, required ? "true" : "false");
         
@@ -1590,6 +1472,11 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
 
 #include "autogenerated/core.h"
 
+inline_fn void vtype_add_core(Interpreter* inter, VariableKind kind, String name, u64 assert_vtype) {
+    VariableType* vtype = vtype_add(inter, kind, name, nil_vtype, nil_vtype);
+    assert(vtype->ID == assert_vtype);
+}
+
 internal_fn void register_definitions(Interpreter* inter)
 {
     SCRATCH();
@@ -1600,57 +1487,10 @@ internal_fn void register_definitions(Interpreter* inter)
     
     PooledArray<VariableType>* list = &inter->vtype_table;
     
-    VariableType t;
-    
-    // Void
-    {
-        t = {};
-        t.name = "void";
-        t.kind = VariableKind_Void;
-        t.vtype = list->count;
-        assert(VType_Void == t.vtype);
-        array_add(list, t);
-    }
-    
-    // Any
-    {
-        t = {};
-        t.name = "Any";
-        t.kind = VariableKind_Any;
-        t.vtype = list->count;
-        assert(VType_Any == t.vtype);
-        array_add(list, t);
-    }
-    
-    // Int
-    {
-        t = {};
-        t.name = "Int";
-        t.kind = VariableKind_Primitive;
-        t.vtype = list->count;
-        assert(VType_Int == t.vtype);
-        array_add(list, t);
-    }
-    
-    // Bool
-    {
-        t = {};
-        t.name = "Bool";
-        t.kind = VariableKind_Primitive;
-        t.vtype = list->count;
-        assert(VType_Bool == t.vtype);
-        array_add(list, t);
-    }
-    
-    // String
-    {
-        t = {};
-        t.name = "String";
-        t.kind = VariableKind_Primitive;
-        t.vtype = list->count;
-        assert(VType_String == t.vtype);
-        array_add(list, t);
-    }
+    vtype_add_core(inter, VariableKind_Any, "Any", VTypeID_Any);
+    vtype_add_core(inter, VariableKind_Primitive, "Int", VTypeID_Int);
+    vtype_add_core(inter, VariableKind_Primitive, "Bool", VTypeID_Bool);
+    vtype_add_core(inter, VariableKind_Primitive, "String", VTypeID_String);
     
     define_core(inter);
     
@@ -1660,7 +1500,7 @@ internal_fn void register_definitions(Interpreter* inter)
         OpNode* ast = it.value->ast;
         
         if (ast->kind != OpKind_Block) {
-            assert(0);
+            invalid_codepath();
             continue;
         }
         
@@ -1673,14 +1513,9 @@ internal_fn void register_definitions(Interpreter* inter)
     // Analyze initialize expresions
     if (inter->mode != InterpreterMode_Execute)
     {
-        for (i32 vtype = VType_Any + 1; vtype < inter->vtype_table.count; vtype++) {
-            object_alloc(inter, vtype);
+        for (VTypeID ID = VTypeID_Any + 1; ID < inter->vtype_table.count; ID++) {
+            object_alloc(inter, vtype_get(inter, ID));
         }
-    }
-    
-    foreach(i, inter->vtype_table.count) {
-        VariableType t = inter->vtype_table[i];
-        assert(t.kind != VariableKind_Array);
     }
 }
 
@@ -1692,8 +1527,8 @@ internal_fn void define_globals(Interpreter* inter)
     
     // Yov struct
     {
-        inter->globals.yov = scope_find_object_ref(inter, "yov", false);
-        ref = lvalue_from_ref(inter->globals.yov);
+        inter->globals.yov = scope_find_value(inter, "yov", false);
+        ref = inter->globals.yov;
         
         member = value_get_member(inter, ref, "minor");
         set_int(member, YOV_MINOR_VERSION);
@@ -1713,13 +1548,13 @@ internal_fn void define_globals(Interpreter* inter)
     
     // OS struct
     {
-        inter->globals.os = scope_find_object_ref(inter, "os", false);
-        ref = lvalue_from_ref(inter->globals.os);
+        inter->globals.os = scope_find_value(inter, "os", false);
+        ref = inter->globals.os;
         
         member = value_get_member(inter, ref, "kind");
         
 #if OS_WINDOWS
-        set_enum_index(inter, member, 0);
+        set_enum_index(member, 0);
 #else 
 #error TODO
 #endif
@@ -1727,8 +1562,8 @@ internal_fn void define_globals(Interpreter* inter)
     
     // Context struct
     {
-        inter->globals.context = scope_find_object_ref(inter, "context", false);
-        ref = lvalue_from_ref(inter->globals.context);
+        inter->globals.context = scope_find_value(inter, "context", false);
+        ref = inter->globals.context;
         
         member = value_get_member(inter, ref, "cd");
         set_string(inter, member, yov->scripts[0].dir);
@@ -1759,8 +1594,7 @@ internal_fn void define_globals(Interpreter* inter)
             for (auto it = pooled_array_make_iterator(&inter->vtype_table); it.valid; ++it) {
                 u32 index = it.index;
                 Value element = value_get_element(inter, array, index);
-                i32 vtype = it.value->vtype;
-                value_assign_Type(inter, element, vtype);
+                value_assign_Type(inter, element, it.value);
             }
             
             member = value_get_member(inter, ref, "types");
@@ -1770,7 +1604,7 @@ internal_fn void define_globals(Interpreter* inter)
     
     // Calls struct
     {
-        inter->globals.calls = scope_find_object_ref(inter, "calls", false);
+        inter->globals.calls = scope_find_value(inter, "calls", false);
     }
 }
 
@@ -1795,10 +1629,10 @@ internal_fn void print_script_help(Interpreter* inter)
     
     // Script description
     {
-        ObjectRef* ref = scope_find_object_ref(inter, "script_description", true);
+        Value value = scope_find_value(inter, "script_description", true);
         
-        if (ref != nil_ref) {
-            String description = get_string(lvalue_from_ref(ref));
+        if (is_valid(value)) {
+            String description = get_string(value);
             append(&builder, description);
             append(&builder, "\n\n");
         }
@@ -1811,21 +1645,21 @@ internal_fn void print_script_help(Interpreter* inter)
     {
         ArgDefinition* arg = it.value;
         
-        b32 show_type = arg->vtype != VType_Bool && arg->vtype > 0;
+        b32 show_type = arg->vtype->ID != VTypeID_Bool && arg->vtype->ID > VTypeID_Void;
         
         String space = "    ";
         
         String header;
         if (show_type)
         {
-            VariableType type = vtype_get(inter, arg->vtype);
+            const VariableType* type = arg->vtype;
             
             String type_str;
-            if (type.kind == VariableKind_Enum) {
+            if (type->kind == VariableKind_Enum) {
                 type_str = "enum";
             }
             else {
-                type_str = string_from_vtype(scratch.arena, inter, arg->vtype);
+                type_str = arg->vtype->name;
             }
             header = string_format(scratch.arena, "%S%S -> %S", space, arg->name, type_str);
         }
@@ -1907,17 +1741,17 @@ void interpret(InterpreterSettings settings, InterpreterMode mode)
     assert(yov->error_count != 0 || inter->global_scope == inter->current_scope);
 }
 
-void interpreter_exit(Interpreter* inter, i32 exit_code)
+void interpreter_exit(Interpreter* inter, i64 exit_code)
 {
     yov_set_exit_code(exit_code);
     yov->error_count++;// TODO(Jose): Weird
 }
 
-void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, String resolved_line, Result result)
+void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, Result result)
 {
     String script_path = yov_get_script(code.script_id)->path;
-    print_error("%S(%u): %S\n\t--> %S\n", script_path, (u32)code.line, resolved_line, result.message);
-    interpreter_exit(inter, result.exit_code);
+    print_error("%S(%u): %S\n", script_path, (u32)code.line, result.message);
+    interpreter_exit(inter, result.code);
 }
 
 Result user_assertion(Interpreter* inter, String message)
@@ -1927,7 +1761,7 @@ Result user_assertion(Interpreter* inter, String message)
 }
 
 Value get_cd(Interpreter* inter) {
-    return value_get_member(inter, lvalue_from_ref(inter->globals.context), "cd");
+    return value_get_member(inter, inter->globals.context, "cd");
 }
 
 String get_cd_value(Interpreter* inter) {
@@ -1945,9 +1779,9 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path)
 
 RedirectStdout get_calls_redirect_stdout(Interpreter* inter)
 {
-    Value calls = lvalue_from_ref(inter->globals.calls);
+    Value calls = inter->globals.calls;
     Value redirect_stdout = value_get_member(inter, calls, "redirect_stdout");
-    return (RedirectStdout)get_enum_index(inter, redirect_stdout);
+    return (RedirectStdout)get_enum_index(redirect_stdout);
 }
 
 b32 interpretion_failed(Interpreter* inter)
@@ -1963,13 +1797,522 @@ b32 skip_ops(Interpreter* inter)
     if (inter->mode == InterpreterMode_Execute)
     {
         Scope* returnable_scope = scope_find_returnable(inter);
-        if (returnable_scope->expected_return_vtype > 0 && !is_null(returnable_scope->return_value)) return true;
+        if (returnable_scope->return_requested) return true;
         
         Scope* looping_scope = scope_find_looping(inter);
-        if (looping_scope != NULL && looping_scope->loop_iteration_continue_requested) return true;
+        if (looping_scope != NULL && looping_scope->continue_requested) return true;
     }
     
     return false;
+}
+
+b32 validate_assignment(Interpreter* inter, VariableType* dst_vtype, Value src)
+{
+    SCRATCH();
+    if (dst_vtype->ID == VTypeID_Any) {
+        return true;
+    }
+    
+    VariableType* src_vtype = value_get_expected_vtype(src);
+    
+    if (inter->mode != InterpreterMode_Execute)
+    {
+        if (src.vtype->ID == VTypeID_Any) {
+            src_vtype = dst_vtype;
+        }
+    }
+    
+    if (dst_vtype != src_vtype) return false;
+    
+    if (is_null(src)) {
+        if (dst_vtype->ID <= VTypeID_Void) return false;
+        if (dst_vtype->ID == VTypeID_Any) return false;
+    }
+    
+    return true;
+}
+
+Value value_unpack_main(Interpreter* inter, Value value) {
+    if (is_void(value) || is_unknown(value)) return value;
+    if (!value_is_tuple(value)) return value;
+    return value_get_element(inter, value, 0);
+}
+
+Array<Value> value_unpack(Arena* arena, Interpreter* inter, Value value)
+{
+    if (is_void(value) || is_unknown(value)) return {};
+    
+    VariableType* vtype = value_get_expected_vtype(value);
+    
+    Array<Value> values;
+    if (vtype_is_tuple(vtype))
+    {
+        u32 count = vtype->_struct.vtypes.count;
+        values = array_make<Value>(arena, count);
+        foreach(i, count) {
+            values[i] = value_get_element(inter, value, i);
+        }
+        return values;
+    }
+    else {
+        values = array_make<Value>(arena, 1);
+        values[0] = value;
+    }
+    
+    return values;
+}
+
+Array<VariableType*> vtype_unpack(Arena* arena, Interpreter* inter, VariableType* vtype, u32 match_count)
+{
+    Array<VariableType*> vtypes = array_make<VariableType*>(arena, match_count);
+    
+    if (vtype_is_tuple(vtype)) {
+        foreach(i, match_count) {
+            VariableType* t = VType_Any;
+            if (i < vtype->_struct.vtypes.count) t = vtype->_struct.vtypes[i];
+            vtypes[i] = t;
+        }
+    }
+    else {
+        foreach(i, match_count) vtypes[i] = vtype;
+    }
+    
+    return vtypes;
+}
+
+b32 value_is_tuple(Value value) {
+    VariableType* vtype = value_get_expected_vtype(value);
+    return vtype->kind == VariableKind_Struct && vtype->_struct.is_tuple;
+}
+
+void run_assignment(Interpreter* inter, Value dst, Value src, BinaryOperator op, CodeLocation code)
+{
+    SCRATCH();
+    
+    if (is_unknown(dst)) return;
+    if (is_unknown(src)) return;
+    
+    if (dst.kind != ValueKind_LValue) {
+        report_expr_expects_lvalue(code);
+        return;
+    }
+    
+    if (is_const(dst)) {
+        report_assignment_is_constant(code, string_from_value(scratch.arena, inter, dst));
+        return;
+    }
+    
+    if (op != BinaryOperator_None) {
+        src = run_binary_operation(inter, dst, src, op, code);
+        if (is_unknown(src)) return;
+    }
+    
+    if (!validate_assignment(inter, dst.vtype, src)) {
+        VariableType* src_vtype = value_get_expected_vtype(src);
+        report_type_missmatch_assign(code, src_vtype->name, dst.vtype->name);
+        return;
+    }
+    
+    if (!value_assign(inter, &dst, src)) {
+        invalid_codepath();
+    }
+}
+
+void run_multiple_assignment(Interpreter* inter, Array<Value> dst_values, Array<Value> src_values, BinaryOperator op, CodeLocation code)
+{
+    SCRATCH();
+    
+    if (dst_values.count == 0) return;
+    if (src_values.count == 0) return;
+    
+    if (src_values.count == 1)
+    {
+        Value src = src_values[0];
+        
+        foreach(i, dst_values.count) {
+            run_assignment(inter, dst_values[i], src, op, code);
+        }
+    }
+    else
+    {
+        if (dst_values.count > src_values.count) {
+            report_error(code, "Destination assignments exceedes the number of sources");
+            return;
+        }
+        
+        foreach(i, dst_values.count) {
+            run_assignment(inter, dst_values[i], src_values[i], op, code);
+        }
+        
+        // Runtime errors
+        Array<Value> ignored = array_subarray(src_values, dst_values.count, src_values.count - dst_values.count);
+        run_ignored_values(inter, ignored, code);
+    }
+}
+
+void run_ignored_values(Interpreter* inter, Array<Value> values, CodeLocation code)
+{
+    if (inter->mode != InterpreterMode_Execute) return;
+    
+    foreach(i, values.count)
+    {
+        Value value = values[i];
+        
+        if (value.vtype->ID == VType_Result->ID) {
+            Result result = Result_from_value(inter, value);
+            if (result.failed) {
+                interpreter_report_runtime_error(inter, code, result);
+            }
+        }
+    }
+}
+
+Value run_binary_operation(Interpreter* inter, Value left, Value right, BinaryOperator op, CodeLocation code)
+{
+    SCRATCH();
+    
+    left = value_unpack_main(inter, left);
+    right = value_unpack_main(inter, right);
+    
+    VariableType* left_vtype = value_get_expected_vtype(left);
+    VariableType* right_vtype = value_get_expected_vtype(right);
+    
+    if (is_int(left) && is_int(right)) {
+        if (op == BinaryOperator_Addition) return alloc_int(inter, get_int(left) + get_int(right));
+        if (op == BinaryOperator_Substraction) return alloc_int(inter, get_int(left) - get_int(right));
+        if (op == BinaryOperator_Multiplication) return alloc_int(inter, get_int(left) * get_int(right));
+        if (op == BinaryOperator_Division || op == BinaryOperator_Modulo) {
+            i64 divisor = get_int(right);
+            if (divisor == 0) {
+                report_zero_division(code);
+                return alloc_int(inter, i64_max);
+            }
+            if (op == BinaryOperator_Modulo) return alloc_int(inter, get_int(left) % divisor);
+            return alloc_int(inter, get_int(left) / divisor);
+        }
+        if (op == BinaryOperator_Equals) return alloc_bool(inter, get_int(left) == get_int(right));
+        if (op == BinaryOperator_NotEquals) return alloc_bool(inter, get_int(left) != get_int(right));
+        if (op == BinaryOperator_LessThan) return alloc_bool(inter, get_int(left) < get_int(right));
+        if (op == BinaryOperator_LessEqualsThan) return alloc_bool(inter, get_int(left) <= get_int(right));
+        if (op == BinaryOperator_GreaterThan) return alloc_bool(inter, get_int(left) > get_int(right));
+        if (op == BinaryOperator_GreaterEqualsThan) return alloc_bool(inter, get_int(left) >= get_int(right));
+    }
+    
+    if (is_bool(left) && is_bool(right)) {
+        if (op == BinaryOperator_LogicalOr) return alloc_bool(inter, get_bool(left) || get_bool(right));
+        if (op == BinaryOperator_LogicalAnd) return alloc_bool(inter, get_bool(left) && get_bool(right));
+        if (op == BinaryOperator_Equals) return alloc_bool(inter, get_bool(left) == get_bool(right));
+        if (op == BinaryOperator_NotEquals) return alloc_bool(inter, get_bool(left) != get_bool(right));
+    }
+    
+    if (is_string(left) && is_string(right))
+    {
+        if (op == BinaryOperator_Addition) {
+            String str = string_format(scratch.arena, "%S%S", get_string(left), get_string(right));
+            return alloc_string(inter, str);
+        }
+        else if (op == BinaryOperator_Division)
+        {
+            if (os_path_is_absolute(get_string(right))) {
+                report_right_path_cant_be_absolute(code);
+                return left;
+            }
+            
+            String str = path_append(scratch.arena, get_string(left), get_string(right));
+            str = path_resolve(scratch.arena, str);
+            
+            return alloc_string(inter, str);
+        }
+        else if (op == BinaryOperator_Equals) {
+            return alloc_bool(inter, (b8)string_equals(get_string(left), get_string(right)));
+        }
+        else if (op == BinaryOperator_NotEquals) {
+            return alloc_bool(inter, !(b8)string_equals(get_string(left), get_string(right)));
+        }
+    }
+    
+    if (left_vtype->ID == VType_Type->ID && right_vtype->ID == VType_Type->ID)
+    {
+        i64 left_id = get_int(value_get_member(inter, left, "ID"));
+        i64 right_id = get_int(value_get_member(inter, right, "ID"));
+        if (op == BinaryOperator_Equals) {
+            return alloc_bool(inter, left_id == right_id);
+        }
+        else if (op == BinaryOperator_NotEquals) {
+            return alloc_bool(inter, left_id == right_id);
+        }
+    }
+    
+    if ((is_string(left) && is_int(right)) || (is_int(left) && is_string(right)))
+    {
+        if (op == BinaryOperator_Addition)
+        {
+            Value string_value = is_string(left) ? left : right;
+            Value codepoint_value = is_int(left) ? left : right;
+            
+            String codepoint_str = string_from_codepoint(scratch.arena, (u32)get_int(codepoint_value));
+            
+            String left_str = is_string(left) ? get_string(left) : codepoint_str;
+            String right_str = is_string(right) ? get_string(right) : codepoint_str;
+            
+            String str = string_format(scratch.arena, "%S%S", left_str, right_str);
+            return alloc_string(inter, str);
+        }
+    }
+    
+    if (is_enum(left) && is_enum(right)) {
+        if (op == BinaryOperator_Equals) {
+            return alloc_bool(inter, get_enum_index(left) == get_enum_index(right));
+        }
+        else if (op == BinaryOperator_NotEquals) {
+            return alloc_bool(inter, get_enum_index(left) != get_enum_index(right));
+        }
+    }
+    
+    if (left_vtype->child_next->ID == right_vtype->child_next->ID && left_vtype->kind == VariableKind_Array && right_vtype->kind == VariableKind_Array)
+    {
+        VariableType* element_vtype = left_vtype->child_next;
+        
+        i32 left_count = get_array(left).count;
+        i32 right_count = get_array(right).count;
+        
+        if (op == BinaryOperator_Addition) {
+            Value array = alloc_array(inter, element_vtype, left_count + right_count, true);
+            for (u32 i = 0; i < left_count; ++i) {
+                Value dst = value_get_element(inter, array, i);
+                Value src = value_get_element(inter, left, i);
+                value_assign_as_new(inter, &dst, src);
+            }
+            for (u32 i = 0; i < right_count; ++i) {
+                Value dst = value_get_element(inter, array, left_count + i);
+                Value src = value_get_element(inter, right, i);
+                value_assign_as_new(inter, &dst, src);
+            }
+            return array;
+        }
+    }
+    
+    if ((left_vtype->kind == VariableKind_Array && right_vtype->kind != VariableKind_Array) || (left_vtype->kind != VariableKind_Array && right_vtype->kind == VariableKind_Array))
+    {
+        VariableType* array_type = (left_vtype->kind == VariableKind_Array) ? left_vtype : right_vtype;
+        VariableType* element_type = (left_vtype->kind == VariableKind_Array) ? right_vtype : left_vtype;
+        
+        if (array_type->child_next->ID != element_type->ID) {
+            report_type_missmatch_append(code, element_type->name, array_type->name);
+            return value_nil();
+        }
+        
+        Value array_src = (left_vtype->kind == VariableKind_Array) ? left : right;
+        Value element = (left_vtype->kind == VariableKind_Array) ? right : left;
+        
+        i32 array_src_count = get_array(array_src).count;
+        Value array = alloc_array(inter, element_type, array_src_count + 1, true);
+        
+        i32 array_offset = (left_vtype->kind == VariableKind_Array) ? 0 : 1;
+        
+        for (i32 i = 0; i < array_src_count; ++i) {
+            Value dst = value_get_element(inter, array, i + array_offset);
+            Value src = value_get_element(inter, array_src, i);
+            value_assign_as_new(inter, &dst, src);
+        }
+        
+        i32 element_offset = (left_vtype->kind == VariableKind_Array) ? array_src_count : 0;
+        Value dst = value_get_element(inter, array, element_offset);
+        value_assign_as_new(inter, &dst, element);
+        
+        return array;
+    }
+    
+    report_invalid_binary_op(code, left_vtype->name, string_from_binary_operator(op), right_vtype->name);
+    return value_nil();
+}
+
+Value run_signed_operation(Interpreter* inter, Value value, BinaryOperator op, CodeLocation code)
+{
+    SCRATCH();
+    
+    value = value_unpack_main(inter, value);
+    
+    VariableType* vtype = value_get_expected_vtype(value);
+    
+    if (vtype->ID == VTypeID_Int) {
+        if (op == BinaryOperator_Addition) return value;
+        if (op == BinaryOperator_Substraction) return alloc_int(inter, -get_int(value));
+    }
+    
+    if (vtype->ID == VTypeID_Bool) {
+        if (op == BinaryOperator_LogicalNot) return alloc_bool(inter, !get_bool(value));
+    }
+    
+    return value_nil();
+}
+
+Value run_function_call(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node)
+{
+    SCRATCH();
+    
+    Scope* return_scope = inter->current_scope;
+    CodeLocation code = parent_node->code;
+    
+    if (parameters.count != fn->parameters.count) {
+        report_function_expecting_parameters(code, fn->identifier, fn->parameters.count);
+        return value_nil();
+    }
+    
+    // Ignore errors
+    foreach(i, parameters.count) {
+        if (is_unknown(parameters[i])) return value_nil();
+    }
+    
+    // Check parameters
+    foreach(i, parameters.count)
+    {
+        if (!validate_assignment(inter, fn->parameters[i].vtype, parameters[i])) {
+            report_function_wrong_parameter_type(code, fn->identifier, fn->parameters[i].vtype->name, i + 1);
+            return value_nil();
+        }
+        if (fn->parameters[i].is_reference && parameters[i].kind != ValueKind_Reference) {
+            report_function_expects_ref_as_parameter(code, fn->identifier, i + 1);
+            return value_nil();
+        }
+        if (!fn->parameters[i].is_reference && parameters[i].kind == ValueKind_Reference) {
+            report_function_expects_noref_as_parameter(code, fn->identifier, i + 1);
+            return value_nil();
+        }
+    }
+    
+    Array<Value> returns = array_make<Value>(scratch.arena, fn->returns.count);
+    
+    Scope* fn_scope = scope_push_function(inter, fn);
+    DEFER(scope_pop(inter));
+    
+    // TODO(Jose): This should be the same for user-defined functions
+    if (fn->is_intrinsic && inter->mode != InterpreterMode_Execute)
+    {
+        foreach(i, returns.count)
+        {
+            VariableType* vtype = fn->returns[i].vtype;
+            
+            if (vtype->ID == VTypeID_Any) {
+                // TODO(Jose): vtype = expected_vtypes[i];
+            }
+            
+            if (vtype->ID <= VTypeID_Any) {
+                report_error(code, "Unresolved return type");
+                return value_nil();
+            }
+            
+            Value value;
+            if (vtype->ID == VTypeID_Void) value = value_void();
+            else if (vtype->kind == VariableKind_Array) {
+                // TODO(Jose): On analysis we need to return an array with at least 1 element,
+                // This does not work for multidimensional arrays
+                value = alloc_array(inter, vtype->child_next, 1, false);
+            }
+            else {
+                value = object_alloc(inter, vtype);
+            }
+            
+            returns[i] = value;
+        }
+    }
+    else
+    {
+        // Initialize scope
+        {
+            foreach(i, fn->returns.count) {
+                ObjectDefinition* def = &fn->returns[i];
+                
+                Value default_value = value_void();
+                
+                // Explicit default value
+                if (def->default_value != NULL) {
+                    default_value = interpret_expresion(inter, def->default_value, ExpresionContext_from_vtype(def->vtype));
+                    if (is_unknown(default_value)) return value_nil();
+                }
+                
+                b32 explicit_value = default_value.vtype != void_vtype;
+                
+                // Default Value
+                if (!explicit_value)
+                {
+                    VariableType* vtype = def->vtype;
+                    
+                    if (vtype->ID == VTypeID_Any) {
+                        default_value = alloc_int(inter, 0);
+                        default_value.vtype = vtype;
+                    }
+                    else if (vtype->kind == VariableKind_Struct) {
+                        default_value = value_null(vtype);
+                    }
+                    else {
+                        default_value = object_alloc(inter, def->vtype);
+                    }
+                }
+                
+                if (!validate_assignment(inter, def->vtype, default_value)) {
+                    VariableType* src_vtype = value_get_expected_vtype(default_value);
+                    report_type_missmatch_assign(def->default_value->code, src_vtype->name, def->vtype->name);
+                    return value_nil();
+                }
+                
+                returns[i] = scope_define_value(inter, def->name, default_value);
+                if (explicit_value) value_on_assignment(inter, returns[i]);
+            }
+            
+            if (!fn->is_intrinsic)
+            {
+                foreach(i, fn->parameters.count) {
+                    ObjectDefinition param_def = fn->parameters[i];
+                    // TODO(Jose): Default parameters here!!
+                    scope_define_value(inter, param_def.name, parameters[i], false);
+                }
+            }
+        }
+        
+        if (fn->is_intrinsic) {
+            fn->intrinsic.fn(inter, parameters, returns, code);
+        }
+        else {
+            interpret_op(inter, parent_node, fn->defined_fn);
+            
+            foreach(i, fn->returns.count) {
+                ObjectDefinition* def = &fn->returns[i];
+                returns[i] = scope_find_value(inter, def->name, false);
+            }
+        }
+    }
+    
+    foreach(i, returns.count)
+    {
+        if (returns[i].kind != ValueKind_LValue) continue;
+        
+        b32 init = returns[i].lvalue.ref->assignment_count != 0;
+        if (!init) {
+            CodeLocation fn_code = (fn->defined_fn == NULL) ? code : fn->defined_fn->code;
+            String name = fn->returns[i].name;
+            if (string_equals(name, "return")) { report_function_no_return(fn_code, fn->identifier); }
+            else { report_function_no_return_named(fn_code, fn->identifier, name); }
+            return value_nil();
+        }
+    }
+    
+    Value return_value = value_void();
+    if (fn->returns.count == 1 && returns[0].vtype == fn->return_vtype) {
+        return_value = returns[0];
+    }
+    else if (fn->returns.count > 0)
+    {
+        // Return type is an internal data structure!
+        return_value = object_alloc(inter, fn->return_vtype);
+        foreach(i, returns.count) {
+            Value element = value_get_element(inter, return_value, i);
+            value_assign_ref(inter, &element, returns[i]);
+        }
+    }
+    
+    scope_add_temporal(inter, return_scope, return_value.obj);
+    return return_value;
 }
 
 //- SCOPE 
@@ -1980,7 +2323,6 @@ Scope* scope_alloc(Interpreter* inter, ScopeType type)
     scope->object_refs = pooled_array_make<ObjectRef>(yov->static_arena, 32);
     scope->temp_objects = pooled_array_make<Object*>(yov->static_arena, 8);
     scope->type = type;
-    scope->return_value = value_void();
     return scope;
 }
 
@@ -2005,12 +2347,12 @@ void scope_clear(Interpreter* inter, Scope* scope)
     
     object_free_unused(inter);
     
-    scope->return_value = value_void();
-    scope->loop_iteration_continue_requested = false;
-    scope->loop_iteration_break_requested = false;
+    scope->return_requested = false;
+    scope->continue_requested = false;
+    scope->break_requested = false;
 }
 
-Scope* scope_push(Interpreter* inter, ScopeType type, i32 expected_return_vtype, b32 expected_return_reference)
+Scope* scope_push(Interpreter* inter, ScopeType type)
 {
     Scope* scope = NULL;
     
@@ -2024,15 +2366,17 @@ Scope* scope_push(Interpreter* inter, ScopeType type, i32 expected_return_vtype,
     
     if (scope == NULL) scope = scope_alloc(inter, type);
     
-    scope->return_value = value_void();
-    
-    scope->expected_return_vtype = expected_return_vtype;
-    scope->expected_return_reference = expected_return_reference;
-    
     scope->previous = inter->current_scope;
     inter->current_scope->next = scope->previous;
     inter->current_scope = scope;
     
+    return scope;
+}
+
+Scope* scope_push_function(Interpreter* inter, FunctionDefinition* fn)
+{
+    Scope* scope = scope_push(inter, ScopeType_Function);
+    scope->fn = fn;
     return scope;
 }
 
@@ -2073,7 +2417,7 @@ Scope* scope_find_returnable(Interpreter* inter)
         if (scope->type == ScopeType_Global) return scope;
         scope = scope->previous;
     }
-    assert(0);
+    invalid_codepath();
     return inter->global_scope;
 }
 
@@ -2088,17 +2432,16 @@ Scope* scope_find_looping(Interpreter* inter)
     return NULL;
 }
 
-ObjectRef* scope_define_object_ref(Interpreter* inter, String identifier, Value value, b32 constant)
+Value scope_define_value(Interpreter* inter, String identifier, Value value, b32 constant)
 {
     assert(is_valid(value));
-    assert(scope_find_object_ref(inter, identifier, false) == nil_ref);
+    assert(is_unknown(scope_find_value(inter, identifier, false)));
     assert(identifier.size > 0);
     
     Scope* scope = inter->current_scope;
     
     ObjectRef* ref = array_add(&scope->object_refs);
     ref->identifier = identifier;
-    
     ref->vtype = value.vtype;
     ref->object = null_obj;
     ref->constant = constant;
@@ -2106,12 +2449,13 @@ ObjectRef* scope_define_object_ref(Interpreter* inter, String identifier, Value 
     Value lvalue = lvalue_from_ref(ref);
     value_assign_as_new(inter, &lvalue, value);
     
-    return ref;
+    ref->assignment_count = 0;
+    return lvalue;
 }
 
-ObjectRef* scope_find_object_ref(Interpreter* inter, String identifier, b32 parent_scopes)
+Value scope_find_value(Interpreter* inter, String identifier, b32 parent_scopes)
 {
-    if (identifier.size == 0) return nil_ref;
+    if (identifier.size == 0) return value_nil();
     
     Scope* scope = inter->current_scope;
     
@@ -2120,7 +2464,7 @@ ObjectRef* scope_find_object_ref(Interpreter* inter, String identifier, b32 pare
         for (auto it = pooled_array_make_iterator(&scope->object_refs); it.valid; ++it) {
             ObjectRef* ref = it.value;
             if (string_equals(ref->identifier, identifier)) {
-                return ref;
+                return lvalue_from_ref(ref);
             }
         }
         
@@ -2131,23 +2475,22 @@ ObjectRef* scope_find_object_ref(Interpreter* inter, String identifier, b32 pare
         scope = scope->previous;
     }
     
-    if (scope != inter->global_scope) {
-        
+    if (parent_scopes && scope != inter->global_scope) {
         for (auto it = pooled_array_make_iterator(&inter->global_scope->object_refs); it.valid; ++it) {
             ObjectRef* ref = it.value;
             // TODO(Jose): if (ref->is_constant && string_equals(ref->identifier, identifier)) {
             if (string_equals(ref->identifier, identifier)) {
-                return ref;
+                return lvalue_from_ref(ref);
             }
         }
     }
     
-    return nil_ref;
+    return value_nil();
 }
 
 //- DEFINITIONS
 
-i32 define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values)
+VariableType* define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values)
 {
     SCRATCH();
     
@@ -2159,22 +2502,18 @@ i32 define_enum(Interpreter* inter, String name, Array<String> names, Array<i64>
     names = array_copy(yov->static_arena, names);
     values = array_copy(yov->static_arena, values);
     
-    VariableType t = {};
-    t.name = name;
-    t.kind = VariableKind_Enum;
-    t.vtype = inter->vtype_table.count;
-    t.enum_names = names;
-    t.enum_values = values;
+    VariableType* t = vtype_add(inter, VariableKind_Enum, name, nil_vtype, nil_vtype);
+    t->_enum.names = names;
+    t->_enum.values = values;
     assert(names.count == values.count);
-    array_add(&inter->vtype_table, t);
     
-    return t.vtype;
+    return t;
 }
 
-void define_struct(Interpreter* inter, String name, Array<ObjectDefinition> members)
+VariableType* define_struct(Interpreter* inter, String name, Array<ObjectDefinition> members, b32 is_tuple)
 {
     Array<String> names = array_make<String>(yov->static_arena, members.count);
-    Array<i32> vtypes = array_make<i32>(yov->static_arena, members.count);
+    Array<VariableType*> vtypes = array_make<VariableType*>(yov->static_arena, members.count);
     Array<OpNode*> initialize_expresions = array_make<OpNode*>(yov->static_arena, members.count);
     
     foreach(i, vtypes.count)
@@ -2185,20 +2524,18 @@ void define_struct(Interpreter* inter, String name, Array<ObjectDefinition> memb
         vtypes[i] = member.vtype;
         initialize_expresions[i] = member.default_value;
         
-        if (vtypes[i] < 0) return;
+        if (vtypes[i] < 0) return nil_vtype;
     }
     
-    VariableType t = {};
-    t.name = name;
-    t.kind = VariableKind_Struct;
-    t.vtype = inter->vtype_table.count;
-    t.struct_names = names;
-    t.struct_vtypes = vtypes;
-    t.struct_initialize_expresions = initialize_expresions;
-    array_add(&inter->vtype_table, t);
+    VariableType* t = vtype_add(inter, VariableKind_Struct, name, nil_vtype, nil_vtype);
+    t->_struct.names = names;
+    t->_struct.vtypes = vtypes;
+    t->_struct.initialize_expresions = initialize_expresions;
+    t->_struct.is_tuple = is_tuple;
+    return t;
 }
 
-void define_arg(Interpreter* inter, String identifier, String name, i32 vtype, b32 required, String description)
+void define_arg(Interpreter* inter, String identifier, String name, VariableType* vtype, b32 required, String description)
 {
     ArgDefinition arg{};
     arg.identifier = identifier;
@@ -2210,29 +2547,44 @@ void define_arg(Interpreter* inter, String identifier, String name, i32 vtype, b
     array_add(&inter->arg_definitions, arg);
 }
 
-void define_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype, b32 return_reference, OpNode_Block* block)
+internal_fn VariableType* calculate_return_vtype_for_fn(Interpreter* inter, FunctionDefinition* fn)
+{
+    SCRATCH();
+    
+    if (fn->returns.count == 0) return void_vtype;
+    
+    if (fn->returns.count == 1 && string_equals(fn->returns[0].name, "return")) {
+        return fn->returns[0].vtype;
+    }
+    
+    return define_struct(inter, string_format(scratch.arena, "%S_return", fn->identifier), fn->returns, true);
+}
+
+void define_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns, OpNode_Block* block)
 {
     FunctionDefinition fn{};
     fn.identifier = identifier;
-    fn.return_vtype = return_vtype;
-    fn.return_reference = return_reference;
     fn.parameters = array_copy(yov->static_arena, parameters);
+    fn.returns = array_copy(yov->static_arena, returns);
     fn.defined_fn = block;
     fn.code = code;
     fn.is_intrinsic = false;
+    fn.return_vtype = calculate_return_vtype_for_fn(inter, &fn);
+    
     array_add(&inter->functions, fn);
 }
 
-void define_intrinsic_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, i32 return_vtype)
+void define_intrinsic_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns)
 {
     FunctionDefinition fn{};
     fn.identifier = identifier;
-    fn.return_vtype = return_vtype;
-    fn.return_reference = false;
     fn.parameters = array_copy(yov->static_arena, parameters);
+    fn.returns = array_copy(yov->static_arena, returns);
     fn.defined_fn = NULL;
     fn.code = code;
     fn.is_intrinsic = true;
+    fn.return_vtype = calculate_return_vtype_for_fn(inter, &fn);
+    
     array_add(&inter->functions, fn);
 }
 
@@ -2242,11 +2594,11 @@ Symbol find_symbol(Interpreter* inter, String identifier)
     symbol.identifier = identifier;
     
     {
-        ObjectRef* ref = scope_find_object_ref(inter, identifier, true);
+        Value value = scope_find_value(inter, identifier, true);
         
-        if (ref != nil_ref) {
+        if (is_valid(value)) {
             symbol.type = SymbolType_ObjectRef;
-            symbol.ref = ref;
+            symbol.ref = value.lvalue.ref;
             return symbol;
         }
     }
@@ -2262,9 +2614,9 @@ Symbol find_symbol(Interpreter* inter, String identifier)
     }
     
     {
-        i32 vtype = vtype_from_name(inter, identifier);
+        VariableType* vtype = vtype_from_name(inter, identifier);
         
-        if (vtype >= 0) {
+        if (vtype->ID != VTypeID_Unknown) {
             symbol.type = SymbolType_Type;
             symbol.vtype = vtype;
             return symbol;
@@ -2292,155 +2644,54 @@ ArgDefinition* find_arg_definition_by_name(Interpreter* inter, String name)
     return NULL;
 }
 
-Value call_function(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node, ExpresionContext* expresion_context)
+VariableType* vtype_add(Interpreter* inter, VariableKind kind, String name, VariableType* child_next, VariableType* child_base)
+{
+    u64 ID = inter->vtype_table.count + 1;
+    VariableType* type = array_add(&inter->vtype_table);
+    type->ID = ID;
+    type->kind = kind;
+    type->name = string_copy(yov->static_arena, name);
+    type->child_base = child_base;
+    type->child_next = child_next;
+    return type;
+}
+
+VariableType* vtype_get(Interpreter* inter, VTypeID ID) {
+    if (ID == VTypeID_Void) return void_vtype;
+    u32 index = (u32)ID - 1;
+    if (index < 0 || index >= inter->vtype_table.count) return nil_vtype;
+    return &inter->vtype_table[index];
+}
+
+VariableType* vtype_from_dimension(Interpreter* inter, VariableType* element, u32 dimension)
 {
     SCRATCH();
+    if (dimension == 0) return element;
     
-    Scope* return_scope = inter->current_scope;
-    CodeLocation code = parent_node->code;
-    
-    if (parameters.count != fn->parameters.count) {
-        report_function_expecting_parameters(code, fn->identifier, fn->parameters.count);
-        return value_nil();
+    for (auto it = pooled_array_make_iterator(&inter->vtype_table); it.valid; ++it) {
+        VariableType* type = it.value;
+        if (type->kind != VariableKind_Array) continue;
+        if (type->array_dimensions != dimension) continue;
+        if (type->child_base->ID != element->ID) continue;
+        return type;
     }
     
-    // Ignore errors
-    foreach(i, parameters.count) {
-        if (is_unknown(parameters[i])) return value_nil();
-    }
+    VariableType* child_base = element;
+    VariableType* child_next = (dimension == 1) ? child_base : vtype_from_dimension(inter, element, dimension - 1);
+    String name = string_format(scratch.arena, "%S[]", child_next->name);
     
-    foreach(i, parameters.count)
-    {
-        if (!validate_assignment(inter, fn->parameters[i].vtype, parameters[i])) {
-            report_function_wrong_parameter_type(code, fn->identifier, string_from_vtype(scratch.arena, inter, fn->parameters[i].vtype), i + 1);
-            return value_nil();
-        }
-        if (fn->parameters[i].is_reference && parameters[i].kind != ValueKind_Reference) {
-            report_function_expects_ref_as_parameter(code, fn->identifier, i + 1);
-            return value_nil();
-        }
-        if (!fn->parameters[i].is_reference && parameters[i].kind == ValueKind_Reference) {
-            report_function_expects_noref_as_parameter(code, fn->identifier, i + 1);
-            return value_nil();
-        }
-    }
+    VariableType* type = vtype_add(inter, VariableKind_Array, name, child_next, child_base);
+    type->array_dimensions = dimension;
     
-    String resolved_line;
-    
-    // Generate resolved line
-    {
-        StringBuilder builder = string_builder_make(scratch.arena);
-        append(&builder, fn->identifier);
-        append(&builder, "(");
-        foreach(i, parameters.count) {
-            append(&builder, string_from_value(scratch.arena, inter, parameters[i], false));
-            if (i != parameters.count - 1) append(&builder, ", ");
-        }
-        append(&builder, ")");
-        resolved_line = string_from_builder(scratch.arena, &builder);
-    }
-    
-    b32 is_intrinsic = fn->is_intrinsic;
-    
-    if (is_intrinsic && inter->mode != InterpreterMode_Execute)
-    {
-        i32 vtype = fn->return_vtype;
-        if (vtype == VType_Any)
-        {
-            if (expresion_context != NULL) {
-                vtype = expresion_context->expected_vtype;
-            }
-            if (vtype <= VType_Any) vtype = VType_Int;
-        }
-        
-        if (vtype == VType_Void) return value_void();
-        Value value = object_alloc(inter, vtype);
-        value.vtype = fn->return_vtype;
-        return value;
-    }
-    
-    FunctionReturn ret{};
-    
-    if (is_intrinsic) {
-        ret = fn->intrinsic.fn(inter, parameters, code);
-    }
-    else {
-        ret.return_value = value_void();
-        ret.error_result = RESULT_SUCCESS;
-        
-        Scope* fn_scope = scope_push(inter, ScopeType_Function, fn->return_vtype, fn->return_reference);
-        
-        foreach(i, fn->parameters.count) {
-            ObjectDefinition param_def = fn->parameters[i];
-            scope_define_object_ref(inter, param_def.name, parameters[i]);
-        }
-        
-        interpret_op(inter, parent_node, fn->defined_fn);
-        ret = { fn_scope->return_value, RESULT_SUCCESS };
-        scope_add_temporal(inter, return_scope, fn_scope->return_value.obj);
-        
-        scope_pop(inter);
-    }
-    
-    if (is_unknown(ret.return_value)) return value_nil();
-    
-    if (fn->return_vtype != VType_Void && ret.return_value.vtype == VType_Void)
-    {
-        CodeLocation fn_code = (fn->defined_fn == NULL) ? code : fn->defined_fn->code;
-        report_function_no_return(fn_code, fn->identifier);
-        return value_nil();
-    }
-    
-    if (!ret.error_result.success && expresion_context == NULL) {
-        interpreter_report_runtime_error(inter, code, resolved_line, ret.error_result);
-        return ret.return_value;
-    }
-    
-    if (inter->settings.print_execution) {
-        String return_string = string_from_value(scratch.arena, inter, ret.return_value);
-        String parameters_string = "TODO";
-        log_trace(node->code, "%S(%S) => %S", fn->identifier, parameters_string, return_string);
-    }
-    
-    return ret.return_value;
+    return type;
 }
 
-VariableType vtype_get(Interpreter* inter, i32 vtype)
-{
-    u32 index, dim;
-    decode_vtype(vtype, &index, &dim);
-    
-    if (vtype < 0 || index >= inter->vtype_table.count) {
-        VariableType t{};
-        t.name = STR("Unknown");
-        t.kind = VariableKind_Unknown;
-        return t;
-    }
-    
-    VariableType t = inter->vtype_table[index];
-    
-    if (dim > 0) {
-        t.vtype = vtype;
-        t.kind = VariableKind_Array;
-        t.array_of = vtype_from_array_element(inter, vtype);
-    }
-    
-    return t;
-}
+b32 vtype_is_enum(VariableType* vtype) { return vtype->kind == VariableKind_Enum; }
+b32 vtype_is_array(VariableType* vtype) { return vtype->kind == VariableKind_Array; }
+b32 vtype_is_struct(VariableType* vtype) { return vtype->kind == VariableKind_Struct; }
+b32 vtype_is_tuple(VariableType* vtype) { return vtype_is_struct(vtype) && vtype->_struct.is_tuple; }
 
-b32 vtype_is_enum(Interpreter* inter, i32 vtype) {
-    return vtype_get(inter, vtype).kind == VariableKind_Enum;
-}
-b32 vtype_is_array(i32 vtype) {
-    u32 dims;
-    decode_vtype(vtype, NULL, &dims);
-    return dims > 0;
-}
-b32 vtype_is_struct(Interpreter* inter, i32 vtype) {
-    return vtype_get(inter, vtype).kind == VariableKind_Struct;
-}
-
-i32 vtype_from_name(Interpreter* inter, String name)
+VariableType* vtype_from_name(Interpreter* inter, String name)
 {
     u32 dimensions = 0;
     while (name.size > 2 && name[name.size - 1] == ']' && name[name.size - 2] == '[') {
@@ -2448,80 +2699,49 @@ i32 vtype_from_name(Interpreter* inter, String name)
         dimensions++;
     }
     
-    foreach(i, inter->vtype_table.count) {
-        if (string_equals(inter->vtype_table[i].name, name)) {
-            return vtype_from_array_dimension(inter, i, dimensions);
+    for (auto it = pooled_array_make_iterator(&inter->vtype_table); it.valid; ++it) {
+        if (string_equals(it.value->name, name)) {
+            return vtype_from_dimension(inter, it.value, dimensions);
         }
     }
-    return -1;
+    return nil_vtype;
 }
 
-i32 vtype_from_array_dimension(Interpreter* inter, i32 vtype, u32 dimension)
-{
-    u32 index, dim;
-    decode_vtype(vtype, &index, &dim);
-    return encode_vtype(index, dim + dimension);
-}
-
-i32 vtype_from_array_element(Interpreter* inter, i32 vtype)
-{
-    u32 index, dim;
-    decode_vtype(vtype, &index, &dim);
+u32 vtype_get_size(VariableType* vtype) {
+    if (vtype->ID == VTypeID_Void) return sizeof(Object);
+    if (vtype->ID == VTypeID_Int) return sizeof(Object_Int);
+    if (vtype->ID == VTypeID_Bool) return sizeof(Object_Bool);
+    if (vtype->ID == VTypeID_String) return sizeof(Object_String);
     
-    if (dim == 0) return -1;
-    return encode_vtype(index, dim - 1);
-}
-
-i32 vtype_from_array_base(Interpreter* inter, i32 vtype)
-{
-    if (vtype < 0) return -1;
+    if (vtype->kind == VariableKind_Array) return sizeof(Object_Array);
+    if (vtype->kind == VariableKind_Enum) return sizeof(Object_Enum);
+    if (vtype->kind == VariableKind_Struct) return sizeof(Object_Struct);
     
-    u32 index, dim;
-    decode_vtype(vtype, &index, &dim);
-    
-    return index;
-}
-
-u32 vtype_get_size(Interpreter* inter, i32 vtype) {
-    if (vtype == VType_Void) return sizeof(Object);
-    if (vtype == VType_Int) return sizeof(Object_Int);
-    if (vtype == VType_Bool) return sizeof(Object_Bool);
-    if (vtype == VType_String) return sizeof(Object_String);
-    
-    u32 dims;
-    decode_vtype(vtype, NULL, &dims);
-    if (dims > 0) return sizeof(Object_Array);
-    
-    VariableType type = vtype_get(inter, vtype);
-    if (type.kind == VariableKind_Enum) return sizeof(Object_Enum);
-    if (type.kind == VariableKind_Struct) return sizeof(Object_Struct);
-    
-    assert(0);
+    invalid_codepath();
     return sizeof(Object);
 }
 
-Value vtype_get_member(Interpreter* inter, i32 vtype, String member)
+Value vtype_get_member(Interpreter* inter, VariableType* vtype, String member)
 {
     SCRATCH();
-    VariableType type = vtype_get(inter, vtype);
     
     if (string_equals(member, "name")) {
-        String name = string_from_vtype(scratch.arena, inter, vtype);
+        String name = vtype->name;
         return alloc_string(inter, name);
     }
     
-    if (type.kind == VariableKind_Enum)
+    if (vtype->kind == VariableKind_Enum)
     {
         if (string_equals(member, "count")) {
-            return alloc_int(inter, type.enum_values.count);
+            return alloc_int(inter, vtype->_enum.values.count);
         }
         if (string_equals(member, "array")) {
             return alloc_array_from_enum(inter, vtype);
         }
         
         i64 value_index = -1;
-        foreach(i, type.enum_names.count) {
-            if (string_equals(type.enum_names[i], member)) {
+        foreach(i, vtype->_enum.names.count) {
+            if (string_equals(vtype->_enum.names[i], member)) {
                 value_index = i;
                 break;
             }
@@ -2534,68 +2754,24 @@ Value vtype_get_member(Interpreter* inter, i32 vtype, String member)
     return value_nil();
 }
 
-i32 vtype_get_element(Interpreter* inter, i32 vtype, u32 index)
+VariableType* vtype_get_element(Interpreter* inter, VariableType* vtype, u32 index)
 {
-    VariableType type = vtype_get(inter, vtype);
-    
-    if (type.kind == VariableKind_Array) {
-        return type.array_of;
+    if (vtype->kind == VariableKind_Array) {
+        return vtype->child_next;
     }
-    else if (type.kind == VariableKind_Struct) {
-        Array<i32> vtypes = type.struct_vtypes;
-        if (index >= vtypes.count) return VType_Unknown;
+    else if (vtype->kind == VariableKind_Struct) {
+        Array<VariableType*> vtypes = vtype->_struct.vtypes;
+        if (index >= vtypes.count) return nil_vtype;
         return vtypes[index];
     }
     
-    return VType_Unknown;
-}
-
-i32 encode_vtype(u32 index, u32 dimensions) {
-    u32 vtype = index;
-    vtype |= dimensions << 24;
-    return vtype;
-}
-
-void decode_vtype(i32 vtype, u32* _index, u32* _dimensions) {
-    if (vtype < 0) {
-        if (_index != NULL) *_index = u32_max;
-        if (_dimensions != NULL) *_dimensions = 0;
-    }
-    else {
-        if (_index != NULL) *_index = vtype & 0x00FFFFFF;
-        if (_dimensions != NULL) *_dimensions = vtype >> 24;
-    }
-}
-
-String string_from_vtype(Arena* arena, Interpreter* inter, i32 vtype)
-{
-    String name = vtype_get(inter, vtype).name;
-    assert(name.size);
-    
-    u32 dims;
-    decode_vtype(vtype, NULL, &dims);
-    
-    if (dims > 0)
-    {
-        String array_name;
-        array_name.size = name.size + dims * 2;
-        array_name.data = (char*)arena_push(arena, array_name.size + 1);
-        foreach(i, name.size) array_name[i] = name[i];
-        foreach(i, dims) {
-            u64 index = name.size + i * 2;
-            array_name[index + 0] = '[';
-            array_name[index + 1] = ']';
-        }
-        name = array_name;
-    }
-    
-    return name;
+    return nil_vtype;
 }
 
 //- VALUE OPS
 
-Value value_null(i32 vtype) {
-    assert(vtype > 0);
+Value value_null(VariableType* vtype) {
+    assert(vtype->ID >= VTypeID_Any);
     Value v{};
     v.kind = ValueKind_RValue;
     v.obj = null_obj;
@@ -2609,7 +2785,7 @@ Value value_void() {
     v.obj = null_obj;
     v.parent = null_obj;
     v.index = 0;
-    v.vtype = VType_Void;
+    v.vtype = void_vtype;
     return v;
 }
 
@@ -2619,15 +2795,15 @@ Value value_nil() {
     v.obj = nil_obj;
     v.parent = nil_obj;
     v.index = 0;
-    v.vtype = -1;
+    v.vtype = nil_vtype;
     return v;
 }
 
-Value value_def(Interpreter* inter, i32 vtype) {
+Value value_def(Interpreter* inter, VariableType* vtype) {
     return object_alloc(inter, vtype);
 }
 
-Value rvalue_make(Object* obj, Object* parent, u32 index, i32 vtype) {
+Value rvalue_make(Object* obj, Object* parent, u32 index, VariableType* vtype) {
     assert(is_valid(obj));
     Value v{};
     v.kind = ValueKind_RValue;
@@ -2643,8 +2819,7 @@ Value rvalue_from_obj(Object* obj) {
     return rvalue_make(obj, null_obj, 0, obj->vtype);
 }
 
-Value lvalue_make(Object* obj, ObjectRef* ref, Object* parent, u32 index, i32 vtype) {
-    assert(is_valid(obj));
+Value lvalue_make(Object* obj, ObjectRef* ref, Object* parent, u32 index, VariableType* vtype) {
     Value v{};
     v.kind = ValueKind_LValue;
     v.obj = obj;
@@ -2659,7 +2834,7 @@ Value lvalue_from_ref(ObjectRef* ref) {
     return lvalue_make(ref->object, ref, null_obj, 0, ref->vtype);
 }
 
-Value value_from_child(Value parent_value, Object* object, u32 index, i32 vtype)
+Value value_from_child(Value parent_value, Object* object, u32 index, VariableType* vtype)
 {
     if (parent_value.kind == ValueKind_RValue) {
         return rvalue_make(object, parent_value.obj, index, vtype);
@@ -2669,23 +2844,23 @@ Value value_from_child(Value parent_value, Object* object, u32 index, i32 vtype)
         return lvalue_make(object, parent_value.lvalue.ref, parent_value.obj, index, vtype);
     }
     
-    assert(0);
+    invalid_codepath();
     return value_nil();
 }
 
-Value value_from_string(Interpreter* inter, String str, i32 vtype)
+Value value_from_string(Interpreter* inter, String str, VariableType* vtype)
 {
     SCRATCH();
     if (str.size <= 0) return value_nil();
     if (string_equals(str, "null")) return value_null(vtype);
     
-    if (vtype == VType_Int) {
+    if (vtype->ID == VTypeID_Int) {
         i64 value;
         if (!i64_from_string(str, &value)) return value_nil();
         return alloc_int(inter, value);
     }
     
-    if (vtype == VType_Bool) {
+    if (vtype->ID == VTypeID_Bool) {
         if (string_equals(str, "true")) return alloc_bool(inter, true);
         if (string_equals(str, "false")) return alloc_bool(inter, false);
         if (string_equals(str, "1")) return alloc_bool(inter, true);
@@ -2693,25 +2868,23 @@ Value value_from_string(Interpreter* inter, String str, i32 vtype)
         return value_nil();
     }
     
-    if (vtype == VType_String) {
+    if (vtype->ID == VTypeID_String) {
         return alloc_string(inter, str);
     }
     
-    VariableType type = vtype_get(inter, vtype);
-    
-    if (type.kind == VariableKind_Enum)
+    if (vtype->kind == VariableKind_Enum)
     {
         u64 start_name = 0;
         if (str[0] == '.') {
             start_name = 1;
         }
-        else if (string_starts(str, string_format(scratch.arena, "%S.", type.name))) {
-            start_name = type.name.size + 1;
+        else if (string_starts(str, string_format(scratch.arena, "%S.", vtype->name))) {
+            start_name = vtype->name.size + 1;
         }
         
         String enum_name = string_substring(str, start_name, str.size - start_name);
-        foreach(i, type.enum_names.count) {
-            if (string_equals(type.enum_names[i], enum_name)) return alloc_enum(inter, vtype, i);
+        foreach(i, vtype->_enum.names.count) {
+            if (string_equals(vtype->_enum.names[i], enum_name)) return alloc_enum(inter, vtype, i);
         }
         return value_nil();
     }
@@ -2726,24 +2899,22 @@ String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw)
         return "null";
     }
     
-    if (value.vtype == VType_Any) {
+    if (value.vtype->ID == VTypeID_Any) {
         value.vtype = value.obj->vtype;
     }
     
-    i32 vtype = value.vtype;
+    VariableType* vtype = value.vtype;
     
-    if (vtype == VType_String) {
+    if (vtype->ID == VTypeID_String) {
         if (raw) return get_string(value);
         return string_format(arena, "\"%S\"", get_string(value));
     }
-    if (vtype == VType_Int) { return string_format(arena, "%l", get_int(value)); }
-    if (vtype == VType_Bool) { return get_bool(value) ? "true" : "false"; }
-    if (vtype == VType_Void) { return "void"; }
-    if (vtype == VType_Unknown) { return "unknown"; }
+    if (vtype->ID == VTypeID_Int) { return string_format(arena, "%l", get_int(value)); }
+    if (vtype->ID == VTypeID_Bool) { return get_bool(value) ? "true" : "false"; }
+    if (vtype->ID == VTypeID_Void) { return "void"; }
+    if (vtype->ID == VTypeID_Unknown) { return "unknown"; }
     
-    VariableType type = vtype_get(inter, vtype);
-    
-    if (type.kind == VariableKind_Array)
+    if (vtype->kind == VariableKind_Array)
     {
         StringBuilder builder = string_builder_make(scratch.arena);
         
@@ -2762,16 +2933,16 @@ String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw)
         return string_from_builder(arena, &builder);
     }
     
-    if (type.kind == VariableKind_Enum)
+    if (vtype->kind == VariableKind_Enum)
     {
-        i64 index = get_enum_index(inter, value);
-        if (index < 0 || index >= type.enum_names.count) return "?";
-        String name = type.enum_names[(u32)index];
+        i64 index = get_enum_index(value);
+        if (index < 0 || index >= vtype->_enum.names.count) return "?";
+        String name = vtype->_enum.names[(u32)index];
         if (!raw) name = string_format(arena, "\"%S\"", name);
         return name;
     }
     
-    if (type.kind == VariableKind_Struct)
+    if (vtype->kind == VariableKind_Struct)
     {
         StringBuilder builder = string_builder_make(scratch.arena);
         
@@ -2779,13 +2950,12 @@ String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw)
         
         Object_Struct* struct_obj = (Object_Struct*)value.obj;
         
-        foreach(i, type.struct_vtypes.count)
+        foreach(i, vtype->_struct.vtypes.count)
         {
-            String member_name = type.struct_names[i];
-            i32 member_vtype = type.struct_vtypes[i];
+            String member_name = vtype->_struct.names[i];
             Object* member = struct_obj->members[i];
             appendf(&builder, "%S = %S", member_name, string_from_obj(scratch.arena, inter, member, false));
-            if (i < type.struct_vtypes.count - 1) append(&builder, ", ");
+            if (i < vtype->_struct.vtypes.count - 1) append(&builder, ", ");
         }
         
         append(&builder, " }");
@@ -2793,7 +2963,7 @@ String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw)
         return string_from_builder(arena, &builder);
     }
     
-    assert(0);
+    invalid_codepath();
     return "?";
 }
 
@@ -2801,13 +2971,13 @@ String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw) {
     return string_from_value(arena, inter, rvalue_from_obj(obj), raw);
 }
 
-i32 value_get_expected_vtype(Value value)
+VariableType* value_get_expected_vtype(Value value)
 {
-    if (is_unknown(value)) return VType_Unknown;
-    if (is_void(value)) return VType_Void;
-    if (value.vtype == VType_Any) {
+    if (is_unknown(value)) return nil_vtype;
+    if (is_void(value)) return void_vtype;
+    if (value.vtype->ID == VTypeID_Any) {
         Object* obj = value.obj;
-        if (is_unknown(obj) || is_null(obj)) return VType_Unknown;
+        if (is_unknown(obj) || is_null(obj)) return nil_vtype;
         return obj->vtype;
     }
     return value.vtype;
@@ -2816,22 +2986,22 @@ i32 value_get_expected_vtype(Value value)
 b32 value_assign(Interpreter* inter, Value* dst, Value src)
 {
     if (dst->kind == ValueKind_Reference) {
-        assert(0);
-        return false;
-    }
-    if (is_null(*dst)) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
     if (is_const(*dst)) {
-        assert(0);
+        invalid_codepath();
         return false;
+    }
+    
+    if (is_null(*dst)) {
+        if (!value_assign_default(inter, dst, value_get_expected_vtype(src))) return false;
     }
     
     if (src.kind == ValueKind_RValue || src.kind == ValueKind_LValue)
     {
-        if (dst->vtype == VType_Any) {
-            Value new_value = object_alloc(inter, src.vtype);
+        if (dst->vtype->ID == VTypeID_Any) {
+            Value new_value = object_alloc(inter, value_get_expected_vtype(src));
             if (!value_assign_ref(inter, dst, new_value)) return false;
         }
         return value_copy(inter, *dst, src);
@@ -2839,14 +3009,14 @@ b32 value_assign(Interpreter* inter, Value* dst, Value src)
     else if (src.kind == ValueKind_Reference) {
         return value_assign_ref(inter, dst, src);
     }
-    assert(0);
+    invalid_codepath();
     return false;
 }
 
 b32 value_assign_as_new(Interpreter* inter, Value* dst, Value src)
 {
     if (!is_null(*dst)) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
     
@@ -2860,36 +3030,38 @@ b32 value_assign_as_new(Interpreter* inter, Value* dst, Value src)
         return value_copy(inter, *dst, src);
     }
     
-    assert(0);
+    invalid_codepath();
     return false;
 }
 
 b32 value_assign_ref(Interpreter* inter, Value* dst, Value src)
 {
     if (dst->kind == ValueKind_Reference) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
-    if (dst->vtype != VType_Any && dst->vtype != src.vtype) {
-        assert(0);
+    if (dst->vtype->ID != VTypeID_Any && dst->vtype != src.vtype) {
+        invalid_codepath();
         return false;
     }
     // TODO(Jose): if (dst->is_constant) {
     if (0) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
+    
+    value_on_assignment(inter, *dst);
     
     if (is_null(dst->parent)) {
         if (dst->kind == ValueKind_LValue) {
             object_decrement_ref(dst->obj);
             dst->lvalue.ref->object = src.obj;
-            object_increment_ref(src.obj);
         }
+        object_increment_ref(src.obj);
     }
     else {
         if (!object_set_child(inter, dst->parent, dst->index, src.obj)) {
-            assert(0);
+            invalid_codepath();
             return false;
         }
     }
@@ -2901,48 +3073,68 @@ b32 value_assign_ref(Interpreter* inter, Value* dst, Value src)
 
 b32 value_assign_null(Interpreter* inter, Value* dst)
 {
-    Value null = value_null(dst->vtype);
+    Value null = value_null(value_get_expected_vtype(*dst));
     return value_assign_ref(inter, dst, null);
+}
+
+b32 value_assign_default(Interpreter* inter, Value* dst, VariableType* vtype)
+{
+    Value default_value = object_alloc(inter, vtype);
+    return value_assign_ref(inter, dst, default_value);
 }
 
 b32 value_copy(Interpreter* inter, Value dst, Value src)
 {
     if (dst.kind == ValueKind_Reference || src.kind == ValueKind_Reference) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
     
-    if (dst.vtype != VType_Any && dst.vtype != src.vtype) {
-        assert(0);
+    if (value_get_expected_vtype(dst) != value_get_expected_vtype(src)) {
+        invalid_codepath();
         return false;
     }
     // TODO(Jose): if (dst->is_constant) {
     if (0) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
     if (is_null(dst)) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
     if (is_null(src)) {
-        assert(0);
+        invalid_codepath();
         return false;
     }
+    
+    value_on_assignment(inter, dst);
     
     object_copy(inter, dst.obj, src.obj);
     return true;
 }
 
-Array<Object*> object_get_childs(Interpreter* inter, Object* obj)
+void value_on_assignment(Interpreter* inter, Value value)
 {
-    VariableType type = vtype_get(inter, obj->vtype);
+    if (value.kind == ValueKind_LValue) {
+        value.lvalue.ref->assignment_count++;
+    }
+}
+
+Array<Object*> object_get_childs_objects(Arena* arena, Interpreter* inter, Object* obj)
+{
+    VariableType* vtype = obj->vtype;
     
-    if (type.kind == VariableKind_Array) {
+    if (vtype->kind == VariableKind_Array) {
         return ((Object_Array*)obj)->elements;
     }
-    else if (type.kind == VariableKind_Struct) {
+    else if (vtype->kind == VariableKind_Struct) {
         return ((Object_Struct*)obj)->members;
+    }
+    else if (vtype->kind == VariableKind_Primitive) {}
+    else if (vtype->kind == VariableKind_Enum) {}
+    else {
+        invalid_codepath();
     }
     
     return {};
@@ -2950,9 +3142,9 @@ Array<Object*> object_get_childs(Interpreter* inter, Object* obj)
 
 b32 object_set_child(Interpreter* inter, Object* obj, u32 index, Object* child)
 {
-    VariableType type = vtype_get(inter, obj->vtype);
+    VariableType* vtype = obj->vtype;
     
-    if (type.kind == VariableKind_Array)
+    if (vtype->kind == VariableKind_Array)
     {
         Array<Object*> array = ((Object_Array*)obj)->elements;
         if (index >= array.count) {
@@ -2963,7 +3155,7 @@ b32 object_set_child(Interpreter* inter, Object* obj, u32 index, Object* child)
         object_increment_ref(child);
         return true;
     }
-    else if (type.kind == VariableKind_Struct)
+    else if (vtype->kind == VariableKind_Struct)
     {
         Array<Object*> array = ((Object_Struct*)obj)->members;
         if (index >= array.count) {
@@ -2974,6 +3166,9 @@ b32 object_set_child(Interpreter* inter, Object* obj, u32 index, Object* child)
         object_increment_ref(child);
         return true;
     }
+    else {
+        invalid_codepath();
+    }
     
     return {};
 }
@@ -2981,69 +3176,79 @@ b32 object_set_child(Interpreter* inter, Object* obj, u32 index, Object* child)
 Value value_get_element(Interpreter* inter, Value value, u32 index)
 {
     if (is_unknown(value) || is_null(value)) {
-        assert(0);
+        invalid_codepath();
         return value_nil();
     }
     
-    Array<Object*> array = object_get_childs(inter, value.obj);
+    VariableType* vtype = value_get_expected_vtype(value);
     
-    if (index < 0 || index >= array.count) {
-        assert(0);
-        return value_nil();
+    if (vtype->kind == VariableKind_Array || vtype->kind == VariableKind_Struct)
+    {
+        Array<Object*> array = {};
+        
+        if (vtype->kind == VariableKind_Array) array = ((Object_Array*)value.obj)->elements;
+        else if (vtype->kind == VariableKind_Struct) array = ((Object_Struct*)value.obj)->members;
+        
+        if (index < 0 || index >= array.count) {
+            invalid_codepath();
+            return value_nil();
+        }
+        
+        Object* element = array[index];
+        return value_from_child(value, element, index, vtype_get_element(inter, value.vtype, index));
     }
     
-    Object* element = array[index];
-    return value_from_child(value, element, index, vtype_get_element(inter, value.vtype, index));
+    invalid_codepath();
+    return value_nil();
 }
 
 Value value_get_member(Interpreter* inter, Value value, String member_name)
 {
-    if (value.vtype == VType_String) {
+    if (value.vtype->ID == VTypeID_String) {
         if (string_equals(member_name, "size")) {
             return alloc_int(inter, get_string(value).size);
         }
     }
     
-    VariableType type = vtype_get(inter, value.vtype);
+    VariableType* vtype = value.vtype;
     
-    if (type.kind == VariableKind_Array)
+    if (vtype->kind == VariableKind_Array)
     {
         if (string_equals(member_name, "count")) {
             return alloc_int(inter, get_array(value).count);
         }
     }
     
-    if (type.kind == VariableKind_Enum)
+    if (vtype->kind == VariableKind_Enum)
     {
-        i64 index = get_enum_index(inter, value);
+        i64 index = get_enum_index(value);
         if (string_equals(member_name, "index")) {
             return alloc_int(inter, index);
         }
         if (string_equals(member_name, "value")) {
-            if (index < 0 || index >= type.enum_values.count) {
+            if (index < 0 || index >= vtype->_enum.values.count) {
                 return alloc_string(inter, "?");
             }
-            return alloc_int(inter, type.enum_values[(u32)index]);
+            return alloc_int(inter, vtype->_enum.values[(u32)index]);
         }
         if (string_equals(member_name, "name")) {
-            if (index < 0 || index >= type.enum_names.count) {
+            if (index < 0 || index >= vtype->_enum.names.count) {
                 return alloc_string(inter, "?");
             }
-            return alloc_string(inter, type.enum_names[(u32)index]);
+            return alloc_string(inter, vtype->_enum.names[(u32)index]);
         }
     }
     
-    if (type.kind == VariableKind_Struct)
+    if (vtype->kind == VariableKind_Struct)
     {
-        foreach(i, type.struct_names.count)
+        foreach(i, vtype->_struct.names.count)
         {
-            if (string_equals(member_name, type.struct_names[i])) {
+            if (string_equals(member_name, vtype->_struct.names[i])) {
                 return value_get_element(inter, value, i);
             }
         }
     }
     
-    assert(0);
     return value_nil();
 }
 
@@ -3068,13 +3273,12 @@ Value alloc_string(Interpreter* inter, String value)
     return obj;
 }
 
-Value alloc_array(Interpreter* inter, i32 element_vtype, i64 count, b32 null_elements)
+Value alloc_array(Interpreter* inter, VariableType* element_vtype, i64 count, b32 null_elements)
 {
-    i32 vtype = vtype_from_array_dimension(inter, element_vtype, 1);
-    VariableType type = vtype_get(inter, vtype);
+    VariableType* vtype = vtype_from_dimension(inter, element_vtype, 1);
     
-    if (type.kind != VariableKind_Array) {
-        assert(0);
+    if (vtype->kind != VariableKind_Array) {
+        invalid_codepath();
         return value_nil();
     }
     
@@ -3099,15 +3303,15 @@ Value alloc_array(Interpreter* inter, i32 element_vtype, i64 count, b32 null_ele
     return value;
 }
 
-Value alloc_array_multidimensional(Interpreter* inter, i32 base_vtype, Array<i64> dimensions)
+Value alloc_array_multidimensional(Interpreter* inter, VariableType* base_vtype, Array<i64> dimensions)
 {
     if (dimensions.count <= 0) {
-        assert(0);
+        invalid_codepath();
         return value_nil();
     }
     
-    i32 vtype = vtype_from_array_dimension(inter, base_vtype, dimensions.count);
-    i32 element_vtype = vtype_from_array_element(inter, vtype);
+    VariableType* vtype = vtype_from_dimension(inter, base_vtype, dimensions.count);
+    VariableType* element_vtype = vtype->child_next;
     
     if (dimensions.count == 1)
     {
@@ -3131,32 +3335,30 @@ Value alloc_array_multidimensional(Interpreter* inter, i32 base_vtype, Array<i64
     }
 }
 
-Value alloc_array_from_enum(Interpreter* inter, i32 enum_vtype)
+Value alloc_array_from_enum(Interpreter* inter, VariableType* enum_vtype)
 {
-    VariableType enum_type = vtype_get(inter, enum_vtype);
-    
-    if (enum_type.kind != VariableKind_Enum) {
-        assert(0);
+    if (enum_vtype->kind != VariableKind_Enum) {
+        invalid_codepath();
         return value_nil();
     }
     
-    Value value = alloc_array(inter, enum_vtype, enum_type.enum_values.count, false);
+    Value value = alloc_array(inter, enum_vtype, enum_vtype->_enum.values.count, false);
     Object_Array* array = (Object_Array*)value.obj;
     foreach(i, array->elements.count) {
         Object* element = array->elements[i];
-        set_enum_index(inter, rvalue_from_obj(element), i);
+        set_enum_index(rvalue_from_obj(element), i);
     }
     return value;
 }
 
-Value alloc_enum(Interpreter* inter, i32 vtype, i64 index)
+Value alloc_enum(Interpreter* inter, VariableType* vtype, i64 index)
 {
     Value obj = object_alloc(inter, vtype);
-    set_enum_index(inter, obj, index);
+    set_enum_index(obj, index);
     return obj;
 }
 
-b32 value_is_vtype(Value value, i32 vtype) {
+b32 value_is_vtype(Value value, VariableType* vtype) {
     if (value.vtype != vtype) return false;
     Object* obj = value.obj;
     if (is_unknown(obj)) return false;
@@ -3171,10 +3373,10 @@ b32 is_valid(Value value) {
 }
 b32 is_unknown(Object* obj) {
     if (obj == NULL) return true;
-    return obj->vtype < 0;
+    return obj->vtype->ID == VTypeID_Unknown;
 }
 b32 is_unknown(Value value) {
-    if (value.vtype < 0) return true;
+    if (value.vtype->ID == VTypeID_Unknown) return true;
     return is_unknown(value.obj);
 }
 
@@ -3183,20 +3385,20 @@ b32 is_const(Value value) {
 }
 
 b32 is_void(Value value) {
-    return is_valid(value) && value.vtype == VType_Void;
+    return is_valid(value) && value.vtype == void_vtype;
 }
 b32 is_null(const Object* obj) {
     if (obj == NULL) return true;
-    return obj->vtype == VType_Void;
+    return obj->vtype == void_vtype;
 }
 b32 is_null(Value value) {
     if (is_unknown(value)) return false;
     return is_null(value.obj);
 }
 
-b32 is_int(Value value) { return value_is_vtype(value, VType_Int); }
-b32 is_bool(Value value) { return value_is_vtype(value, VType_Bool); }
-b32 is_string(Value value) { return value_is_vtype(value, VType_String); }
+b32 is_int(Value value) { return value_get_expected_vtype(value)->ID == VTypeID_Int; }
+b32 is_bool(Value value) { return value_get_expected_vtype(value)->ID == VTypeID_Bool; }
+b32 is_string(Value value) { return value_get_expected_vtype(value)->ID == VTypeID_String; }
 
 b32 is_array(Value value) {
     if (!vtype_is_array(value.vtype)) return false;
@@ -3205,27 +3407,24 @@ b32 is_array(Value value) {
     return is_null(obj) || vtype_is_array(obj->vtype);
 }
 
-b32 is_enum(Interpreter* inter, Value value) {
-    if (!vtype_is_enum(inter, value.vtype)) return false;
+b32 is_enum(Value value) {
+    if (!vtype_is_enum(value.vtype)) return false;
     Object* obj = value.obj;
     if (is_unknown(obj)) return false;
-    return is_null(obj) || vtype_is_enum(inter, obj->vtype);
-}
-b32 is_struct(Interpreter* inter, i32 vtype) {
-    return vtype_get(inter, vtype).kind == VariableKind_Struct;
+    return is_null(obj) || vtype_is_enum(obj->vtype);
 }
 
 i64 get_int(Value value)
 {
     if (!is_int(value)) {
-        assert(0);
+        invalid_codepath();
         return 0;
     }
     
     Object* obj = value.obj;
     
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return 0;
     }
     
@@ -3236,14 +3435,14 @@ i64 get_int(Value value)
 b32 get_bool(Value value)
 {
     if (!is_bool(value)) {
-        assert(0);
+        invalid_codepath();
         return 0;
     }
     
     Object* obj = value.obj;
     
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return 0;
     }
     
@@ -3251,16 +3450,16 @@ b32 get_bool(Value value)
     return obj0->value;
 }
 
-i64 get_enum_index(Interpreter* inter, Value value) {
-    if (!is_enum(inter, value)) {
-        assert(0);
+i64 get_enum_index(Value value) {
+    if (!is_enum(value)) {
+        invalid_codepath();
         return 0;
     }
     
     Object* obj = value.obj;
     
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return 0;
     }
     
@@ -3271,14 +3470,14 @@ i64 get_enum_index(Interpreter* inter, Value value) {
 String get_string(Value value)
 {
     if (!is_string(value)) {
-        assert(0);
+        invalid_codepath();
         return 0;
     }
     
     Object* obj = value.obj;
     
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return 0;
     }
     
@@ -3289,14 +3488,14 @@ String get_string(Value value)
 Array<Object*> get_array(Value value)
 {
     if (!is_array(value)) {
-        assert(0);
+        invalid_codepath();
         return {};
     }
     
     Object* obj = value.obj;
     
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return {};
     }
     
@@ -3307,13 +3506,13 @@ Array<Object*> get_array(Value value)
 void set_int(Value value, i64 v)
 {
     if (!is_int(value)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
     Object_Int* obj = (Object_Int*)value.obj;
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
@@ -3323,29 +3522,29 @@ void set_int(Value value, i64 v)
 void set_bool(Value value, b32 v)
 {
     if (!is_bool(value)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
     Object_Bool* obj = (Object_Bool*)value.obj;
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
     obj->value = v;
 }
 
-void set_enum_index(Interpreter* inter, Value value, i64 v)
+void set_enum_index(Value value, i64 v)
 {
-    if (!is_enum(inter, value)) {
-        assert(0);
+    if (!is_enum(value)) {
+        invalid_codepath();
         return;
     }
     
     Object_Enum* obj = (Object_Enum*)value.obj;
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
@@ -3355,13 +3554,13 @@ void set_enum_index(Interpreter* inter, Value value, i64 v)
 void set_string(Interpreter* inter, Value value, String v)
 {
     if (!is_string(value)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
     Object_String* obj = (Object_String*)value.obj;
     if (is_null(obj)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
@@ -3375,6 +3574,24 @@ void set_string(Interpreter* inter, Value value, String v)
     obj->value.size = v.size;
 }
 
+void value_assign_Result(Interpreter* inter, Value value, Result res)
+{
+    Value mem;
+    mem = value_get_member(inter, value, "message");
+    set_string(inter, mem, res.message);
+    mem = value_get_member(inter, value, "code");
+    set_int(mem, res.code);
+    mem = value_get_member(inter, value, "failed");
+    set_bool(mem, res.failed);
+}
+
+void value_assign_CallOutput(Interpreter* inter, Value value, CallOutput res)
+{
+    Value mem;
+    mem = value_get_member(inter, value, "stdout");
+    set_string(inter, mem, res.stdout);
+}
+
 void value_assign_FileInfo(Interpreter* inter, Value value, FileInfo info)
 {
     Value mem;
@@ -3384,14 +3601,38 @@ void value_assign_FileInfo(Interpreter* inter, Value value, FileInfo info)
     set_bool(mem, info.is_directory);
 }
 
-void value_assign_Type(Interpreter* inter, Value value, i32 vtype)
+void value_assign_Type(Interpreter* inter, Value value, VariableType* vtype)
 {
-    VariableType type = vtype_get(inter, vtype);
     Value mem;
     mem = value_get_member(inter, value, "ID");
-    set_int(mem, vtype);
+    set_int(mem, vtype->ID);
     mem = value_get_member(inter, value, "name");
-    set_string(inter, mem, type.name);
+    set_string(inter, mem, vtype->name);
+}
+
+Value value_from_Result(Interpreter* inter, Result res)
+{
+    Value value = object_alloc(inter, VType_Result);
+    value_assign_Result(inter, value, res);
+    return value;
+}
+
+Result Result_from_value(Interpreter* inter, Value value)
+{
+    if (value.vtype->ID != VType_Result->ID) {
+        invalid_codepath();
+        return {};
+    }
+    
+    Result res;
+    Value mem;
+    mem = value_get_member(inter, value, "message");
+    res.message = get_string(mem);
+    mem = value_get_member(inter, value, "code");
+    res.code = (i32)get_int(mem);
+    mem = value_get_member(inter, value, "failed");
+    res.failed = get_bool(mem);
+    return res;
 }
 
 //- GARBAGE COLLECTOR 
@@ -3400,18 +3641,17 @@ u32 object_generate_id(Interpreter* inter) {
     return ++inter->object_id_counter;
 }
 
-Value object_alloc(Interpreter* inter, i32 vtype)
+Value object_alloc(Interpreter* inter, VariableType* vtype)
 {
     SCRATCH();
     
-    assert(vtype > VType_Any);
+    assert(vtype->ID > VTypeID_Any);
     
     u32 ID = object_generate_id(inter);
     
     log_mem_trace("Alloc obj(%u): %S\n", ID, string_from_vtype(scratch.arena, inter, vtype));
     
-    VariableType type = vtype_get(inter, vtype);
-    u32 type_size = vtype_get_size(inter, vtype);
+    u32 type_size = vtype_get_size(vtype);
     assert(type_size > sizeof(Object));
     
     Object* obj = (Object*)gc_dynamic_allocate(inter, type_size);
@@ -3425,29 +3665,33 @@ Value object_alloc(Interpreter* inter, i32 vtype)
     obj->vtype = vtype;
     obj->ref_count = 0;
     
-    if (type.kind == VariableKind_Struct)
+    if (vtype->kind == VariableKind_Struct)
     {
-        Object** members_memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * type.struct_vtypes.count);
-        Array<Object*> members = array_make(members_memory, type.struct_vtypes.count);
+        Object** members_memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * vtype->_struct.vtypes.count);
+        Array<Object*> members = array_make(members_memory, vtype->_struct.vtypes.count);
         
-        foreach(i, type.struct_vtypes.count)
+        foreach(i, vtype->_struct.vtypes.count)
         {
-            i32 member_vtype = type.struct_vtypes[i];
-            OpNode* member_initialize_expresion = type.struct_initialize_expresions[i];
-            u32 member_size = vtype_get_size(inter, member_vtype);
+            VariableType* member_vtype = vtype->_struct.vtypes[i];
+            OpNode* member_initialize_expresion = vtype->_struct.initialize_expresions[i];
+            u32 member_size = vtype_get_size(member_vtype);
             
-            Value member = value_nil();
+            Value member = value_null(member_vtype);
             
-            if (member_initialize_expresion != NULL && member_initialize_expresion->kind != OpKind_None)
+            b32 null_members = false;
+            
+            if (!null_members)
             {
-                member = interpret_expresion(inter, member_initialize_expresion, expresion_context_make(member_vtype));
-                
-                if (is_unknown(member)) {
+                if (member_initialize_expresion != NULL && member_initialize_expresion->kind != OpKind_None)
+                {
+                    member = interpret_expresion(inter, member_initialize_expresion, ExpresionContext_from_vtype(member_vtype));
+                    
+                    if (is_unknown(member)) {
+                        member = object_alloc(inter, member_vtype);
+                    }
+                }else {
                     member = object_alloc(inter, member_vtype);
                 }
-            }
-            else {
-                member = object_alloc(inter, member_vtype);
             }
             
             assert(member.kind == ValueKind_RValue);
@@ -3457,8 +3701,11 @@ Value object_alloc(Interpreter* inter, i32 vtype)
         
         ((Object_Struct*)obj)->members = members;
     }
-    else if (type.kind == VariableKind_Array)
-    {
+    else if (vtype->kind == VariableKind_Array) { }
+    else if (vtype->kind == VariableKind_Enum) { }
+    else if (vtype->kind == VariableKind_Primitive) { }
+    else {
+        invalid_codepath();
     }
     
     return rvalue_from_obj(obj);
@@ -3486,6 +3733,7 @@ void object_free(Interpreter* inter, Object* obj)
     
     object_release_internal(inter, obj);
     
+    *obj = {};
     gc_dynamic_free(inter, obj);
 }
 
@@ -3526,59 +3774,59 @@ void object_decrement_ref(Object* obj)
 
 void object_release_internal(Interpreter* inter, Object* obj)
 {
-    Array<Object*> childs = object_get_childs(inter, obj);
+    SCRATCH();
+    Array<Object*> childs = object_get_childs_objects(scratch.arena, inter, obj);
     
     foreach(i, childs.count) {
         object_decrement_ref(childs[i]);
     }
     
-    // Release dynamic memory: Strings, arrays and structs
-    if (obj->vtype == VType_String)
+    if (obj->vtype->ID == VTypeID_String)
     {
         Object_String* str = (Object_String*)obj;
         if (str->value.data != NULL) gc_dynamic_free(inter, str->value.data);
     }
     else
     {
-        VariableType type = vtype_get(inter, obj->vtype);
+        VariableType* vtype = obj->vtype;
         
-        if (type.kind == VariableKind_Array) {
+        if (vtype->kind == VariableKind_Array) {
             Array<Object*> elements = ((Object_Array*)obj)->elements;
             if (elements.data != NULL) gc_dynamic_free(inter, elements.data);
         }
-        else if (type.kind == VariableKind_Struct) {
+        else if (vtype->kind == VariableKind_Struct) {
             Array<Object*> members = ((Object_Struct*)obj)->members;
             if (members.data != NULL) gc_dynamic_free(inter, members.data);
         }
     }
     
-    u32 type_size = vtype_get_size(inter, obj->vtype);
+    u32 type_size = vtype_get_size(obj->vtype);
     memory_zero(obj + 1, type_size - sizeof(Object));
 }
 
 void object_copy(Interpreter* inter, Object* dst, Object* src)
 {
     if (is_unknown(dst) || is_null(dst)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
     if (is_unknown(src) || is_null(src)) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
     if (src->vtype != dst->vtype) {
-        assert(0);
+        invalid_codepath();
         return;
     }
     
     object_release_internal(inter, dst);
     
-    u32 type_size = vtype_get_size(inter, src->vtype);
+    u32 type_size = vtype_get_size(src->vtype);
     memory_copy(dst + 1, src + 1, type_size - sizeof(Object));
     
-    if (src->vtype == VType_String)
+    if (src->vtype->ID == VTypeID_String)
     {
         Object_String* src_str = (Object_String*)src;
         Object_String* dst_str = (Object_String*)dst;
@@ -3588,9 +3836,9 @@ void object_copy(Interpreter* inter, Object* dst, Object* src)
     }
     else
     {
-        VariableType type = vtype_get(inter, src->vtype);
+        VariableType* vtype = src->vtype;
         
-        if (type.kind == VariableKind_Array)
+        if (vtype->kind == VariableKind_Array)
         {
             Object_Array* dst_array = (Object_Array*)dst;
             Object_Array* src_array = (Object_Array*)src;
@@ -3604,7 +3852,7 @@ void object_copy(Interpreter* inter, Object* dst, Object* src)
                 dst_array->elements[i] = element_obj;
             }
         }
-        else if (type.kind == VariableKind_Struct)
+        else if (vtype->kind == VariableKind_Struct)
         {
             Object_Struct* dst_struct = (Object_Struct*)dst;
             Object_Struct* src_struct = (Object_Struct*)src;
@@ -3624,7 +3872,7 @@ void object_copy(Interpreter* inter, Object* dst, Object* src)
 Object* object_alloc_and_copy(Interpreter* inter, Object* src)
 {
     if (is_unknown(src)) {
-        assert(0);
+        invalid_codepath();
         return nil_obj;
     }
     

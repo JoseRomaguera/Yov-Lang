@@ -4,14 +4,16 @@ internal_fn OpKind op_kind_from_tokens(Parser* parser)
 {
     u32 end_of_sentence_index = 0;
     u32 assignment_count = 0;
+    u32 colon_count = 0;
     
     while (true) {
-        Token token = peek_token(parser, end_of_sentence_index);
+        Token t0 = peek_token(parser, end_of_sentence_index);
         
-        if (token.kind == TokenKind_Assignment) assignment_count++;
+        if (t0.kind == TokenKind_Assignment) assignment_count++;
+        if (t0.kind == TokenKind_Colon) colon_count++;
         
-        if (token.kind == TokenKind_NextSentence) break;
-        if (token.kind == TokenKind_None) break;
+        if (t0.kind == TokenKind_NextSentence) break;
+        if (t0.kind == TokenKind_None) break;
         end_of_sentence_index++;
     }
     
@@ -51,6 +53,7 @@ internal_fn OpKind op_kind_from_tokens(Parser* parser)
         return OpKind_ObjectDefinition;
     }
     
+    if (colon_count == 1) return OpKind_ObjectDefinition;
     if (assignment_count == 1) return OpKind_Assignment;
     
     return OpKind_None;
@@ -440,6 +443,30 @@ OpNode* extract_expresion(Parser* parser)
         }
     }
     
+    // Parameter List
+    if (tokens.count > 2)
+    {
+        Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, tokens);
+        
+        if (parameters.count >= 2)
+        {
+            Array<OpNode*> nodes = array_make<OpNode*>(yov->static_arena, parameters.count);
+            
+            b32 valid = true;
+            
+            foreach(i, nodes.count) {
+                nodes[i] = extract_expresion_from_array(parser, parameters[i]);
+                if (nodes[i]->kind == OpKind_Error) valid = false;
+            }
+            
+            if (!valid) return alloc_node(parser, OpKind_Error, tokens[0].code);
+            
+            OpNode_ParameterList* node = (OpNode_ParameterList*)alloc_node(parser, OpKind_ParameterList, tokens[0].code);
+            node->nodes = nodes;
+            return node;
+        }
+    }
+    
     // Symbol
     if (tokens.count >= 1 && tokens.count % 2 == 1 && tokens[0].kind == TokenKind_Identifier)
     {
@@ -483,7 +510,8 @@ OpNode* extract_expresion(Parser* parser)
         const i32 multiplication_preference = 4;
         const i32 function_call_preference = 5;
         const i32 sign_preference = 6;
-        const i32 depth_mult = 7;
+        const i32 member_preference = 7;
+        const i32 depth_mult = 8;
         
         i32 parenthesis_depth = 0;
         i32 braces_depth = 0;
@@ -567,6 +595,9 @@ OpNode* extract_expresion(Parser* parser)
                     }
                 }
             }
+            else if (token.kind == TokenKind_Dot && i == tokens.count - 2) {
+                preference = member_preference;
+            }
             
             if (preference == i32_max || braces_depth != 0 || brackets_depth != 0) continue;
             
@@ -638,6 +669,26 @@ OpNode* extract_expresion(Parser* parser)
                         return node;
                     }
                 }
+            }
+            // Member access
+            else if (op_token.kind == TokenKind_Dot)
+            {
+                assert(preferent_operator_index == tokens.count - 2);
+                
+                String member_value = tokens[tokens.count - 1].value;
+                
+                if (member_value.size == 0) {
+                    report_expr_empty_member(tokens[0].code);
+                    return alloc_node(parser, OpKind_Error, tokens[0].code);
+                }
+                
+                Array<Token> expresion_tokens = array_subarray(tokens, 0, tokens.count - 2);
+                OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
+                
+                auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
+                node->expresion = expresion;
+                node->member = member_value;
+                return node;
             }
         }
     }
@@ -715,25 +766,6 @@ OpNode* extract_expresion(Parser* parser)
                 }
             }
         }
-    }
-    
-    // Member access
-    if (tokens.count >= 2 && tokens[tokens.count - 2].kind == TokenKind_Dot && tokens[tokens.count - 1].kind == TokenKind_Identifier)
-    {
-        String member_value = tokens[tokens.count - 1].value;
-        
-        if (member_value.size == 0) {
-            report_expr_empty_member(tokens[0].code);
-            return alloc_node(parser, OpKind_Error, tokens[0].code);
-        }
-        
-        Array<Token> expresion_tokens = array_subarray(tokens, 0, tokens.count - 2);
-        OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
-        
-        auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
-        node->expresion = expresion;
-        node->member = member_value;
-        return node;
     }
     
     String expresion_string = string_from_tokens(scratch.arena, tokens);
@@ -1134,6 +1166,7 @@ OpNode* extract_function_definition(Parser* parser)
     }
     
     Array<OpNode_ObjectDefinition*> params{};
+    Array<OpNode*> returns{};
     
     // Parameters
     if (parameter_tokens.count > 2)
@@ -1143,7 +1176,6 @@ OpNode* extract_function_definition(Parser* parser)
         Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, parameter_tokens);
         params = array_make<OpNode_ObjectDefinition*>(yov->static_arena, parameters.count);
         
-        u32 param_index = 0;
         b32 valid = true;
         
         foreach (i, parameters.count)
@@ -1164,7 +1196,7 @@ OpNode* extract_function_definition(Parser* parser)
                 }
             }
             
-            params[param_index++] = (OpNode_ObjectDefinition*)node;
+            params[i] = (OpNode_ObjectDefinition*)node;
         }
         
         if (!valid) {
@@ -1172,20 +1204,62 @@ OpNode* extract_function_definition(Parser* parser)
         }
     }
     
-    OpNode* return_node;
-    
     // Return definition
     if (peek_token(parser).kind == TokenKind_Arrow) {
         extract_token(parser);
         
         Token return_start_node = peek_token(parser);
         
-        return_node = extract_object_type(parser);
-        if (return_node->kind != OpKind_ObjectType) {
-            return alloc_node(parser, OpKind_Error, return_start_node.code);
+        if (return_start_node.kind == TokenKind_OpenParenthesis)
+        {
+            Array<Token> return_tokens = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
+            
+            if (return_tokens.count < 2) {
+                report_common_missing_closing_parenthesis(return_start_node.code);
+                return alloc_node(parser, OpKind_Error, return_start_node.code);
+            }
+            
+            return_tokens = array_subarray(return_tokens, 1, return_tokens.count - 2);
+            
+            Array<Array<Token>> return_tokens_array = split_tokens_in_parameters(scratch.arena, return_tokens);
+            returns = array_make<OpNode*>(yov->static_arena, return_tokens_array.count);
+            
+            b32 valid = true;
+            
+            foreach (i, returns.count)
+            {
+                Array<Token> tokens = return_tokens_array[i];
+                
+                parser_push_state(parser, tokens);
+                OpNode* node = extract_object_definition(parser);
+                parser_pop_state(parser);
+                
+                if (node->kind != OpKind_ObjectDefinition)
+                {
+                    valid = false;
+                    
+                    if (node->kind != OpKind_Error) {
+                        report_expecting_object_definition(node->code);
+                        node = alloc_node(parser, OpKind_Error, node->code);
+                    }
+                }
+                
+                returns[i] = (OpNode_ObjectDefinition*)node;
+            }
+            
+            if (!valid) {
+                return alloc_node(parser, OpKind_Error, starting_token.code);
+            }
+        }
+        else
+        {
+            returns = array_make<OpNode*>(yov->static_arena, 1);
+            returns[0] = extract_object_type(parser);
+            if (returns[0]->kind != OpKind_ObjectType) {
+                return alloc_node(parser, OpKind_Error, return_start_node.code);
+            }
         }
     }
-    else return_node = alloc_node(parser, OpKind_None, starting_token.code);
     
     Token start_block_token = peek_token(parser);
     
@@ -1230,7 +1304,7 @@ OpNode* extract_function_definition(Parser* parser)
     node->identifier = identifier_token.value;
     node->block = block;
     node->parameters = params;
-    node->return_node = return_node;
+    node->returns = returns;
     return node;
 }
 
@@ -1315,12 +1389,42 @@ OpNode* extract_object_definition(Parser* parser)
 {
     Token starting_token = peek_token(parser);
     
-    Token identifier_token = extract_token(parser);
+    Array<Token> destination_tokens = extract_tokens_until(parser, false, TokenKind_Colon);
     
     Token colon_token = extract_token(parser);
     if (colon_token.kind != TokenKind_Colon) {
         report_objdef_expecting_colon(starting_token.code);
         return alloc_node(parser, OpKind_Error, starting_token.code);
+    }
+    
+    OpNode* destination_node = extract_expresion_from_array(parser, destination_tokens);
+    
+    Array<String> names = {};
+    if (destination_node->kind == OpKind_Symbol) {
+        names = array_make<String>(yov->static_arena, 1);
+        names[0] = ((OpNode_Symbol*)destination_node)->identifier;
+    }
+    else if (destination_node->kind == OpKind_ParameterList)
+    {
+        OpNode_ParameterList* params = (OpNode_ParameterList*)destination_node;
+        
+        foreach(i, params->nodes.count) {
+            if (params->nodes[i]->kind == OpKind_Error) return params->nodes[i];
+            if (params->nodes[i]->kind != OpKind_Symbol) {
+                invalid_codepath();// TODO(Jose): 
+                report_error(params->code, "Expecing a symbol");
+                return alloc_node(parser, OpKind_Error, params->code);
+            }
+        }
+        
+        names = array_make<String>(yov->static_arena, params->nodes.count);
+        foreach(i, names.count) {
+            names[i] = ((OpNode_Symbol*)params->nodes[i])->identifier;
+        }
+    }
+    else if (destination_node->kind == OpKind_Error) return destination_node;
+    else {
+        invalid_codepath();
     }
     
     OpNode_ObjectType* node_type = NULL;
@@ -1377,7 +1481,7 @@ OpNode* extract_object_definition(Parser* parser)
     auto node = (OpNode_ObjectDefinition*)alloc_node(parser, OpKind_ObjectDefinition, starting_token.code);
     node->assignment = assignment_node;
     node->type = node_type;
-    node->object_name = identifier_token.value;
+    node->names = names;
     node->is_constant = (b8)is_constant;
     
     return node;
@@ -1588,7 +1692,11 @@ void log_ast(OpNode* node, i32 depth)
     else if (node->kind == OpKind_FunctionCall) print_info("function call");
     else if (node->kind == OpKind_ObjectDefinition) {
         auto node0 = (OpNode_ObjectDefinition*)node;
-        print_info("objdef: '%S'", node0->object_name);
+        print_info("objdef: ");
+        foreach(i, node0->names.count) {
+            print_info("'%S'", node0->names[i]);
+            if (i + 1 < node0->names.count) print_info(", ");
+        }
     }
     else if (node->kind == OpKind_ObjectType) {
         auto node0 = (OpNode_ObjectType*)node;

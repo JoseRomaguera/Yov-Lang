@@ -50,7 +50,7 @@ String transpile_definitions(Arena* arena, OpNode_Block* ast)
             indent(&builder, in); appendf(&builder, "ObjectDefinition m[%u];\n", node->members.count);
             foreach(i, node->members.count) {
                 OpNode_ObjectDefinition* member = node->members[i];
-                String obj = transpile_definition_for_object_definition(scratch.arena, member);
+                String obj = transpile_definition_for_object_definition_from_node(scratch.arena, member);
                 indent(&builder, in); appendf(&builder, "m[%u] = %S;\n", i, obj);
             }
             indent(&builder, in); append(&builder, "Array<ObjectDefinition> members = array_make(m, array_count(m));\n");
@@ -93,23 +93,43 @@ String transpile_definitions(Arena* arena, OpNode_Block* ast)
             
             indent(&builder, 1); appendf(&builder, "// function %S\n", name);
             indent(&builder, 1); append(&builder, "{\n");
+            
             indent(&builder, in); append(&builder, "Array<ObjectDefinition> parameters{};\n");
+            indent(&builder, in); append(&builder, "Array<ObjectDefinition> returns{};\n");
             if (node->parameters.count) {
                 indent(&builder, in); appendf(&builder, "ObjectDefinition p[%u];\n", node->parameters.count);
                 foreach(i, node->parameters.count) {
                     OpNode_ObjectDefinition* parameter = node->parameters[i];
-                    String obj = transpile_definition_for_object_definition(scratch.arena, parameter);
+                    String obj = transpile_definition_for_object_definition_from_node(scratch.arena, parameter);
                     indent(&builder, in); appendf(&builder, "p[%u] = %S;\n", i, obj);
                 }
                 indent(&builder, in); append(&builder, "parameters = array_make(p, array_count(p));\n");
             }
             
-            String return_vtype = "VType_Void";
-            if (node->return_node->kind == OpKind_ObjectType) {
-                return_vtype = transpile_definition_for_object_type(scratch.arena, (OpNode_ObjectType*)node->return_node);
+            if (node->returns.count) {
+                indent(&builder, in); appendf(&builder, "ObjectDefinition r[%u];\n", node->returns.count);
+                foreach(i, node->returns.count) {
+                    
+                    OpNode* node0 = node->returns[i];
+                    
+                    String obj = "?";
+                    
+                    if (node0->kind == OpKind_ObjectType) {
+                        OpNode_ObjectType* type = (OpNode_ObjectType*)node0;
+                        String type_name = transpile_definition_for_object_type(scratch.arena, type);
+                        obj = transpile_definition_for_object_definition(scratch.arena, "return", type_name, type->is_reference);
+                    }
+                    else if (node0->kind == OpKind_ObjectDefinition) {
+                        OpNode_ObjectDefinition* def = (OpNode_ObjectDefinition*)node0;
+                        obj = transpile_definition_for_object_definition_from_node(scratch.arena, def);
+                    }
+                    
+                    indent(&builder, in); appendf(&builder, "r[%u] = %S;\n", i, obj);
+                }
+                indent(&builder, in); append(&builder, "returns = array_make(r, array_count(r));\n");
             }
             
-            indent(&builder, in); appendf(&builder, "define_intrinsic_function(inter, {}, \"%S\", parameters, %S);\n", node->identifier, return_vtype);
+            indent(&builder, in); appendf(&builder, "define_intrinsic_function(inter, {}, \"%S\", parameters, returns);\n", node->identifier);
             indent(&builder, 1); append(&builder, "}\n");
             
             continue;
@@ -120,7 +140,8 @@ String transpile_definitions(Arena* arena, OpNode_Block* ast)
             OpNode_ObjectDefinition* node = (OpNode_ObjectDefinition*)node0;
             if (!node->is_constant) continue;
             
-            String name = node->object_name;
+            // TODO(Jose): Support multiple names
+            String name = node->names[0];
             
             u32 in = 2;
             
@@ -142,7 +163,7 @@ String transpile_definitions(Arena* arena, OpNode_Block* ast)
                 type = transpile_definition_for_object_type(scratch.arena, node->type);
             }
             
-            indent(&builder, in); appendf(&builder, "ObjectRef* ref = scope_define_object_ref(inter, \"%S\", value_def(inter, %S));\n", name, type);
+            indent(&builder, in); appendf(&builder, "Value value = scope_define_value(inter, \"%S\", value_def(inter, %S));\n", name, type);
             
             if (node->assignment->kind == OpKind_None) {}
             else if (node->assignment->kind == OpKind_FunctionCall) {}
@@ -166,22 +187,28 @@ String transpile_definitions(Arena* arena, OpNode_Block* ast)
 String transpile_definition_for_object_type(Arena* arena, OpNode_ObjectType* node)
 {
     SCRATCH(arena);
-    
     String type = string_format(scratch.arena, "vtype_from_name(inter, \"%S\")", node->name);
     if (node->array_dimensions) {
-        type = string_format(scratch.arena, "vtype_from_array_dimension(inter, %S, %u)", type, node->array_dimensions);
+        type = string_format(scratch.arena, "vtype_from_dimension(inter, %S, %u)", type, node->array_dimensions);
     }
     
     return string_copy(arena, type);
 }
 
-String transpile_definition_for_object_definition(Arena* arena, OpNode_ObjectDefinition* node)
+String transpile_definition_for_object_definition_from_node(Arena* arena, OpNode_ObjectDefinition* node)
 {
     SCRATCH(arena);
     
-    String name = node->object_name;
+    // TODO(Jose): Support multiple names
+    String name = node->names[0];
     String type = transpile_definition_for_object_type(scratch.arena, node->type);
     String is_ref = node->type->is_reference ? "true" : "false";
     
+    return string_format(arena, "obj_def_make(\"%S\", %S, %S)", name, type, is_ref);
+}
+
+String transpile_definition_for_object_definition(Arena* arena, String name, String type, b32 is_reference)
+{
+    String is_ref = is_reference ? "true" : "false";
     return string_format(arena, "obj_def_make(\"%S\", %S, %S)", name, type, is_ref);
 }
