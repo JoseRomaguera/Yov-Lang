@@ -1,20 +1,22 @@
 
 // Yov Info
-
-println("Yov Info = {yov}");
-
-yov_require(yov.major, yov.minor);
-yov_require_min(0, 0);
-yov_require_max(100, 0);
-
-// Context
-println("Context = {context}");
-
-// cd is "Current Directory"
-last_cd := context.cd;
-set_cd(last_cd / "../");
-println("Last cd = {last_cd}, new cd = {context.cd}");
-
-// OS
-
-println("OS = {os}");
+main :: ()
+{
+    println("Yov Info = {yov}");
+    
+    yov_require(yov.major, yov.minor);
+    yov_require_min(0, 0);
+    yov_require_max(100, 0);
+    
+    // Context
+    println("Context = {context}");
+    
+    // cd is "Current Directory"
+    last_cd := context.cd;
+    set_cd(last_cd / "../");
+    println("Last cd = {last_cd}, new cd = {context.cd}");
+    
+    // OS
+    
+    println("OS = {os}");
+}

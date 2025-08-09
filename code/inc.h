@@ -1289,8 +1289,6 @@ struct Interpreter {
     InterpreterMode mode;
     InterpreterSettings settings;
     
-    OpNode* root;
-    
     PooledArray<VariableType> vtype_table;
     PooledArray<FunctionDefinition> functions;
     PooledArray<ArgDefinition> arg_definitions;

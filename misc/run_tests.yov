@@ -1,38 +1,41 @@
 
-println("Running tests...");
-
 failed_count := 0;
 
-// Examples
+main :: ()
 {
-    set_cd("../examples/");
-    println("## EXAMPLES:");
+    println("Running tests...");
     
-    run_test("basics.yov", "", 0);
-    run_test("default_definitions.yov", "", 0);
-    run_test("errors.yov", "", 0);
-    run_test("external_calls.yov", "", 0);
-    run_test("file_system.yov", "", 0);
-    run_test("script_args.yov", "-foo=A", 0);
+    // Examples
+    {
+        set_cd("../examples/");
+        println("## EXAMPLES:");
+        
+        run_test("basics.yov", "", 0);
+        run_test("default_definitions.yov", "", 0);
+        run_test("errors.yov", "", 0);
+        run_test("external_calls.yov", "", 0);
+        run_test("file_system.yov", "", 0);
+        run_test("script_args.yov", "-foo=A", 0);
+        
+        println("");
+    }
     
-    println("");
+    // Tests
+    {
+        set_cd("../tests/");
+        println("## TESTS:");
+        
+        run_test("basics.yov", "", 0);
+        run_test("expressions.yov", "", 0);
+        run_test("references.yov", "", 0);
+        run_test("any.yov", "", 0);
+        
+        println("");
+    }
+    
+    println("Failed: {failed_count}");
+    exit(failed_count);
 }
-
-// Tests
-{
-    set_cd("../tests/");
-    println("## TESTS:");
-    
-    run_test("basics.yov", "", 0);
-    run_test("expressions.yov", "", 0);
-    run_test("references.yov", "", 0);
-    run_test("any.yov", "", 0);
-    
-    println("");
-}
-
-println("Failed: {failed_count}");
-exit(failed_count);
 
 run_test :: (name: String, args: String, expected_code: Int)
 {

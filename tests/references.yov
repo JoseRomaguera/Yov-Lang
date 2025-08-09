@@ -1,32 +1,35 @@
 
+main :: ()
 {
-    a := 10;
-    b := a;
-    c := &a;
+    {
+        a := 10;
+        b := a;
+        c := &a;
+        
+        a = 20;
+        assert(a == c && b != a);
+    }
     
-    a = 20;
-    assert(a == c && b != a);
-}
-
-{
-    a := { "A" };
-    b := { "B" };
-    c := &a;
+    {
+        a := { "A" };
+        b := { "B" };
+        c := &a;
+        
+        c = { "C" };
+        assert(a[0] == "C" && b[0] == "B" && c[0] == "C");
+    }
     
-    c = { "C" };
-    assert(a[0] == "C" && b[0] == "B" && c[0] == "C");
-}
-
-{
-    a := foo0(5);
-    foo1(&a);
-    assert(a == 15);
-}
-
-foo0 :: (a: Int) -> Int {
-    return a + 5;
-}
-
-foo1 :: (a: Int&) {
-    a += 5;
+    {
+        a := foo0(5);
+        foo1(&a);
+        assert(a == 15);
+    }
+    
+    foo0 :: (a: Int) -> Int {
+        return a + 5;
+    }
+    
+    foo1 :: (a: Int&) {
+        a += 5;
+    }
 }

@@ -1,61 +1,64 @@
 
-// Multiple expressions
-assert(5 == 5 && 10 + 10 == 20);
-assert(5 * 5 == +25 && (5 + 12) / 2 == 8);
-assert(false || (2 % 1 != 1 && "Test" == "Test"));
-assert("Hello".size == -((+2+3) * -1));
-assert(str_split(path_resolve("f0" / "f1" + "\\test\\foo.x"), "/").count == 4);
-assert("Yov".size == "Sex".size);
-
-
-// Tuples
+main :: ()
 {
-    v0, v1 := fn_return_two();
-    assert(v0 == 12 && v1 == 32);
+    // Multiple expressions
+    assert(5 == 5 && 10 + 10 == 20);
+    assert(5 * 5 == +25 && (5 + 12) / 2 == 8);
+    assert(false || (2 % 1 != 1 && "Test" == "Test"));
+    assert("Hello".size == -((+2+3) * -1));
+    assert(str_split(path_resolve("f0" / "f1" + "\\test\\foo.x"), "/").count == 4);
+    assert("Yov".size == "Sex".size);
     
-    v2 := fn_return_two();
-    assert(v2 == 12);
     
-    v3, v4 := 5;
-    assert(v3 == 5 && v4 == 5);
-    
-    v5, v6 := fn_return_one();
-    assert(v5 == 69 && v6 == 69);
-    
-    v7, v8 : Int = fn_return_two();
-    assert(v7 == 12 && v8 == 32);
-    
-    v9 : Int = fn_return_two();
-    assert(v9 == 12);
-    
-    v10, v11 : Int = 5;
-    assert(v10 == 5 && v11 == 5);
-    
-    v12, v13 := fn_return_two() * 2;
-    assert(v12 == 24 && v13 == 24);
-    
-    v14, v15 := -fn_return_two();
-    assert(v14 == -12 && v15 == -12);
-    
-    a, b: Int;
-    
-    a, b = fn_return_two();
-    assert(a == 12 && b == 32);
-    
-    a = fn_return_two();
-    assert(a == 12);
-    
-    a, b = 5;
-    assert(a == 5 && b == 5);
-    
-    a, b = fn_return_one();
-    assert(a == 69 && b == 69);
-    
-    a, b = fn_return_two() * 2;
-    assert(a == 24 && b == 24);
-    
-    a, b = -fn_return_two();
-    assert(a == -12 && b == -12);
+    // Tuples
+    {
+        v0, v1 := fn_return_two();
+        assert(v0 == 12 && v1 == 32);
+        
+        v2 := fn_return_two();
+        assert(v2 == 12);
+        
+        v3, v4 := 5;
+        assert(v3 == 5 && v4 == 5);
+        
+        v5, v6 := fn_return_one();
+        assert(v5 == 69 && v6 == 69);
+        
+        v7, v8 : Int = fn_return_two();
+        assert(v7 == 12 && v8 == 32);
+        
+        v9 : Int = fn_return_two();
+        assert(v9 == 12);
+        
+        v10, v11 : Int = 5;
+        assert(v10 == 5 && v11 == 5);
+        
+        v12, v13 := fn_return_two() * 2;
+        assert(v12 == 24 && v13 == 24);
+        
+        v14, v15 := -fn_return_two();
+        assert(v14 == -12 && v15 == -12);
+        
+        a, b: Int;
+        
+        a, b = fn_return_two();
+        assert(a == 12 && b == 32);
+        
+        a = fn_return_two();
+        assert(a == 12);
+        
+        a, b = 5;
+        assert(a == 5 && b == 5);
+        
+        a, b = fn_return_one();
+        assert(a == 69 && b == 69);
+        
+        a, b = fn_return_two() * 2;
+        assert(a == 24 && b == 24);
+        
+        a, b = -fn_return_two();
+        assert(a == -12 && b == -12);
+    }
 }
 
 fn_return_one :: () -> Int {

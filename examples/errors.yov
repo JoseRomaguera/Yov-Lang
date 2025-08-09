@@ -3,24 +3,27 @@
 //    If the return value is used, the program continues.
 //    Otherwise the program exists with a runtime error.
 
-invalid := "\".txt";
-
-// Ignoring the error
-if (create_directory(invalid, false).failed) println("Failed but program continues");
-
-// Receiving an error and asking the user if wants to continue
-result := create_directory(invalid, false);
-if (result.failed) {
-    if (ask_yesno("Failed, do you want to exit?")) {
-        println("All right, bye");
-        exit(0);
+main :: ()
+{
+    invalid := "\".txt";
+    
+    // Ignoring the error
+    if (create_directory(invalid, false).failed) println("Failed but program continues");
+    
+    // Receiving an error and asking the user if wants to continue
+    result := create_directory(invalid, false);
+    if (result.failed) {
+        if (ask_yesno("Failed, do you want to exit?")) {
+            println("All right, bye");
+            exit(0);
+        }
     }
+    
+    // Not all intrinsics generate errors.
+    exists(invalid);
+    
+    // Not handling the error and causing the script to stop at this point
+    create_directory(invalid, false);
+    
+    println("This line is never executed");
 }
-
-// Not all intrinsics generate errors.
-exists(invalid);
-
-// Not handling the error and causing the script to stop at this point
-create_directory(invalid, false);
-
-println("This line is never executed");

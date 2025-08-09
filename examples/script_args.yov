@@ -26,8 +26,11 @@ print_all :: arg {
 
 Foo :: enum { A, B, C }
 
-println("foo = {foo}");
-println("opt_foo = {opt_foo}");
-println("print_all = {print_all}");
-
-if (print_all) println("All the defined args: {context.args}");
+main :: ()
+{
+    println("foo = {foo}");
+    println("opt_foo = {opt_foo}");
+    println("print_all = {print_all}");
+    
+    if (print_all) println("All the defined args: {context.args}");
+}

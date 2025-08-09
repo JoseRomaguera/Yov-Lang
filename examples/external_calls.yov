@@ -8,42 +8,45 @@ output :: arg -> Int {
     default = 0;
 }
 
-if (callee) {
-    print("Output from external script");
-    exit(output);
+main :: ()
+{
+    if (callee) {
+        print("Output from external script");
+        exit(output);
+    }
+    
+    res: Result;
+    out: CallOutput;
+    
+    // Redirect external call output to the console
+    // This option is set by default
+    calls.redirect_stdout = RedirectStdout.Console;
+    
+    // Run a raw command using 'call'
+    println("-> 'call'");
+    out, res = call("{yov.path} external_calls.yov -callee");
+    println("\nresult = {res}, {out}\n");
+    
+    // Suppress output from external calls
+    calls.redirect_stdout = RedirectStdout.Ignore;
+    
+    yov_path_without_extension := "{yov.path}" / ".." / "yov";
+    
+    // Use 'call_exe' to invoke an executable without specifying its extension
+    // The correct file is automatically chosen based on the OS
+    println("-> 'call_exe'");
+    out, res = call_exe("{yov_path_without_extension}", "external_calls.yov -callee");
+    println("output = {out}\nresult = {res}\n");
+    
+    // Capture and return the output of the call
+    calls.redirect_stdout = RedirectStdout.Script;
+    
+    // Use 'call_script' to run another Yov script
+    println("-> 'call_script' (output = 0)");
+    out, res = call_script("external_calls.yov", "-callee -output=0", "");
+    println("output = {out}\nresult = {res}\n");
+    
+    println("-> 'call_script' (output = 10)");
+    out, res = call_script("external_calls.yov", "-callee -output=10", "");
+    println("output = {out}\nresult = {res}\n");
 }
-
-res: Result;
-out: CallOutput;
-
-// Redirect external call output to the console
-// This option is set by default
-calls.redirect_stdout = RedirectStdout.Console;
-
-// Run a raw command using 'call'
-println("-> 'call'");
-out, res = call("{yov.path} external_calls.yov -callee");
-println("\nresult = {res}, {out}\n");
-
-// Suppress output from external calls
-calls.redirect_stdout = RedirectStdout.Ignore;
-
-yov_path_without_extension := "{yov.path}" / ".." / "yov";
-
-// Use 'call_exe' to invoke an executable without specifying its extension
-// The correct file is automatically chosen based on the OS
-println("-> 'call_exe'");
-out, res = call_exe("{yov_path_without_extension}", "external_calls.yov -callee");
-println("output = {out}\nresult = {res}\n");
-
-// Capture and return the output of the call
-calls.redirect_stdout = RedirectStdout.Script;
-
-// Use 'call_script' to run another Yov script
-println("-> 'call_script' (output = 0)");
-out, res = call_script("external_calls.yov", "-callee -output=0", "");
-println("output = {out}\nresult = {res}\n");
-
-println("-> 'call_script' (output = 10)");
-out, res = call_script("external_calls.yov", "-callee -output=10", "");
-println("output = {out}\nresult = {res}\n");

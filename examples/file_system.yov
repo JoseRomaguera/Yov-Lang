@@ -7,26 +7,29 @@
 // See the function definitions here:
 // https://github.com/JoseRomaguera/Yov-Lang/blob/main/code/core.yov
 
-if (exists("_copied.yov")) println("Currently exists");
-else println("Not exists");
-
-copy_file("_copied.yov", "file_system.yov", .Override);
-
-if (exists("_moved.yov")) {
-    println("\"_moved.yov\" exits, deleting it...");
-    delete_file("_moved.yov");
+main :: ()
+{
+    if (exists("_copied.yov")) println("Currently exists");
+    else println("Not exists");
+    
+    copy_file("_copied.yov", "file_system.yov", .Override);
+    
+    if (exists("_moved.yov")) {
+        println("\"_moved.yov\" exits, deleting it...");
+        delete_file("_moved.yov");
+    }
+    move_file("_moved.yov", "_copied.yov");
+    
+    create_directory("_dir/_dir2", true); // Second parameter is for allow recursive
+    copy_file("_dir/_new_copy.yov", "_moved.yov", .NoOverride);
+    
+    copy_directory("_copied_dir", "_dir");
+    move_directory("_moved_dir", "_copied_dir");
+    
+    delete_directory("_dir");
+    delete_directory("_moved_dir");
+    
+    if (ask_yesno("Delete \"_moved.yov\"?")) delete_file("_moved.yov");
+    
+    println("Finished!!");
 }
-move_file("_moved.yov", "_copied.yov");
-
-create_directory("_dir/_dir2", true); // Second parameter is for allow recursive
-copy_file("_dir/_new_copy.yov", "_moved.yov", .NoOverride);
-
-copy_directory("_copied_dir", "_dir");
-move_directory("_moved_dir", "_copied_dir");
-
-delete_directory("_dir");
-delete_directory("_moved_dir");
-
-if (ask_yesno("Delete \"_moved.yov\"?")) delete_file("_moved.yov");
-
-println("Finished!!");

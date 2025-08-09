@@ -16,45 +16,48 @@ expr_name :: arg -> String {
     description = "name of the C expression (variable or constant) that will hold the string literal.";
 }
 
-println("Reading file: {src_path}");
-
-raw := read_entire_file(src_path);
-
-println("Processing text");
-
-lines: String[];
+main :: ()
 {
-    line: String;
-    cursor := 0;
-    codepoint := 0;
-    while (cursor < raw.size) {
-        codepoint, cursor = str_get_codepoint(raw, cursor);
-        
-        if (codepoint == '\r') continue;
-        
-        if (codepoint == '\n') {
-            lines += line;
-            line = "";
-            continue;
+    println("Reading file: {src_path}");
+    
+    raw := read_entire_file(src_path);
+    
+    println("Processing text");
+    
+    lines: String[];
+    {
+        line: String;
+        cursor := 0;
+        codepoint := 0;
+        while (cursor < raw.size) {
+            codepoint, cursor = str_get_codepoint(raw, cursor);
+            
+            if (codepoint == '\r') continue;
+            
+            if (codepoint == '\n') {
+                lines += line;
+                line = "";
+                continue;
+            }
+            
+            line += codepoint;
         }
-        
-        line += codepoint;
+        if (line.size > 0) lines += line;
     }
-    if (line.size > 0) lines += line;
+    
+    code: String;
+    
+    code += "const char* {expr_name} = \"\"\n";
+    
+    for (line: lines) {
+        code += "\"{line}\\n\"\n";
+    }
+    
+    code += "\"\";";
+    
+    println("Writing file: {dst_path}");
+    
+    write_entire_file(dst_path, code);
+    
+    println("Finished");
 }
-
-code: String;
-
-code += "const char* {expr_name} = \"\"\n";
-
-for (line: lines) {
-    code += "\"{line}\\n\"\n";
-}
-
-code += "\"\";";
-
-println("Writing file: {dst_path}");
-
-write_entire_file(dst_path, code);
-
-println("Finished");

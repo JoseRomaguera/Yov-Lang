@@ -894,9 +894,7 @@ void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node)
             interpret_object_definition(inter, node);
     }
     else if (node->kind == OpKind_EnumDefinition || node->kind == OpKind_StructDefinition || node->kind == OpKind_FunctionDefinition || node->kind == OpKind_ArgDefinition) {
-        if (parent != inter->root) {
-            report_nested_definition(node->code);
-        }
+        report_nested_definition(node->code);
     }
     else if (node->kind == OpKind_Import) {} // Ignore
     else {
@@ -1001,29 +999,26 @@ internal_fn b32 validate_arg_name(Interpreter* inter, String name, CodeLocation 
     return true;
 }
 
-internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, b32 only_definitions)
+internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, b32 is_main_script)
 {
     SCRATCH();
     
-    if (only_definitions) {
-        foreach(i, block->ops.count)
-        {
-            OpNode* node = block->ops[i];
-            
-            b32 is_definition = false;
-            if (node->kind == OpKind_EnumDefinition) is_definition = true;
-            if (node->kind == OpKind_StructDefinition) is_definition = true;
-            if (node->kind == OpKind_FunctionDefinition) is_definition = true;
-            if (node->kind == OpKind_Import) is_definition = true;
-            if (node->kind == OpKind_ObjectDefinition) {
-                OpNode_ObjectDefinition* node0 = (OpNode_ObjectDefinition*)node;
-                is_definition = node0->is_constant;
-            }
-            
-            if (!is_definition) {
-                report_unsupported_operations(node->code);
-                return;
-            }
+    // Assert only definitions in root block
+    foreach(i, block->ops.count)
+    {
+        OpNode* node = block->ops[i];
+        
+        b32 is_definition = false;
+        if (node->kind == OpKind_EnumDefinition) is_definition = true;
+        if (node->kind == OpKind_ArgDefinition) is_definition = true;
+        if (node->kind == OpKind_StructDefinition) is_definition = true;
+        if (node->kind == OpKind_FunctionDefinition) is_definition = true;
+        if (node->kind == OpKind_Import) is_definition = true;
+        if (node->kind == OpKind_ObjectDefinition) is_definition = true;
+        
+        if (!is_definition) {
+            report_unsupported_operations(node->code);
+            return;
         }
     }
     
@@ -1311,151 +1306,154 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
     }
     
     // Args
-    foreach(i, block->ops.count)
+    if (is_main_script)
     {
-        OpNode* node0 = block->ops[i];
-        if (node0->kind != OpKind_ArgDefinition) continue;
-        OpNode_ArgDefinition* node = (OpNode_ArgDefinition*)node0;
-        
-        b32 valid = true;
-        b32 required = false;
-        String name = string_format(yov->static_arena, "-%S", node->identifier);
-        Value default_value = value_nil();
-        b32 has_explicit_vtype = false;
-        String description = {};
-        
-        VariableType* vtype = VType_Bool;
-        
-        if (node->type->kind == OpKind_ObjectType) {
-            vtype = interpret_object_type(inter, node->type, false);
-            if (vtype->ID == VTypeID_Unknown) continue;
-            has_explicit_vtype = true;
-        }
-        
-        if (node->name->kind == OpKind_Assignment)
+        foreach(i, block->ops.count)
         {
-            OpNode_Assignment* assignment = (OpNode_Assignment*)node->name;
-            Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_String));
-            if (is_unknown(value)) {
-                valid = false;
-            }
-            else if (!is_string(value)) {
-                valid = false;
-                report_type_missmatch_assign(assignment->code, value.vtype->name, VType_String->name);
-            }
-            else {
-                name = get_string(value);
-                
-                if (!validate_arg_name(inter, name, assignment->code))
-                    valid = false;
-            }
-        }
-        
-        if (node->description->kind == OpKind_Assignment)
-        {
-            OpNode_Assignment* assignment = (OpNode_Assignment*)node->description;
-            Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_String));
-            if (is_unknown(value)) {
-                valid = false;
-            }
-            else if (!is_string(value)) {
-                valid = false;
-                report_type_missmatch_assign(assignment->code, value.vtype->name, VType_String->name);
-            }
-            else {
-                description = get_string(value);
-            }
-        }
-        
-        if (node->required->kind == OpKind_Assignment)
-        {
-            OpNode_Assignment* assignment = (OpNode_Assignment*)node->required;
-            Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_Bool));
-            if (is_unknown(value)) {
-                valid = false;
-            }
-            else if (!is_bool(value)) {
-                valid = false;
-                report_type_missmatch_assign(assignment->code, value.vtype->name, VType_Bool->name);
-            }
-            else {
-                required = get_bool(value);
-            }
-        }
-        
-        if (node->default_value->kind == OpKind_Assignment)
-        {
-            OpNode_Assignment* assignment = (OpNode_Assignment*)node->default_value;
-            default_value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(vtype));
-            if (is_unknown(default_value)) continue;
+            OpNode* node0 = block->ops[i];
+            if (node0->kind != OpKind_ArgDefinition) continue;
+            OpNode_ArgDefinition* node = (OpNode_ArgDefinition*)node0;
             
-            if (has_explicit_vtype && vtype != default_value.vtype) {
-                report_type_missmatch_assign(assignment->code, default_value.vtype->name, vtype->name);
+            b32 valid = true;
+            b32 required = false;
+            String name = string_format(yov->static_arena, "-%S", node->identifier);
+            Value default_value = value_nil();
+            b32 has_explicit_vtype = false;
+            String description = {};
+            
+            VariableType* vtype = VType_Bool;
+            
+            if (node->type->kind == OpKind_ObjectType) {
+                vtype = interpret_object_type(inter, node->type, false);
+                if (vtype->ID == VTypeID_Unknown) continue;
+                has_explicit_vtype = true;
+            }
+            
+            if (node->name->kind == OpKind_Assignment)
+            {
+                OpNode_Assignment* assignment = (OpNode_Assignment*)node->name;
+                Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_String));
+                if (is_unknown(value)) {
+                    valid = false;
+                }
+                else if (!is_string(value)) {
+                    valid = false;
+                    report_type_missmatch_assign(assignment->code, value.vtype->name, VType_String->name);
+                }
+                else {
+                    name = get_string(value);
+                    
+                    if (!validate_arg_name(inter, name, assignment->code))
+                        valid = false;
+                }
+            }
+            
+            if (node->description->kind == OpKind_Assignment)
+            {
+                OpNode_Assignment* assignment = (OpNode_Assignment*)node->description;
+                Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_String));
+                if (is_unknown(value)) {
+                    valid = false;
+                }
+                else if (!is_string(value)) {
+                    valid = false;
+                    report_type_missmatch_assign(assignment->code, value.vtype->name, VType_String->name);
+                }
+                else {
+                    description = get_string(value);
+                }
+            }
+            
+            if (node->required->kind == OpKind_Assignment)
+            {
+                OpNode_Assignment* assignment = (OpNode_Assignment*)node->required;
+                Value value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(VType_Bool));
+                if (is_unknown(value)) {
+                    valid = false;
+                }
+                else if (!is_bool(value)) {
+                    valid = false;
+                    report_type_missmatch_assign(assignment->code, value.vtype->name, VType_Bool->name);
+                }
+                else {
+                    required = get_bool(value);
+                }
+            }
+            
+            if (node->default_value->kind == OpKind_Assignment)
+            {
+                OpNode_Assignment* assignment = (OpNode_Assignment*)node->default_value;
+                default_value = interpret_expresion(inter, assignment->source, ExpresionContext_from_vtype(vtype));
+                if (is_unknown(default_value)) continue;
+                
+                if (has_explicit_vtype && vtype != default_value.vtype) {
+                    report_type_missmatch_assign(assignment->code, default_value.vtype->name, vtype->name);
+                    continue;
+                }
+                
+                vtype = default_value.vtype;
+            }
+            
+            if (find_symbol(inter, node->identifier).type != SymbolType_None) {
+                report_symbol_duplicated(node->code, node->identifier);
+                valid = false;
+            }
+            
+            if (!valid || inter->mode == InterpreterMode_Help)
+            {
+                define_arg(inter, node->identifier, name, vtype, false, description);
                 continue;
             }
             
-            vtype = default_value.vtype;
-        }
-        
-        if (find_symbol(inter, node->identifier).type != SymbolType_None) {
-            report_symbol_duplicated(node->code, node->identifier);
-            valid = false;
-        }
-        
-        if (!valid || inter->mode == InterpreterMode_Help)
-        {
-            define_arg(inter, node->identifier, name, vtype, false, description);
-            continue;
-        }
-        
-        Value value = value_nil();
-        
-        // From arg
-        if (is_unknown(value))
-        {
-            ScriptArg* script_arg = yov_find_arg(name);
+            Value value = value_nil();
             
-            if (script_arg == NULL) {
-                if (required) {
-                    report_arg_is_required(node->code, name);
-                    continue;
-                }
-            }
-            else
+            // From arg
+            if (is_unknown(value))
             {
-                if (script_arg->value.size <= 0)
-                {
-                    if (vtype->ID == VTypeID_Bool) {
-                        value = alloc_bool(inter, true);
+                ScriptArg* script_arg = yov_find_arg(name);
+                
+                if (script_arg == NULL) {
+                    if (required) {
+                        report_arg_is_required(node->code, name);
+                        continue;
                     }
                 }
                 else
                 {
-                    value = value_from_string(inter, script_arg->value, vtype);
-                }
-                
-                if (is_unknown(value)) {
-                    report_arg_wrong_value(NO_CODE, name, script_arg->value);
-                    continue;
+                    if (script_arg->value.size <= 0)
+                    {
+                        if (vtype->ID == VTypeID_Bool) {
+                            value = alloc_bool(inter, true);
+                        }
+                    }
+                    else
+                    {
+                        value = value_from_string(inter, script_arg->value, vtype);
+                    }
+                    
+                    if (is_unknown(value)) {
+                        report_arg_wrong_value(NO_CODE, name, script_arg->value);
+                        continue;
+                    }
                 }
             }
+            
+            // From default
+            if (is_unknown(value) && is_valid(default_value)) {
+                value = default_value;
+            }
+            
+            // Default vtype
+            if (is_unknown(value)) {
+                value = object_alloc(inter, vtype);
+            }
+            
+            scope_define_value(inter, node->identifier, value, true);
+            
+            //print_info("Arg %S: name=%S, required=%s\n", node->identifier, name, required ? "true" : "false");
+            
+            define_arg(inter, node->identifier, name, vtype, required, description);
         }
-        
-        // From default
-        if (is_unknown(value) && is_valid(default_value)) {
-            value = default_value;
-        }
-        
-        // Default vtype
-        if (is_unknown(value)) {
-            value = object_alloc(inter, vtype);
-        }
-        
-        scope_define_value(inter, node->identifier, value, true);
-        
-        //print_info("Arg %S: name=%S, required=%s\n", node->identifier, name, required ? "true" : "false");
-        
-        define_arg(inter, node->identifier, name, vtype, required, description);
     }
     
     // Global Objects
@@ -1464,8 +1462,6 @@ internal_fn void interpret_definitions(OpNode_Block* block, Interpreter* inter, 
         OpNode* node0 = block->ops[i];
         if (node0->kind != OpKind_ObjectDefinition) continue;
         OpNode_ObjectDefinition* node = (OpNode_ObjectDefinition*)node0;
-        if (!node->is_constant) continue;
-        
         interpret_object_definition(inter, node);
     }
 }
@@ -1504,10 +1500,8 @@ internal_fn void register_definitions(Interpreter* inter)
             continue;
         }
         
-        b32 only_definitions = it.index != 0;
-        
         OpNode_Block* block = (OpNode_Block*)ast;
-        interpret_definitions(block, inter, only_definitions);
+        interpret_definitions(block, inter, it.index == 0);
     }
     
     // Analyze initialize expresions
@@ -1706,7 +1700,6 @@ void interpret(InterpreterSettings settings, InterpreterMode mode)
     Interpreter* inter = arena_push_struct<Interpreter>(yov->static_arena);
     inter->mode = mode;
     inter->settings = settings;
-    inter->root = main_script->ast;
     
     inter->empty_op = arena_push_struct<OpNode>(yov->static_arena);
     
@@ -1722,8 +1715,18 @@ void interpret(InterpreterSettings settings, InterpreterMode mode)
         if (yov->error_count == 0) print_script_help(inter);
         return;
     }
-    
-    interpret_block(inter, inter->root, false);
+    {
+        String main_function_name = "main";
+        
+        FunctionDefinition* fn = find_function(inter, main_function_name);
+        
+        if (fn != NULL && fn->return_vtype == void_vtype && fn->parameters.count == 0) {
+            run_function_call(inter, fn, {}, main_script->ast);
+        }
+        else {
+            report_error(NO_CODE, "Main function not found");
+        }
+    }
     
     scope_clear(inter, inter->global_scope);
     
