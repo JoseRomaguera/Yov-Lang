@@ -61,8 +61,8 @@ main :: ()
         // Flags
         {
             cflags += {
-                "std:c17", "nologo",
-                "W2", "we4305", "we4244", "wd4146",
+                "std:c++17", "nologo",
+                "WX", "W2", "we4305", "we4244", "wd4146",
                 "GR-", "Os"
             };
             

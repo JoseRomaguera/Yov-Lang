@@ -23,6 +23,8 @@ int main()
 #include "common.cpp"
 #include "lexer.cpp"
 #include "parser.cpp"
+#include "types.cpp"
+#include "ir.cpp"
 #include "interpreter.cpp"
 #include "transpiler.cpp"
 #include "intrinsics.cpp"

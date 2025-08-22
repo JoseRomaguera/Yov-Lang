@@ -96,11 +96,12 @@ static_assert(sizeof(f64) == 8);
 #define read_only
 #endif
 
+#define no_inline_fn __declspec(noinline)
 #define inline_fn inline
 #define internal_fn static
 #define global_var extern
 
-#define array_count(x) (sizeof(x) / sizeof(x[0]))
+#define countof(x) (sizeof(x) / sizeof(x[0]))
 #define foreach(it, count) for (u32 (it) = 0; (it) < (count); (it)++)
 
 #if DEV
@@ -423,6 +424,7 @@ String string_format_with_args(Arena* arena, String string, va_list args);
 String string_format_ex(Arena* arena, String string, ...);
 u32 string_get_codepoint(String str, u64* cursor_ptr);
 u32 string_calculate_char_count(String str);
+String escape_string_from_raw_string(Arena* arena, String raw);
 
 b32 codepoint_is_separator(u32 codepoint);
 b32 codepoint_is_number(u32 codepoint);
@@ -506,6 +508,7 @@ enum BinaryOperator {
 };
 
 String string_from_binary_operator(BinaryOperator op);
+b32 binary_operator_is_arithmetic(BinaryOperator op);
 
 struct CodeLocation {
     u64 offset;
@@ -592,11 +595,356 @@ struct Token {
 
 String string_from_tokens(Arena* arena, Array<Token> tokens);
 String debug_info_from_token(Arena* arena, Token token);
-void log_tokens(Array<Token> tokens);
-
-//- PROGRAM CONTEXT 
+void print_tokens(Array<Token> tokens);
 
 #include "templates.h"
+
+//- TYPE SYSTEM
+
+// TODO(Jose): 
+struct Interpreter;
+struct OpNode;
+struct OpNode_Block;
+struct VariableType;
+struct FunctionDefinition;
+struct OpNode_StructDefinition;
+struct IR_Object;
+struct OpNode_ObjectType;
+
+enum ValueKind {
+    ValueKind_None,
+    ValueKind_LValue,
+    ValueKind_Register,    // RValue
+    ValueKind_Composition, // RValue
+    ValueKind_Literal,     // Compile-Time RValue
+    ValueKind_Default,     // Compile-Time RValue
+    ValueKind_Constant,    // Compile-Time RValue
+};
+
+struct Value {
+    VariableType* vtype;
+    ValueKind kind;
+    b32 take_reference;
+    union {
+        i32 register_index;
+        i64 literal_int;
+        b32 literal_bool;
+        String literal_string;
+        VariableType* literal_type;
+        struct {
+            Array<Value> values;
+            b8 is_empty;
+        } literal_array;
+        
+        Array<Value> composition_string;
+        
+        String constant_identifier;
+    };
+};
+
+enum UnitKind {
+    // IR only
+    UnitKind_Error,
+    UnitKind_Empty,
+    
+    UnitKind_Store,
+    UnitKind_Assignment,
+    UnitKind_FunctionCall,
+    UnitKind_Return,
+    UnitKind_Jump,
+    UnitKind_BinaryOperation,
+    UnitKind_SignOperation,
+    UnitKind_Child,
+    UnitKind_ResultEval,
+};
+
+struct Unit {
+    UnitKind kind;
+    CodeLocation code;
+    i32 dst_index;
+    union {
+        struct {
+            VariableType* vtype;
+            String global_identifier;
+        } store;
+        
+        struct {
+            Value src;
+        } assignment;
+        
+        struct {
+            FunctionDefinition* fn;
+            Array<Value> parameters;
+        } function_call;
+        
+        struct {
+            i32 condition; // 0 -> None; 1 -> true; -1 -> false
+            Value src;
+            i32 offset;
+        } jump;
+        
+        struct {
+            Value src0;
+            Value src1;
+            BinaryOperator op;
+        } binary_op;
+        
+        struct {
+            Value src;
+            BinaryOperator op;
+        } sign_op;
+        
+        struct {
+            Array<Value> sources;
+        } string_expression;
+        
+        struct {
+            Value src;
+            Value child_index;
+            b32 child_is_member;
+        } child;
+        
+        struct {
+            Value src;
+        } result_eval;
+        
+        struct {
+            Value count;
+            VariableType* element_vtype;
+        } array;
+    };
+};
+
+struct IR {
+    b32 success;
+    Array<Unit> instructions;
+    u32 register_count;
+    Value value;
+};
+
+typedef i64 VTypeID;
+
+enum VariableKind {
+    VariableKind_Unknown,
+    VariableKind_Void,
+    VariableKind_Any,
+    VariableKind_Primitive,
+    VariableKind_Array,
+    VariableKind_Enum,
+    VariableKind_Struct,
+};
+
+struct VariableType {
+    VTypeID ID;
+    String name;
+    VariableKind kind;
+    
+    u32 array_dimensions;
+    
+    struct {
+        Array<String> names;
+        Array<i64> values;
+    } _enum;
+    
+    struct {
+        OpNode_StructDefinition* node;
+        Array<String> names;
+        Array<VariableType*> vtypes;
+        Array<IR> irs;
+        b32 is_tuple;
+    } _struct;
+    
+    VariableType* child_next;
+    VariableType* child_base;
+};
+
+global_var VariableType* nil_vtype;
+global_var VariableType* void_vtype;
+
+struct Object {
+    u32 ID;
+    i32 ref_count;
+    VariableType* vtype;
+    Object* prev;
+    Object* next;
+};
+
+struct Object_Int : Object {
+    i64 value;
+};
+struct Object_Bool : Object {
+    b32 value;
+};
+struct Object_Enum : Object {
+    i64 index;
+};
+struct Object_String : Object{
+    String value;
+};
+struct Object_Array : Object {
+    Array<Object*> elements;
+};
+struct Object_Struct : Object {
+    Array<Object*> members;
+};
+
+#define VTypeID_Unknown VTypeID{ -1 }
+#define VTypeID_Void VTypeID{ 0 }
+#define VTypeID_Any VTypeID{ 1 }
+#define VTypeID_Int VTypeID{ 2 }
+#define VTypeID_Bool VTypeID{ 3 }
+#define VTypeID_String VTypeID{ 4 }
+
+#define VType_Any vtype_get(VTypeID_Any)
+#define VType_Int vtype_get(VTypeID_Int)
+#define VType_Bool vtype_get(VTypeID_Bool)
+#define VType_String vtype_get(VTypeID_String)
+
+#define VType_Type vtype_from_name("Type")
+#define VType_Result vtype_from_name("Result")
+#define VType_CopyMode vtype_from_name("CopyMode")
+#define VType_YovInfo vtype_from_name("YovInfo")
+#define VType_Context vtype_from_name("Context")
+#define VType_CallsContext vtype_from_name("CallsContext")
+#define VType_OS vtype_from_name("OS")
+#define VType_CallOutput vtype_from_name("CallOutput")
+#define VType_FileInfo vtype_from_name("FileInfo")
+
+#define VType_IntArray vtype_from_dimension(VType_Int, 1)
+#define VType_BoolArray vtype_from_dimension(VType_Bool, 1)
+#define VType_StringArray vtype_from_dimension(VType_String, 1)
+
+global_var Object* nil_obj;
+global_var Object* null_obj;
+
+typedef void IntrinsicFunction(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
+
+struct IntrinsicDefinition {
+    String name;
+    IntrinsicFunction* fn;
+};
+
+Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena);
+
+struct ObjectDefinition {
+    VariableType* vtype;
+    b32 is_constant;
+    b32 is_reference;
+    String name;
+    IR ir;
+};
+
+inline_fn ObjectDefinition obj_def_make(String name, VariableType* vtype, b32 is_constant = false, b32 is_reference = false, IR ir = {}) {
+    ObjectDefinition d{};
+    d.name = name;
+    d.vtype = vtype;
+    d.is_reference = is_reference;
+    d.is_constant = is_constant;
+    d.ir = ir;
+    return d;
+}
+
+struct FunctionDefinition {
+    String identifier;
+    Array<ObjectDefinition> parameters;
+    Array<ObjectDefinition> returns;
+    VariableType* return_vtype;
+    
+    CodeLocation code;
+    
+    struct {
+        IntrinsicFunction* fn;
+    } intrinsic;
+    
+    struct {
+        OpNode_Block* block;
+        IR ir;
+    } defined;
+    
+    b8 is_intrinsic;
+};
+
+struct ArgDefinition {
+    String identifier;
+    String name;
+    String description;
+    VariableType* vtype;
+    b32 required;
+};
+
+struct VariableTypeChild {
+    b32 is_member;
+    String name;
+    i32 index;
+    VariableType* vtype;
+};
+
+void types_initialize();
+
+VariableType* vtype_add(VariableKind kind, String name, VariableType* child_next, VariableType* child_base);
+VariableType* vtype_get(VTypeID ID);
+VariableType* vtype_from_name(String name);
+VariableType* vtype_from_dimension(VariableType* element, u32 dimension);
+b32 vtype_is_enum(VariableType* vtype);
+b32 vtype_is_array(VariableType* vtype);
+b32 vtype_is_struct(VariableType* vtype);
+b32 vtype_is_tuple(VariableType* vtype);
+u32 vtype_get_size(VariableType* vtype);
+VariableType* vtype_get_child_at(VariableType* vtype, i32 index, b32 is_member);
+VariableTypeChild vtype_get_child(VariableType* vtype, String name);
+VariableTypeChild vtype_get_member(VariableType* vtype, String member);
+VariableTypeChild vtype_get_property(VariableType* vtype, String property);
+Array<VariableTypeChild> vtype_get_properties(VariableType* vtype);
+Array<VariableType*> vtype_unpack(Arena* arena, VariableType* vtype);
+VariableType* vtype_from_node(OpNode_ObjectType* node, b32 allow_reference);
+VariableType* vtype_from_binary_operation(VariableType* left, VariableType* right, BinaryOperator op);
+VariableType* vtype_from_sign_operation(VariableType* src, BinaryOperator op);
+
+VariableType* define_enum(String name, Array<String> names, Array<i64> values);
+VariableType* define_struct(String name, Array<ObjectDefinition> members, OpNode_StructDefinition* node = NULL, b32 is_tuple = false);
+void define_arg(String identifier, String name, Value value, b32 required, String description);
+void define_function(CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns, OpNode_Block* block);
+void define_intrinsic_function(CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns);
+void define_global(ObjectDefinition def);
+
+FunctionDefinition* find_function(String identifier);
+ObjectDefinition* find_global(String identifier);
+ArgDefinition* find_arg_definition_by_name(String name);
+b32 definition_exists(String identifier);
+
+struct ExpresionContext {
+    VariableType* vtype;
+    b32 allow_tuple;
+};
+
+ExpresionContext ExpresionContext_from_void();
+ExpresionContext ExpresionContext_from_inference();
+ExpresionContext ExpresionContext_from_vtype(VariableType* vtype, b32 allow_tuple);
+
+inline_fn b32 value_is_compiletime(Value value) { return value.kind == ValueKind_Literal || value.kind == ValueKind_Default || value.kind == ValueKind_Constant; }
+inline_fn b32 value_is_rvalue(Value value) { return value.kind != ValueKind_None && value.kind != ValueKind_LValue; }
+
+Value value_none();
+Value ir_value_from_ir_object(IR_Object* object);
+Value ir_value_from_register(i32 index, VariableType* vtype, b32 is_lvalue);
+Value ir_value_from_reference(Value value);
+Value ir_value_from_int(i64 value);
+Value ir_value_from_enum(VariableType* vtype, i64 value);
+Value ir_value_from_bool(b32 value);
+Value ir_value_from_string(Arena* arena, String value);
+Value ir_value_from_string_array(Arena* arena, Array<Value> values);
+Value ir_value_from_type(VariableType* type);
+Value ir_value_from_array(Arena* arena, VariableType* array_vtype, Array<Value> elements);
+Value ir_value_from_empty_array(Arena* arena, VariableType* base_vtype, Array<Value> dimensions);
+Value ir_value_from_default(VariableType* vtype);
+Value ir_value_from_constant(Arena* arena, VariableType* vtype, String identifier);
+Value ir_value_from_string_expression(Arena* arena, String str, VariableType* vtype);
+String string_from_value(Arena* arena, Value value, b32 raw = false);
+
+b32 ct_string_from_value(Value value, String* str);
+b32 ct_bool_from_value(Value value, b32* b);
+
+//- PROGRAM CONTEXT 
 
 void print_ex(Severity severity, String str, ...);
 #define print(severity, str, ...) print_ex(severity, STR(str), __VA_ARGS__)
@@ -605,8 +953,6 @@ void print_ex(Severity severity, String str, ...);
 #define print_error(str, ...) print_ex(Severity_Error, STR(str), __VA_ARGS__)
 
 #define print_separator() print_ex(Severity_Info, STR("=========================\n"))
-
-struct OpNode;
 
 struct Report {
     String text;
@@ -624,7 +970,7 @@ struct YovScript {
     String dir;
     String text;
     Array<Token> tokens;
-    OpNode* ast;
+    OpNode_Block* ast;
 };
 
 struct Yov {
@@ -638,6 +984,16 @@ struct Yov {
     PooledArray<YovScript> scripts;
     
     Array<ScriptArg> args;
+    
+    // Type System
+    PooledArray<VariableType> vtype_table;
+    PooledArray<FunctionDefinition> functions;
+    PooledArray<ArgDefinition> arg_definitions;
+    PooledArray<ObjectDefinition> globals;
+    
+    Array<VariableTypeChild> string_properties;
+    Array<VariableTypeChild> array_properties;
+    Array<VariableTypeChild> enum_properties;
     
     PooledArray<Report> reports;
     i32 error_count;
@@ -749,7 +1105,6 @@ void print_report(Report report);
 #define report_member_not_found_in_object(_code, _v, _t) report_error(_code, "Member '%S' not found in a '%S'", _v, _t);
 #define report_member_not_found_in_type(_code, _v, _t) report_error(_code, "Member '%S' not found in '%S'", _v, _t);
 #define report_member_invalid_symbol(_code, _v) report_error(_code, "'%S' does not have members to access", _v);
-#define report_enum_value_expects_an_int(_code) report_error(_code, "Enum value expects an Int");
 #define report_function_not_found(_code, _v) report_error(_code, "Function '%S' not found", _v);
 #define report_function_expecting_parameters(_code, _v, _c) report_error(_code, "Function '%S' is expecting %u parameters", _v, _c);
 #define report_function_wrong_parameter_type(_code, _f, _t, _c) report_error(_code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
@@ -789,9 +1144,9 @@ void print_report(Report report);
 
 //- LANG REPORTS
 
-#define lang_report_stack_is_broken() report_error({}, "[LANG_ERROR] The stack is broken");
-#define lang_report_unfreed_objects() report_error({}, "[LANG_ERROR] Not all objects have been freed");
-#define lang_report_unfreed_dynamic() report_error({}, "[LANG_ERROR] Not all dynamic allocations have been freed");
+#define lang_report_stack_is_broken() report_error(NO_CODE, "[LANG_ERROR] The stack is broken");
+#define lang_report_unfreed_objects() report_error(NO_CODE, "[LANG_ERROR] Not all objects have been freed");
+#define lang_report_unfreed_dynamic() report_error(NO_CODE, "[LANG_ERROR] Not all dynamic allocations have been freed");
 
 //- LEXER
 
@@ -815,19 +1170,33 @@ b32 token_is_sign_or_binary_op(TokenKind token);
 
 enum OpKind {
     OpKind_None,
+    
+    // Misc
     OpKind_Error,
     OpKind_Block,
-    OpKind_Assignment,
-    OpKind_Symbol,
-    OpKind_ParameterList,
-    OpKind_Indexing,
+    OpKind_ObjectType,
+    OpKind_Import,
+    
+    // Definitions
+    OpKind_ObjectDefinition,
+    OpKind_EnumDefinition,
+    OpKind_StructDefinition,
+    OpKind_ArgDefinition,
+    OpKind_FunctionDefinition,
+    
+    // Control Flow
     OpKind_IfStatement,
     OpKind_WhileStatement,
     OpKind_ForStatement,
     OpKind_ForeachArrayStatement,
-    OpKind_ObjectDefinition,
-    OpKind_ObjectType,
-    OpKind_FunctionCall,
+    OpKind_Return,
+    OpKind_Continue,
+    OpKind_Break,
+    
+    // Expressions
+    OpKind_Symbol,
+    OpKind_ParameterList,
+    OpKind_Indexing,
     OpKind_ArrayExpresion,
     OpKind_Binary,
     OpKind_Sign,
@@ -837,14 +1206,10 @@ enum OpKind {
     OpKind_StringLiteral,
     OpKind_CodepointLiteral,
     OpKind_MemberValue,
-    OpKind_EnumDefinition,
-    OpKind_StructDefinition,
-    OpKind_ArgDefinition,
-    OpKind_FunctionDefinition,
-    OpKind_Return,
-    OpKind_Continue,
-    OpKind_Break,
-    OpKind_Import,
+    
+    // Ops
+    OpKind_Assignment,
+    OpKind_FunctionCall,
 };
 
 struct OpNode {
@@ -1045,13 +1410,163 @@ OpNode* extract_import(Parser* parser);
 OpNode* extract_block(Parser* parser, b32 between_braces);
 OpNode* extract_op(Parser* parser);
 
-OpNode* generate_ast(Array<Token> tokens, b32 is_block);
+OpNode_Block* generate_ast(Array<Token> tokens);
 
 Parser* parser_alloc(Array<Token> tokens);
 
 Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast);
 
 void log_ast(OpNode* node, i32 depth);
+
+//- Intermediate Representation 
+
+struct IR_Unit {
+    UnitKind kind;
+    CodeLocation code;
+    i32 dst_index;
+    union {
+        struct {
+            String global_identifier;
+            VariableType* vtype;
+        } store;
+        
+        struct {
+            Value src;
+        } assignment;
+        
+        struct {
+            FunctionDefinition* fn;
+            Array<Value> parameters;
+        } function_call;
+        
+        struct {
+            i32 condition; // 0 -> None; 1 -> true; -1 -> false
+            Value src;
+            IR_Unit* unit;
+        } jump;
+        
+        struct {
+            Value src0;
+            Value src1;
+            BinaryOperator op;
+        } binary_op;
+        
+        struct {
+            Value src;
+            BinaryOperator op;
+        } sign_op;
+        
+        struct {
+            Array<Value> sources;
+        } string_expression;
+        
+        struct {
+            Value src;
+            Value child_index;
+            b32 child_is_member;
+        } child;
+        
+        struct {
+            Value src;
+        } result_eval;
+        
+        struct {
+            Value count;
+            VariableType* element_vtype;
+        } array;
+    };
+    
+    IR_Unit* prev;
+    IR_Unit* next;
+};
+
+enum IR_ObjectContext {
+    IR_ObjectContext_Local,
+    IR_ObjectContext_Global,
+    IR_ObjectContext_Parameter,
+    IR_ObjectContext_ReturnRoot,
+    IR_ObjectContext_Return,
+};
+
+struct IR_Object {
+    String identifier;
+    IR_ObjectContext context;
+    VariableType* vtype;
+    u32 assignment_count;
+    i32 register_index;
+    i32 scope;
+};
+
+struct IR_Group {
+    b32 success;
+    Value value;
+    u32 unit_count;
+    IR_Unit* first;
+    IR_Unit* last;
+};
+
+struct IR_LoopingScope {
+    IR_Unit* continue_unit;
+    IR_Unit* break_unit;
+};
+
+struct IR_Context {
+    u32 next_register_index;
+    Arena* arena;
+    Arena* temp_arena;
+    PooledArray<IR_Object> objects;
+    PooledArray<IR_LoopingScope> looping_scopes;
+    i32 scope;
+    
+    VariableType* return_vtype;
+    b32 return_is_reference;
+};
+
+IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context);
+
+IR ir_generate_from_function_definition(FunctionDefinition* fn);
+IR ir_generate_from_initializer(OpNode* node, ExpresionContext context);
+IR ir_generate_from_value(Value value);
+
+b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value);
+b32 ct_string_from_node(OpNode* node, String* str);
+b32 ct_bool_from_node(OpNode* node, b32* b);
+
+void ir_generate();
+
+enum SymbolType {
+    SymbolType_None,
+    SymbolType_Object,
+    SymbolType_Function,
+    SymbolType_Type,
+};
+
+struct Symbol {
+    SymbolType type;
+    String identifier;
+    
+    IR_Object* object;
+    FunctionDefinition* function;
+    VariableType* vtype;
+};
+
+IR_Object* ir_find_object(IR_Context* ir, String identifier, b32 parent_scopes);
+IR_Object* ir_find_object_from_register(IR_Context* ir, i32 register_index);
+IR_Object* ir_find_object_from_context(IR_Context* ir, IR_ObjectContext context, u32 index);
+IR_Object* ir_define_object(IR_Context* ir, String identifier, VariableType* vtype, i32 scope, IR_ObjectContext context);
+Symbol ir_find_symbol(IR_Context* ir, String identifier);
+
+IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, CodeLocation code);
+void ir_looping_scope_pop(IR_Context* ir);
+IR_LoopingScope* ir_get_looping_scope(IR_Context* ir);
+
+void ir_scope_push(IR_Context* ir);
+void ir_scope_pop(IR_Context* ir);
+
+String string_from_register(Arena* arena, i32 index);
+String string_from_unit_kind(Arena* arena, UnitKind unit);
+String string_from_unit(Arena* arena, u32 index, u32 index_digits, u32 line_digits, Unit unit);
+void print_units(String name, Array<Unit> instructions);
 
 //- INTERPRETER 
 
@@ -1067,231 +1582,27 @@ else do{}while(0)
 #define log_mem_trace(text, ...) do{}while(0)
 #endif
 
-typedef i64 VTypeID;
-
-enum VariableKind {
-    VariableKind_Unknown,
-    VariableKind_Void,
-    VariableKind_Any,
-    VariableKind_Primitive,
-    VariableKind_Array,
-    VariableKind_Enum,
-    VariableKind_Struct,
-};
-
-struct VariableType {
-    VTypeID ID;
-    String name;
-    VariableKind kind;
-    
-    u32 array_dimensions;
-    
-    struct {
-        Array<String> names;
-        Array<i64> values;
-    } _enum;
-    
-    struct {
-        Array<String> names;
-        Array<VariableType*> vtypes;
-        Array<OpNode*> initialize_expresions;
-        b32 is_tuple;
-    } _struct;
-    
-    VariableType* child_next;
-    VariableType* child_base;
-};
-
-global_var VariableType* nil_vtype;
-global_var VariableType* void_vtype;
-
-struct Object {
-    u32 ID;
-    i32 ref_count;
-    VariableType* vtype;
-    Object* prev;
-    Object* next;
-};
-
-struct ObjectRef {
-    String identifier;
-    Object* object;
-    VariableType* vtype;
-    u32 assignment_count;
-    b32 constant;
-};
-
-enum ValueKind {
-    ValueKind_LValue,
-    ValueKind_RValue,
-    ValueKind_Reference,// LValue requested to be referenced
-};
-
-struct LValue {
-    ObjectRef* ref;
-};
-
-struct Value {
-    Object* obj;// TODO(Jose): Rename to "object"
-    Object* parent;
-    u32 index;
-    VariableType* vtype;
-    ValueKind kind;
-    LValue lvalue;
-};
-
-struct Object_Int : Object {
-    i64 value;
-};
-struct Object_Bool : Object {
-    b32 value;
-};
-struct Object_Enum : Object {
-    i64 index;
-};
-struct Object_String : Object{
-    String value;
-};
-struct Object_Array : Object {
-    Array<Object*> elements;
-};
-struct Object_Struct : Object {
-    Array<Object*> members;
-};
-
-#define VTypeID_Unknown VTypeID{ -1 }
-#define VTypeID_Void VTypeID{ 0 }
-#define VTypeID_Any VTypeID{ 1 }
-#define VTypeID_Int VTypeID{ 2 }
-#define VTypeID_Bool VTypeID{ 3 }
-#define VTypeID_String VTypeID{ 4 }
-
-#define VType_Any vtype_get(inter, VTypeID_Any)
-#define VType_Int vtype_get(inter, VTypeID_Int)
-#define VType_Bool vtype_get(inter, VTypeID_Bool)
-#define VType_String vtype_get(inter, VTypeID_String)
-
-#define VType_Type vtype_from_name(inter, "Type")
-#define VType_Result vtype_from_name(inter, "Result")
-#define VType_CopyMode vtype_from_name(inter, "CopyMode")
-#define VType_YovInfo vtype_from_name(inter, "YovInfo")
-#define VType_Context vtype_from_name(inter, "Context")
-#define VType_OS vtype_from_name(inter, "OS")
-#define VType_CallOutput vtype_from_name(inter, "CallOutput")
-#define VType_FileInfo vtype_from_name(inter, "FileInfo")
-
-#define VType_IntArray vtype_from_dimension(inter, VType_Int, 1)
-#define VType_BoolArray vtype_from_dimension(inter, VType_Bool, 1)
-#define VType_StringArray vtype_from_dimension(inter, VType_String, 1)
-
-global_var Object* nil_obj;
-global_var Object* null_obj;
-global_var ObjectRef* nil_ref;
-
-struct Interpreter;
-typedef void IntrinsicFunction(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code);
-
-struct IntrinsicDefinition {
-    String name;
-    IntrinsicFunction* fn;
-};
-
-Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena);
-
-struct ObjectDefinition {
-    VariableType* vtype;
-    b32 is_reference;
-    String name;
-    OpNode* default_value;
-};
-
-inline_fn ObjectDefinition obj_def_make(String name, VariableType* vtype, b32 is_reference = false) {
-    ObjectDefinition d{};
-    d.name = name;
-    d.vtype = vtype;
-    d.is_reference = is_reference;
-    return d;
-}
-
-struct FunctionDefinition {
-    String identifier;
-    Array<ObjectDefinition> parameters;
-    Array<ObjectDefinition> returns;
-    VariableType* return_vtype;
-    
-    CodeLocation code;
-    OpNode_Block* defined_fn;
-    
-    struct {
-        IntrinsicFunction* fn;
-    } intrinsic;
-    
-    b8 is_intrinsic;
-};
-
-struct ArgDefinition {
-    String identifier;
-    String name;
-    String description;
-    VariableType* vtype;
-    b32 required;
-};
-
-enum SymbolType {
-    SymbolType_None,
-    SymbolType_ObjectRef,
-    SymbolType_Function,
-    SymbolType_Type,
-};
-
-struct Symbol {
-    SymbolType type;
-    String identifier;
-    
-    ObjectRef* ref;
-    FunctionDefinition* function;
-    VariableType* vtype;
-};
-
 struct InterpreterSettings {
     b8 user_assertion; // Forces user assertion of every operation to the OS
     b8 print_execution;
 };
 
-enum InterpreterMode {
-    InterpreterMode_Analysis, // Do semantic analysis of the entire AST
-    InterpreterMode_Help,     // Validate arguments and show the descriptions
-    InterpreterMode_Execute,  // Execute AST until an error ocurrs
-};
+void interpret(InterpreterSettings settings);
 
-void interpret(InterpreterSettings settings, InterpreterMode mode);
-
-enum ScopeType {
-    ScopeType_Global,
-    ScopeType_Block,
-    ScopeType_LoopIteration,
-    ScopeType_Function,
+struct Register {
+    Object* object;
+    Object* parent;
+    i32 child_index;
 };
 
 struct Scope {
-    ScopeType type;
-    PooledArray<ObjectRef> object_refs;
-    PooledArray<Object*> temp_objects;
-    FunctionDefinition* fn;
+    Array<Register> registers;
+    i32 pc; // Program Counter
     b32 return_requested;
-    b32 break_requested;
-    b32 continue_requested;
-    Scope* next;
-    Scope* previous;
 };
 
 struct Interpreter {
-    InterpreterMode mode;
     InterpreterSettings settings;
-    
-    PooledArray<VariableType> vtype_table;
-    PooledArray<FunctionDefinition> functions;
-    PooledArray<ArgDefinition> arg_definitions;
     
     u32 object_id_counter;
     Object* object_list;
@@ -1299,16 +1610,16 @@ struct Interpreter {
     i32 allocation_count;
     
     OpNode* empty_op;
-    
     Scope* global_scope;
     Scope* current_scope;
-    Scope* free_scope;
+    
+    Array<Object*> global_objects;
     
     struct {
-        Value yov;
-        Value os;
-        Value context;
-        Value calls;
+        Object* yov;
+        Object* os;
+        Object* context;
+        Object* calls;
     } globals;
 };
 
@@ -1316,201 +1627,110 @@ void interpreter_exit(Interpreter* inter, i64 exit_code);
 void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, Result result);
 Result user_assertion(Interpreter* inter, String message);
 
-// Expectations:
-// - Inference of N objects:                VType_Any & N
-// - Inference of 1 object:                 VType_Any & N=1
-// - Explicit same typed of N objects:      VType & N   (Allow Any)
-// - Explicit typed of 1 object:            VType & N=1 (Allow Any)
-// - Explicit different typed of N objects: Tuple & N=1 (Allow Any inside Tuple)
-// - No assignments:                        VType_Void & N=0
-
-struct ExpresionContext {
-    VariableType* vtype;
-};
-
-ExpresionContext ExpresionContext_from_void();
-ExpresionContext ExpresionContext_from_inference(Interpreter* inter);
-ExpresionContext ExpresionContext_from_vtype(VariableType* vtype);
-
-Array<Value> interpret_destination_expresion(Arena* arena, Interpreter* inter, OpNode* node, ExpresionContext context);
-Value interpret_expresion(Interpreter* inter, OpNode* node, ExpresionContext context);
-void interpret_object_definition(Interpreter* inter, OpNode* node0);
-void interpret_assignment(Interpreter* inter, OpNode* node0);
-void interpret_if_statement(Interpreter* inter, OpNode* node0);
-void interpret_while_statement(Interpreter* inter, OpNode* node0);
-void interpret_for_statement(Interpreter* inter, OpNode* node0);
-void interpret_foreach_array_statement(Interpreter* inter, OpNode* node0);
-Value interpret_function_call(Interpreter* inter, OpNode* node0, b32 from_expression);
-VariableType* interpret_object_type(Interpreter* inter, OpNode* node0, b32 allow_reference);
-void interpret_return(Interpreter* inter, OpNode* node0);
-void interpret_continue(Interpreter* inter, OpNode* node0);
-void interpret_break(Interpreter* inter, OpNode* node0);
-void interpret_block(Interpreter* inter, OpNode* block0, b32 push_scope);
-void interpret_op(Interpreter* inter, OpNode* parent, OpNode* node);
-
-Value get_cd(Interpreter* inter);
+Object* get_cd(Interpreter* inter);
 String get_cd_value(Interpreter* inter);
 String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path);
 RedirectStdout get_calls_redirect_stdout(Interpreter* inter);
-b32 interpretion_failed(Interpreter* inter);
-b32 skip_ops(Interpreter* inter);
-b32 validate_assignment(Interpreter* inter, VariableType* dst_vtype, Value src);
 
-Value value_unpack_main(Interpreter* inter, Value value);
-Array<Value> value_unpack(Arena* arena, Interpreter* inter, Value value);
-Array<VariableType*> vtype_unpack(Arena* arena, Interpreter* inter, VariableType* vtype, u32 match_count);
-b32 value_is_tuple(Value value);
+void    global_save(Interpreter* inter, String identifier, Object* object);
+void    global_save_by_index(Interpreter* inter, i32 index, Object* object);
+Object* global_get(Interpreter* inter, String identifier);
+Object* global_get_by_index(Interpreter* inter, i32 index);
 
 // Once defined the IR, this will be the functions used to execute/analyze
 
-void run_assignment(Interpreter* inter, Value dst, Value src, BinaryOperator op, CodeLocation code);
-void run_multiple_assignment(Interpreter* inter, Array<Value> dst_values, Array<Value> src_values, BinaryOperator op, CodeLocation code);
-void run_ignored_values(Interpreter* inter, Array<Value> values, CodeLocation code);
-Value run_binary_operation(Interpreter* inter, Value left, Value right, BinaryOperator op, CodeLocation code);
-Value run_signed_operation(Interpreter* inter, Value value, BinaryOperator op, CodeLocation code);
-Value run_function_call(Interpreter* inter, FunctionDefinition* fn, Array<Value> parameters, OpNode* parent_node);
+Object* object_from_value(Interpreter* inter, Scope* scope, Value value);
+Object* execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocation code);
+
+void run_instruction(Interpreter* inter, Unit unit);
+void run_assign(Interpreter* inter, i32 dst_index, Value src, Scope* src_scope, CodeLocation code);
+void run_store(Interpreter* inter, VariableType* vtype, String global_identifier, i32 index, CodeLocation code);
+void run_return(Interpreter* inter, CodeLocation code);
+void run_jump(Interpreter* inter, Object* object, i32 condition, i32 offset, CodeLocation code);
+void run_function_call(Interpreter* inter, i32 dst_index, FunctionDefinition* fn, Array<Value> parameters, CodeLocation code);
+Object* run_binary_operation(Interpreter* inter, Object* left, Object* right, BinaryOperator op, CodeLocation code);
+Object* run_sign_operation(Interpreter* inter, Object* value, BinaryOperator op, CodeLocation code);
 
 //- SCOPE
 
-Scope* scope_alloc(Interpreter* inter, ScopeType type);
-void   scope_clear(Interpreter* inter, Scope* scope);
-Scope* scope_push(Interpreter* inter, ScopeType type);
-Scope* scope_push_function(Interpreter* inter, FunctionDefinition* fn);
-void   scope_pop(Interpreter* inter);
+void scope_clear(Interpreter* inter, Scope* scope);
 
-void scope_add_temporal(Interpreter* inter, Object* object);
-void scope_add_temporal(Interpreter* inter, Scope* scope, Object* object);
-Scope* scope_find_returnable(Interpreter* inter);
-Scope* scope_find_looping(Interpreter* inter);
-Value scope_define_value(Interpreter* inter, String identifier, Value value, b32 constant = false);
-Value scope_find_value(Interpreter* inter, String identifier, b32 parent_scopes);
+void    register_save_root(Interpreter* inter, i32 index, Object* object);
+void    register_save_child(Interpreter* inter, i32 index, Object* object, Object* parent, i32 child_index);
+void    register_save_reference(Interpreter* inter, i32 index, Object* object);
+Object* register_get(Scope* scope, i32 index);
 
-//- DEFINITIONS
+Register register_make_root(i32 index, Object* object);
+Register register_make_child(Object* object, Object* parent, i32 child_index);
 
-VariableType* define_enum(Interpreter* inter, String name, Array<String> names, Array<i64> values);
-VariableType* define_struct(Interpreter* inter, String name, Array<ObjectDefinition> members, b32 is_tuple = false);
-void define_arg(Interpreter* inter, String identifier, String name, VariableType* vtype, b32 required, String description);
-void define_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns, OpNode_Block* block);
-void define_intrinsic_function(Interpreter* inter, CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns);
+//- OBJECT
 
-Symbol find_symbol(Interpreter* inter, String identifier);
-FunctionDefinition* find_function(Interpreter* inter, String identifier);
-ArgDefinition* find_arg_definition_by_name(Interpreter* inter, String name);
-
-VariableType* vtype_add(Interpreter* inter, VariableKind kind, String name, VariableType* child_next, VariableType* child_base);
-VariableType* vtype_get(Interpreter* inter, VTypeID ID);
-VariableType* vtype_from_name(Interpreter* inter, String name);
-VariableType* vtype_from_dimension(Interpreter* inter, VariableType* element, u32 dimension);
-b32 vtype_is_enum(VariableType* vtype);
-b32 vtype_is_array(VariableType* vtype);
-b32 vtype_is_struct(VariableType* vtype);
-b32 vtype_is_tuple(VariableType* vtype);
-u32 vtype_get_size(VariableType* vtype);
-Value vtype_get_member(Interpreter* inter, VariableType* vtype, String member);
-VariableType* vtype_get_element(Interpreter* inter, VariableType* vtype, u32 index);
-
-//- VALUE OPS 
-
-Value value_null(VariableType* vtype);
-Value value_void();
-Value value_nil();
-Value value_def(Interpreter* inter, VariableType* vtype);
-Value rvalue_make(Object* obj, Object* parent, u32 index, VariableType* vtype);
-Value rvalue_from_obj(Object* obj);
-Value lvalue_make(Object* obj, ObjectRef* ref, Object* parent, u32 index, VariableType* vtype);
-Value lvalue_from_ref(ObjectRef* ref);
-Value value_from_child(Value parent_value, Object* object, u32 index, VariableType* vtype);
-Value value_from_string(Interpreter* inter, String str, VariableType* vtype);
-
-String string_from_value(Arena* arena, Interpreter* inter, Value value, b32 raw = true);
-String string_from_obj(Arena* arena, Interpreter* inter, Object* obj, b32 raw = true);
-
-// Assignment Rules
-
-// L = L   -> Copy
-// L = R   -> Copy
-// L = Ref -> Ref
-// R = L   -> Copy
-// R = R   -> Copy
-// R = Ref -> Error
-
-// new L = L   -> Alloc and Copy
-// new L = R   -> Ref
-// new L = Ref -> Ref
-// new R = L   -> Alloc and Copy
-// new R = R   -> Ref
-// new R = Ref -> Error
-
-VariableType* value_get_expected_vtype(Value value);
-b32 value_assign(Interpreter* inter, Value* dst, Value src);
-b32 value_assign_as_new(Interpreter* inter, Value* dst, Value src);
-b32 value_assign_ref(Interpreter* inter, Value* dst, Value src);
-b32 value_assign_null(Interpreter* inter, Value* dst);
-b32 value_assign_default(Interpreter* inter, Value* dst, VariableType* vtype);
-b32 value_copy(Interpreter* inter, Value dst, Value src);
-void value_on_assignment(Interpreter* inter, Value value);
+String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 raw = true);
 
 Array<Object*> object_get_childs_objects(Arena* arena, Interpreter* inter, Object* obj);
 b32 object_set_child(Interpreter* inter, Object* obj, u32 index, Object* child);
+b32 object_set_member(Interpreter* inter, Object* object, String member_name, Object* child); // TODO(Jose): Remove
 
-Value value_get_element(Interpreter* inter, Value value, u32 index);
-Value value_get_member(Interpreter* inter, Value value, String member_name);
+Object* object_get_child(Interpreter* inter, Object* object, u32 index, b32 is_member = true);
 
-Value alloc_int(Interpreter* inter, i64 value);
-Value alloc_bool(Interpreter* inter, b32 value);
-Value alloc_string(Interpreter* inter, String value);
-Value alloc_array(Interpreter* inter, VariableType* element_vtype, i64 count, b32 null_elements);
-Value alloc_array_multidimensional(Interpreter* inter, VariableType* base_vtype, Array<i64> dimensions);
-Value alloc_array_from_enum(Interpreter* inter, VariableType* enum_vtype);
-Value alloc_enum(Interpreter* inter, VariableType* vtype, i64 index);
+Object* alloc_int(Interpreter* inter, i64 value);
+Object* alloc_bool(Interpreter* inter, b32 value);
+Object* alloc_string(Interpreter* inter, String value);
+Object* alloc_array(Interpreter* inter, VariableType* element_vtype, i64 count, b32 null_elements);
+Object* alloc_array_multidimensional(Interpreter* inter, VariableType* base_vtype, Array<i64> dimensions);
+Object* alloc_array_from_enum(Interpreter* inter, VariableType* enum_vtype);
+Object* alloc_enum(Interpreter* inter, VariableType* vtype, i64 index);
 
-b32 value_is_vtype(Value value, VariableType* vtype);
 b32 is_valid(Object* obj);
-b32 is_valid(Value value);
 b32 is_unknown(Object* obj);
-b32 is_unknown(Value value);
+b32 is_const(Object* obj);
+b32 is_null(Object* obj);
+b32 is_int(Object* obj);
+b32 is_bool(Object* obj);
+b32 is_string(Object* obj);
+b32 is_array(Object* obj);
+b32 is_enum(Object* obj);
 
-b32 is_const(Value value);
-b32 is_void(Value value);
-b32 is_null(const Object* obj);
-b32 is_null(Value value);
-b32 is_int(Value value);
-b32 is_bool(Value value);
-b32 is_string(Value value);
-b32 is_array(Value value);
-b32 is_enum(Value value);
+i64 get_int(Object* obj);
+b32 get_bool(Object* obj);
+i64 get_enum_index(Object* obj);
+String get_string(Object* obj);
+Array<Object*> get_array(Object* obj);
 
-i64 get_int(Value value);
-b32 get_bool(Value value);
-i64 get_enum_index(Value value);
-String get_string(Value value);
-Array<Object*> get_array(Value value);
+i64 get_int_member(Interpreter* inter, Object* obj, String member);
+b32 get_bool_member(Interpreter* inter, Object* obj, String member);
+String get_string_member(Interpreter* inter, Object* obj, String member);
 
-void set_int(Value value, i64 v);
-void set_bool(Value value, b32 v);
-void set_enum_index(Value value, i64 v);
-void set_string(Interpreter* inter, Value value, String v);
+void set_int(Object* obj, i64 v);
+void set_bool(Object* obj, b32 v);
+void set_enum_index(Object* obj, i64 v);
+void set_string(Interpreter* inter, Object* obj, String v);
+
+void set_int_member(Interpreter* inter, Object* obj, String member, i64 v);
+void set_bool_member(Interpreter* inter, Object* obj, String member, b32 v);
+void set_enum_index_member(Interpreter* inter, Object* obj, String member, i64 v);
+void set_string_member(Interpreter* inter, Object* obj, String member, String v);
 
 enum CopyMode {
     CopyMode_NoOverride,
     CopyMode_Override,
 };
-inline_fn CopyMode get_enum_CopyMode(Value value) {
-    return (CopyMode)get_enum_index(value);
+inline_fn CopyMode get_enum_CopyMode(Object* obj) {
+    return (CopyMode)get_enum_index(obj);
 }
 
-void value_assign_Result(Interpreter* inter, Value value, Result res);
-void value_assign_CallOutput(Interpreter* inter, Value value, CallOutput out);
-void value_assign_FileInfo(Interpreter* inter, Value value, FileInfo info);
-void value_assign_Type(Interpreter* inter, Value value, VariableType* vtype);
+void object_assign_Result(Interpreter* inter, Object* obj, Result res);
+void object_assign_CallOutput(Interpreter* inter, Object* obj, CallOutput out);
+void object_assign_FileInfo(Interpreter* inter, Object* obj, FileInfo info);
+void object_assign_Type(Interpreter* inter, Object* obj, VariableType* vtype);
 
-Value value_from_Result(Interpreter* inter, Result res);
-Result Result_from_value(Interpreter* inter, Value value);
+Object* object_from_Result(Interpreter* inter, Result res);
+Result Result_from_object(Interpreter* inter, Object* obj);
 
 //- GARBAGE COLLECTOR
 
 u32 object_generate_id(Interpreter* inter);
-Value object_alloc(Interpreter* inter, VariableType* vtype);
+Object* object_alloc(Interpreter* inter, VariableType* vtype);
 void object_free(Interpreter* inter, Object* obj);
 void object_free_unused(Interpreter* inter);
 
@@ -1532,6 +1752,6 @@ void yov_transpile_core_definitions();
 
 String transpile_definitions(Arena* arena, OpNode_Block* ast);
 
-String transpile_definition_for_object_type(Arena* arena, OpNode_ObjectType* node);
+String transpile_definition_for_object_type(Arena* arena, OpNode_ObjectType* node, OpNode* assign_node);
 String transpile_definition_for_object_definition_from_node(Arena* arena, OpNode_ObjectDefinition* node);
 String transpile_definition_for_object_definition(Arena* arena, String name, String type, b32 is_reference);

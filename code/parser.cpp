@@ -868,7 +868,7 @@ OpNode* extract_for_statement(Parser* parser)
     foreach(i, expresions.count) {
         if (expresions[i].kind == TokenKind_NextSentence)
         {
-            if (separator_count >= array_count(separator_indices)) {
+            if (separator_count >= countof(separator_indices)) {
                 separator_count++;
                 break;
             }
@@ -1640,10 +1640,9 @@ OpNode* extract_op(Parser* parser)
     return NULL;
 }
 
-OpNode* generate_ast(Array<Token> tokens, b32 is_block) {
+OpNode_Block* generate_ast(Array<Token> tokens) {
     Parser* parser = parser_alloc(tokens);
-    if (is_block) return extract_block(parser, false);
-    else return extract_op(parser);
+    return (OpNode_Block*)extract_block(parser, false);
 }
 
 Parser* parser_alloc(Array<Token> tokens)

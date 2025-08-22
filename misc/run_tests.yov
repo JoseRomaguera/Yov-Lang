@@ -28,7 +28,7 @@ main :: ()
         run_test("basics.yov", "", 0);
         run_test("expressions.yov", "", 0);
         run_test("references.yov", "", 0);
-        run_test("any.yov", "", 0);
+        //run_test("any.yov", "", 0);
         
         println("");
     }

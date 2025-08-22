@@ -327,7 +327,7 @@ b32 token_is_sign_or_binary_op(TokenKind token)
         TokenKind_CompGreaterEquals,
     };
     
-    foreach(i, array_count(tokens)) {
+    foreach(i, countof(tokens)) {
         if (tokens[i] == token) return true;
     }
     return false;

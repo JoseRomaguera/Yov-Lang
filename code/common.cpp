@@ -121,13 +121,13 @@ void arena_pop_to(Arena* arena, u64 position)
 
 void initialize_scratch_arenas()
 {
-    foreach(i, array_count(yov->scratch_arenas)) {
+    foreach(i, countof(yov->scratch_arenas)) {
         yov->scratch_arenas[i] = arena_alloc(GB(16), 8);
     }
 }
 
 void shutdown_scratch_arenas() {
-    foreach(i, array_count(yov->scratch_arenas)) arena_free(yov->scratch_arenas[i]);
+    foreach(i, countof(yov->scratch_arenas)) arena_free(yov->scratch_arenas[i]);
 }
 
 ScratchArena arena_create_scratch(Arena* conflict0, Arena* conflict1)
@@ -135,7 +135,7 @@ ScratchArena arena_create_scratch(Arena* conflict0, Arena* conflict1)
     u32 index = 0;
     while (yov->scratch_arenas[index] == conflict0 || yov->scratch_arenas[index] == conflict1) index++;
     
-    assert(index < array_count(yov->scratch_arenas));
+    assert(index < countof(yov->scratch_arenas));
     
     ScratchArena scratch;
     scratch.arena = yov->scratch_arenas[index];
@@ -193,6 +193,12 @@ void file_info_set_path(FileInfo* info, String path)
 u64 u64_divide_high(u64 n0, u64 n1)
 {
     u64 res = n0 / n1;
+    if (n0 % n1 != 0) res++;
+    return res;
+}
+u32 u32_divide_high(u32 n0, u32 n1)
+{
+    u32 res = n0 / n1;
     if (n0 % n1 != 0) res++;
     return res;
 }
@@ -779,7 +785,8 @@ String string_format_with_args(Arena* arena, String string, va_list args)
     }
     
     if (invalid_format) {
-        return string_copy(arena, STR("Invalid Format!!"));
+        invalid_codepath();
+        return {};
     }
     
     return string_from_builder(arena, &builder);
@@ -849,6 +856,26 @@ u32 string_calculate_char_count(String str)
         count++;
     }
     return count;
+}
+
+String escape_string_from_raw_string(Arena* arena, String raw)
+{
+    SCRATCH(arena);
+    
+    StringBuilder builder = string_builder_make(scratch.arena);
+    
+    u64 cursor = 0;
+    while (cursor < raw.size) {
+        u32 codepoint = string_get_codepoint(raw, &cursor);
+        if (codepoint == '\n') append(&builder, "\\n");
+        else if (codepoint == '\r') append(&builder, "\\r");
+        else if (codepoint == '\t') append(&builder, "\\t");
+        else if (codepoint == '\\') append(&builder, "\\\\");
+        else if (codepoint == '\"') append(&builder, "\\\"");
+        else append_codepoint(&builder, codepoint);
+    }
+    
+    return string_from_builder(arena, &builder);
 }
 
 b32 codepoint_is_separator(u32 codepoint) {
@@ -1225,6 +1252,15 @@ String string_from_binary_operator(BinaryOperator op) {
     return "?";
 }
 
+b32 binary_operator_is_arithmetic(BinaryOperator op) {
+    if (op == BinaryOperator_Addition) return true;
+    if (op == BinaryOperator_Substraction) return true;
+    if (op == BinaryOperator_Multiplication) return true;
+    if (op == BinaryOperator_Division) return true;
+    if (op == BinaryOperator_Modulo) return true;
+    return false;
+}
+
 String string_from_tokens(Arena* arena, Array<Token> tokens)
 {
     SCRATCH(arena);
@@ -1295,7 +1331,7 @@ String debug_info_from_token(Arena* arena, Token token)
     return "?";
 }
 
-void log_tokens(Array<Token> tokens)
+void print_tokens(Array<Token> tokens)
 {
     SCRATCH();
     foreach(i, tokens.count) {
@@ -1467,6 +1503,8 @@ void yov_initialize()
     yov->reports = pooled_array_make<Report>(yov->static_arena, 32);
     
     yov->caller_dir = os_get_working_path(yov->static_arena);
+    
+    types_initialize();
 }
 
 void yov_shutdown()
@@ -1498,7 +1536,7 @@ void yov_shutdown()
         
         if (0) {
             print_info(STR("\n// TOKENS\n"));
-            // TODO(Jose): log_tokens(tokens);
+            // TODO(Jose): print_tokens(tokens);
             print_info("\n\n");
         }
         if (0) {
@@ -1528,6 +1566,81 @@ void yov_set_exit_code(i64 exit_code)
     yov->exit_code = exit_code;
 }
 
+internal_fn void print_script_help()
+{
+    SCRATCH();
+    StringBuilder builder = string_builder_make(scratch.arena);
+    
+    // Script description
+    {
+        // TODO(Jose): Value value = scope_find_value(inter, "script_description", true);
+        
+        String description = "TODO!";// TODO(Jose): get_string(value);
+        append(&builder, description);
+        append(&builder, "\n\n");
+    }
+    
+    Array<String> headers = array_make<String>(scratch.arena, yov->arg_definitions.count);
+    
+    u32 longest_header = 0;
+    for (auto it = pooled_array_make_iterator(&yov->arg_definitions); it.valid; ++it)
+    {
+        ArgDefinition* arg = it.value;
+        
+        b32 show_type = arg->vtype->ID != VTypeID_Bool && arg->vtype->ID > VTypeID_Void;
+        
+        String space = "    ";
+        
+        String header;
+        if (show_type)
+        {
+            VariableType* type = arg->vtype;
+            
+            String type_str;
+            if (type->kind == VariableKind_Enum) {
+                type_str = "enum";
+            }
+            else {
+                type_str = arg->vtype->name;
+            }
+            header = string_format(scratch.arena, "%S%S -> %S", space, arg->name, type_str);
+        }
+        else {
+            header = string_format(scratch.arena, "%S%S", space, arg->name);
+        }
+        
+        headers[it.index] = header;
+        
+        u32 char_count = string_calculate_char_count(header);
+        longest_header = MAX(longest_header, char_count);
+    }
+    
+    u32 chars_to_description = longest_header + 4;
+    
+    appendf(&builder, "Script Arguments:\n");
+    for (auto it = pooled_array_make_iterator(&yov->arg_definitions); it.valid; ++it)
+    {
+        ArgDefinition* arg = it.value;
+        String header = headers[it.index];
+        
+        append(&builder, header);
+        
+        if (arg->description.size != 0)
+        {
+            u32 char_count = string_calculate_char_count(header);
+            for (u32 i = char_count; i < chars_to_description; ++i) {
+                append(&builder, " ");
+            }
+            
+            appendf(&builder, "%S", arg->description);
+        }
+        appendf(&builder, "\n");
+    }
+    
+    String log = string_from_builder(scratch.arena, &builder);
+    print_info(log);
+}
+
 void yov_run()
 {
     b32 run = yov_read_args();
@@ -1546,40 +1659,31 @@ void yov_run()
         return;
     }
     
-    InterpreterSettings settings{};
-    settings.print_execution = yov->settings.trace;
-    settings.user_assertion = yov->settings.user_assert;
+    ir_generate();
     
     ScriptArg* help_arg = yov_find_arg("-help");
-    
-    if (help_arg != NULL)
-    {
-        if (!string_equals(help_arg->value, "")) {
-            report_arg_wrong_value(NO_CODE, help_arg->name, help_arg->value);
-        }
-        
-        interpret(settings, InterpreterMode_Help);
-        
-        if (yov->error_count != 0) {
-            yov_set_exit_code(-1);
-            yov_print_reports();
-        }
-        
-        return;
+    if (help_arg != NULL && !string_equals(help_arg->value, "")) {
+        report_arg_wrong_value(NO_CODE, help_arg->name, help_arg->value);
     }
     
-    // Semantic analysis of all the AST before execution
-    interpret(settings, InterpreterMode_Analysis);
-    
-    if (yov->error_count != 0) {
+    if (yov->error_count > 0) {
         yov_set_exit_code(-1);
         yov_print_reports();
         return;
     }
     
+    if (help_arg != NULL) {
+        print_script_help();
+        return;
+    }
+    
     // Execute
     if (!yov->settings.analyze_only) {
-        interpret(settings, InterpreterMode_Execute);
+        InterpreterSettings settings{};
+        settings.print_execution = yov->settings.trace;
+        settings.user_assertion = yov->settings.user_assert;
+        
+        interpret(settings);
     }
     
     if (yov->error_count != 0) {
@@ -1624,7 +1728,7 @@ i32 yov_import_script(String path)
     script->text = STR(raw_file);
     
     script->tokens = lexer_generate_tokens(yov->static_arena, script->text, true, code_location_start_script(script_id));
-    script->ast = generate_ast(script->tokens, true);
+    script->ast = generate_ast(script->tokens);
     
     Array<OpNode_Import*> imports = get_imports(scratch.arena, script->ast);
     

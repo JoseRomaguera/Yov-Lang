@@ -2,68 +2,68 @@
 
 //- CORE 
 
-internal_fn void intrinsic__typeof(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__typeof(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
-    Value value = params[0];
-    VariableType* vtype = value_get_expected_vtype(value);
+    Object* object = params[0];
+    VariableType* vtype = object->vtype;
     
     if (vtype == nil_vtype) {
         invalid_codepath();
         vtype = void_vtype;
     }
     
-    Value type = object_alloc(inter, VType_Type);
-    value_assign_Type(inter, type, vtype);
+    Object* type = object_alloc(inter, VType_Type);
+    object_assign_Type(inter, type, vtype);
     returns[0] = type;
 }
 
-internal_fn void intrinsic__print(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__print(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
-    String str = string_from_value(scratch.arena, inter, params[0]);
+    String str = string_from_object(scratch.arena, inter, params[0]);
     print_info(str);
 }
 
-internal_fn void intrinsic__println(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__println(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
-    String str = string_from_value(scratch.arena, inter, params[0]);
+    String str = string_from_object(scratch.arena, inter, params[0]);
     print_info("%S\n", str);
 }
 
-internal_fn void intrinsic__exit(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__exit(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     i64 exit_code = get_int(params[0]);
     interpreter_exit(inter, (i32)exit_code);
 }
 
-internal_fn void intrinsic__set_cd(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__set_cd(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
-    Value value = get_cd(inter);
+    Object* object = get_cd(inter);
     String path = get_string(params[0]);
     
     if (!os_path_is_absolute(path)) {
-        path = path_resolve(scratch.arena, path_append(scratch.arena, get_string(value), path));
+        path = path_resolve(scratch.arena, path_append(scratch.arena, get_string(object), path));
     }
     
     Result res;
     
     if (os_exists(path)) {
         res = RESULT_SUCCESS;
-        set_string(inter, value, path);
+        set_string(inter, object, path);
     }
     else {
         res = result_failed_make("Path does not exists");
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__assert(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__assert(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -75,10 +75,10 @@ internal_fn void intrinsic__assert(Interpreter* inter, Array<Value> params, Arra
         res = result_failed_make(string_format(yov->static_arena, "Assertion failed: %S", line_sample));
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__failed(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__failed(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -86,10 +86,10 @@ internal_fn void intrinsic__failed(Interpreter* inter, Array<Value> params, Arra
     i64 exit_code = get_int(params[1]);
     
     Result res = result_failed_make(message, exit_code);
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__env(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__env(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -98,10 +98,10 @@ internal_fn void intrinsic__env(Interpreter* inter, Array<Value> params, Array<V
     Result res = os_env_get(scratch.arena, &value, name);
     
     returns[0] = alloc_string(inter, value);
-    returns[1] = value_from_Result(inter, res);
+    returns[1] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__env_path(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__env_path(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -114,10 +114,10 @@ internal_fn void intrinsic__env_path(Interpreter* inter, Array<Value> params, Ar
     }
     
     returns[0] = alloc_string(inter, value);
-    returns[1] = value_from_Result(inter, res);
+    returns[1] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__env_path_array(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__env_path_array(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -125,7 +125,7 @@ internal_fn void intrinsic__env_path_array(Interpreter* inter, Array<Value> para
     String value;
     Result res = os_env_get(scratch.arena, &value, name);
     
-    Value array;
+    Object* array;
     
     if (!res.failed)
     {
@@ -133,7 +133,7 @@ internal_fn void intrinsic__env_path_array(Interpreter* inter, Array<Value> para
         array = alloc_array(inter, VType_String, values.count, false);
         
         foreach(i, values.count) {
-            Value element = value_get_element(inter, array, i);
+            Object* element = object_get_child(inter, array, i);
             String path = values[i];
             path = path_resolve(scratch.arena, path);
             set_string(inter, element, path);
@@ -144,21 +144,21 @@ internal_fn void intrinsic__env_path_array(Interpreter* inter, Array<Value> para
     }
     
     returns[0] = array;
-    returns[1] = value_from_Result(inter, res);
+    returns[1] = object_from_Result(inter, res);
 }
 
 //- EXTERNAL CALLS 
 
-internal_fn void return_from_external_call(Interpreter* inter, CallOutput res, Array<Value> returns)
+internal_fn void return_from_external_call(Interpreter* inter, CallOutput res, Array<Object*> returns)
 {
-    Value call_result = object_alloc(inter, VType_CallOutput);
-    value_assign_CallOutput(inter, call_result, res);
+    Object* call_result = object_alloc(inter, VType_CallOutput);
+    object_assign_CallOutput(inter, call_result, res);
     
     returns[0] = call_result;
-    returns[1] = value_from_Result(inter, res.result);
+    returns[1] = object_from_Result(inter, res.result);
 }
 
-internal_fn void intrinsic__call(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__call(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -177,7 +177,7 @@ internal_fn void intrinsic__call(Interpreter* inter, Array<Value> params, Array<
     return_from_external_call(inter, res, returns);
 }
 
-internal_fn void intrinsic__call_exe(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__call_exe(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -197,7 +197,7 @@ internal_fn void intrinsic__call_exe(Interpreter* inter, Array<Value> params, Ar
     return_from_external_call(inter, res, returns);
 }
 
-internal_fn void intrinsic__call_script(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__call_script(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -220,14 +220,14 @@ internal_fn void intrinsic__call_script(Interpreter* inter, Array<Value> params,
 
 //- UTILS 
 
-internal_fn void intrinsic__path_resolve(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__path_resolve(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     String res = path_resolve(scratch.arena, get_string(params[0]));
     returns[0] = alloc_string(inter, res);
 }
 
-internal_fn void intrinsic__str_get_codepoint(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__str_get_codepoint(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -240,7 +240,7 @@ internal_fn void intrinsic__str_get_codepoint(Interpreter* inter, Array<Value> p
     returns[1] = alloc_int(inter, cursor);
 }
 
-internal_fn void intrinsic__str_split(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__str_split(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -249,10 +249,9 @@ internal_fn void intrinsic__str_split(Interpreter* inter, Array<Value> params, A
     
     Array<String> result = string_split(scratch.arena, str, separator);
     
-    Value array = alloc_array(inter, VType_String, result.count, true);
+    Object* array = alloc_array(inter, VType_String, result.count, true);
     foreach(i, result.count) {
-        Value member = value_get_element(inter, array, i);
-        value_assign_ref(inter, &member, alloc_string(inter, result[i]));
+        object_set_child(inter, array, i, alloc_string(inter, result[i]));
     }
     
     returns[0] = array;
@@ -260,7 +259,7 @@ internal_fn void intrinsic__str_split(Interpreter* inter, Array<Value> params, A
 
 //- YOV 
 
-internal_fn void intrinsic__yov_require(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__yov_require(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     i64 major = get_int(params[0]);
@@ -273,10 +272,10 @@ internal_fn void intrinsic__yov_require(Interpreter* inter, Array<Value> params,
         res = result_failed_make(string_format(scratch.arena, "Require version: Yov v%u.%u", major, minor));
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__yov_require_min(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__yov_require_min(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     i64 major = get_int(params[0]);
@@ -291,10 +290,10 @@ internal_fn void intrinsic__yov_require_min(Interpreter* inter, Array<Value> par
         res = result_failed_make(string_format(scratch.arena, "Require minimum version: Yov v%u.%u", major, minor));
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__yov_require_max(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__yov_require_max(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     i64 major = get_int(params[0]);
@@ -309,26 +308,26 @@ internal_fn void intrinsic__yov_require_max(Interpreter* inter, Array<Value> par
         res = result_failed_make(string_format(scratch.arena, "Require maximum version: Yov v%u.%u", major, minor));
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
 //- MISC 
 
-internal_fn void intrinsic__ask_yesno(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__ask_yesno(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     String content = get_string(params[0]);
     b32 result = yov_ask_yesno("Ask", content);
     returns[0] = alloc_bool(inter, result);
 }
 
-internal_fn void intrinsic__exists(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__exists(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     String path = get_string(params[0]);
     b32 result = os_exists(path);
     returns[0] = alloc_bool(inter, result);
 }
 
-internal_fn void intrinsic__create_directory(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__create_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -341,10 +340,10 @@ internal_fn void intrinsic__create_directory(Interpreter* inter, Array<Value> pa
         res = os_create_directory(path, recursive);
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__delete_directory(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__delete_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -356,10 +355,10 @@ internal_fn void intrinsic__delete_directory(Interpreter* inter, Array<Value> pa
         res = os_delete_directory(path);
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__copy_directory(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__copy_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -372,10 +371,10 @@ internal_fn void intrinsic__copy_directory(Interpreter* inter, Array<Value> para
         res = os_copy_directory(dst, src);
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__move_directory(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__move_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -388,10 +387,10 @@ internal_fn void intrinsic__move_directory(Interpreter* inter, Array<Value> para
         res = os_move_directory(dst, src);
     }
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__copy_file(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__copy_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -403,10 +402,10 @@ internal_fn void intrinsic__copy_file(Interpreter* inter, Array<Value> params, A
     
     if (!res.failed) res = os_copy_file(dst, src, copy_mode == CopyMode_Override);
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__move_file(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__move_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -417,10 +416,10 @@ internal_fn void intrinsic__move_file(Interpreter* inter, Array<Value> params, A
     
     if (!res.failed) res = os_move_file(dst, src);
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__delete_file(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__delete_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -430,10 +429,10 @@ internal_fn void intrinsic__delete_file(Interpreter* inter, Array<Value> params,
     
     if (!res.failed) res = os_delete_file(path);
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__write_entire_file(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__write_entire_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -444,10 +443,10 @@ internal_fn void intrinsic__write_entire_file(Interpreter* inter, Array<Value> p
     Result res = user_assertion(inter, string_format(scratch.arena, "Write entire file:\n'%S'", path));
     if (!res.failed) res = os_write_entire_file(path, { content.data, content.size });
     
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__read_entire_file(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__read_entire_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -459,10 +458,10 @@ internal_fn void intrinsic__read_entire_file(Interpreter* inter, Array<Value> pa
     String content_str = string_make((char*)content.data, content.size);
     
     returns[0] = alloc_string(inter, content_str);
-    returns[1] = value_from_Result(inter, res);
+    returns[1] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__file_get_info(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__file_get_info(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -471,14 +470,14 @@ internal_fn void intrinsic__file_get_info(Interpreter* inter, Array<Value> param
     FileInfo info;
     Result res = os_file_get_info(scratch.arena, path, &info);
     
-    Value ret = object_alloc(inter, VType_FileInfo);
-    if (!res.failed) value_assign_FileInfo(inter, ret, info);
+    Object* ret = object_alloc(inter, VType_FileInfo);
+    if (!res.failed) object_assign_FileInfo(inter, ret, info);
     
     returns[0] = ret;
-    returns[1] = value_from_Result(inter, res);
+    returns[1] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__dir_get_files_info(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__dir_get_files_info(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     SCRATCH();
     
@@ -487,30 +486,30 @@ internal_fn void intrinsic__dir_get_files_info(Interpreter* inter, Array<Value> 
     Array<FileInfo> infos;
     Result res = os_dir_get_files_info(scratch.arena, path, &infos);
     
-    Value ret = alloc_array(inter, VType_FileInfo, infos.count, false);
+    Object* ret = alloc_array(inter, VType_FileInfo, infos.count, false);
     if (!res.failed) {
         foreach(i, infos.count) {
-            Value element = value_get_element(inter, ret, i);
-            value_assign_FileInfo(inter, element, infos[i]);
+            Object* element = object_get_child(inter, ret, i);
+            object_assign_FileInfo(inter, element, infos[i]);
         }
     }
     
     returns[0] = ret;
-    returns[1] = value_from_Result(inter, res);
+    returns[1] = object_from_Result(inter, res);
 }
 
 //- MSVC 
 
-internal_fn void intrinsic__msvc_import_env_x64(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__msvc_import_env_x64(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     Result res = os_msvc_import_env(MSVC_Env_x64);
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
-internal_fn void intrinsic__msvc_import_env_x86(Interpreter* inter, Array<Value> params, Array<Value> returns, CodeLocation code)
+internal_fn void intrinsic__msvc_import_env_x86(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code)
 {
     Result res = os_msvc_import_env(MSVC_Env_x86);
-    returns[0] = value_from_Result(inter, res);
+    returns[0] = object_from_Result(inter, res);
 }
 
 #define INTR(name, fn) { STR(name), fn }
@@ -568,5 +567,5 @@ Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena)
         INTR("msvc_import_env_x86", intrinsic__msvc_import_env_x86),
     };
     
-    return array_copy(arena, array_make(table, array_count(table)));
+    return array_copy(arena, array_make(table, countof(table)));
 }
