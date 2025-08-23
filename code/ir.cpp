@@ -141,7 +141,7 @@ internal_fn IR_Group ir_from_define_temporal(IR_Context* ir, VariableType* vtype
     unit->store.global_identifier = {};
     unit->store.vtype = vtype;
     
-    return ir_from_single(unit, ir_value_from_register(unit->dst_index, vtype, false));
+    return ir_from_single(unit, value_from_register(unit->dst_index, vtype, false));
 }
 internal_fn IR_Group ir_from_define_local(IR_Context* ir, String identifier, VariableType* vtype, CodeLocation code)
 {
@@ -152,7 +152,7 @@ internal_fn IR_Group ir_from_define_local(IR_Context* ir, String identifier, Var
     unit->store.global_identifier = {};
     unit->store.vtype = vtype;
     
-    return ir_from_single(unit, ir_value_from_ir_object(object));
+    return ir_from_single(unit, value_from_ir_object(object));
 }
 
 internal_fn IR_Group ir_from_reference(IR_Context* ir, b32 expects_lvalue, Value value, CodeLocation code)
@@ -162,7 +162,7 @@ internal_fn IR_Group ir_from_reference(IR_Context* ir, b32 expects_lvalue, Value
         return ir_failed();
     }
     
-    value = ir_value_from_reference(value);
+    value = value_from_reference(value);
     return ir_from_none(value);
 }
 
@@ -180,7 +180,7 @@ internal_fn IR_Group ir_from_symbol(IR_Context* ir, String identifier, CodeLocat
             Value global_value = def->ir.value;
             
             if (def->is_constant && value_is_compiletime(global_value)) {
-                return ir_from_none(ir_value_from_constant(ir->arena, def->vtype, def->name));
+                return ir_from_none(value_from_constant(ir->arena, def->vtype, def->name));
             }
             else {
                 IR_Object* object = ir_define_object(ir, def->name, def->vtype, -1, IR_ObjectContext_Global);
@@ -190,7 +190,7 @@ internal_fn IR_Group ir_from_symbol(IR_Context* ir, String identifier, CodeLocat
                 unit->store.global_identifier = def->name;
                 unit->store.vtype = def->vtype;
                 
-                return ir_from_single(unit, ir_value_from_ir_object(object));
+                return ir_from_single(unit, value_from_ir_object(object));
             }
         }
     }
@@ -198,10 +198,10 @@ internal_fn IR_Group ir_from_symbol(IR_Context* ir, String identifier, CodeLocat
     if (symbol.type == SymbolType_Object)
     {
         IR_Object* object = symbol.object;
-        return ir_from_none(ir_value_from_register(object->register_index, object->vtype, true));
+        return ir_from_none(value_from_register(object->register_index, object->vtype, true));
     }
     else if (symbol.type == SymbolType_Type) {
-        return ir_from_none(ir_value_from_type(symbol.vtype));
+        return ir_from_none(value_from_type(symbol.vtype));
     }
     
     report_symbol_not_found(code, identifier);
@@ -222,7 +222,7 @@ internal_fn IR_Group ir_from_binary_operator(IR_Context* ir, Value left, Value r
     unit->binary_op.src1 = right;
     unit->binary_op.op = op;
     
-    return ir_from_single(unit, ir_value_from_register(unit->dst_index, vtype, false));
+    return ir_from_single(unit, value_from_register(unit->dst_index, vtype, false));
 }
 
 internal_fn IR_Group ir_from_sign_operator(IR_Context* ir, Value src, BinaryOperator op, CodeLocation code)
@@ -238,7 +238,7 @@ internal_fn IR_Group ir_from_sign_operator(IR_Context* ir, Value src, BinaryOper
         return ir_failed();
     }
     
-    return ir_from_single(unit, ir_value_from_register(unit->dst_index, vtype, false));
+    return ir_from_single(unit, value_from_register(unit->dst_index, vtype, false));
 }
 
 internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Value dst, Value src, BinaryOperator op, CodeLocation code)
@@ -279,7 +279,7 @@ internal_fn IR_Group ir_from_child(IR_Context* ir, Value src, Value index, b32 i
     unit->child.child_index = index;
     unit->child.child_is_member = is_member;
     
-    Value child = ir_value_from_register(unit->dst_index, vtype, src.kind == ValueKind_LValue);
+    Value child = value_from_register(unit->dst_index, vtype, src.kind == ValueKind_LValue);
     return ir_from_single(unit, child);
 }
 
@@ -296,7 +296,7 @@ internal_fn IR_Group ir_from_multiple_assignment(IR_Context* ir, b32 expects_lva
         Array<VariableType*> vtypes = vtype_unpack(scratch.arena, src.vtype);
         sources = array_make<Value>(scratch.arena, vtypes.count);
         foreach(i, sources.count) {
-            out = IR_append(out, ir_from_child(ir, src, ir_value_from_int(i), true, vtypes[i], code));
+            out = IR_append(out, ir_from_child(ir, src, value_from_int(i), true, vtypes[i], code));
             sources[i] = out.value;
         }
     }
@@ -343,14 +343,14 @@ internal_fn IR_Group ir_from_function_call(IR_Context* ir, FunctionDefinition* f
     
     Value value = value_none();
     if (unit->dst_index >= 0) {
-        value = ir_value_from_register(unit->dst_index, return_vtype, false);
+        value = value_from_register(unit->dst_index, return_vtype, false);
     }
     
     return ir_from_single(unit, value);
 }
 
 internal_fn IR_Group ir_from_default_initializer(IR_Context* ir, VariableType* vtype, CodeLocation code) {
-    return ir_from_none(ir_value_from_default(vtype));
+    return ir_from_none(value_from_default(vtype));
 }
 
 internal_fn IR_Group ir_from_return(IR_Context* ir, IR_Group expression, CodeLocation code)
@@ -380,7 +380,7 @@ internal_fn IR_Group ir_from_return(IR_Context* ir, IR_Group expression, CodeLoc
             return {};
         }
         
-        IR_Group assignment = ir_from_assignment(ir, true, ir_value_from_ir_object(dst), out.value, BinaryOperator_None, code);
+        IR_Group assignment = ir_from_assignment(ir, true, value_from_ir_object(dst), out.value, BinaryOperator_None, code);
         out = IR_append(out, assignment);
     }
     else
@@ -393,7 +393,7 @@ internal_fn IR_Group ir_from_return(IR_Context* ir, IR_Group expression, CodeLoc
         if (dst != NULL)
         {
             out = IR_append(out, ir_from_default_initializer(ir, dst->vtype, code));
-            out = IR_append(out, ir_from_assignment(ir, true, ir_value_from_ir_object(dst), out.value, BinaryOperator_None, code));
+            out = IR_append(out, ir_from_assignment(ir, true, value_from_ir_object(dst), out.value, BinaryOperator_None, code));
             
             Array<VariableType*> vtypes = vtype_unpack(scratch.arena, dst->vtype);
             
@@ -406,8 +406,8 @@ internal_fn IR_Group ir_from_return(IR_Context* ir, IR_Group expression, CodeLoc
                     report_error(code, "Return value '%S' is not specified", obj->identifier);
                 }
                 
-                IR_Group child = ir_from_child(ir, ir_value_from_ir_object(dst), ir_value_from_int(i), true, vtypes[i], code);
-                IR_Group assignment = ir_from_assignment(ir, true, child.value, ir_value_from_ir_object(obj), BinaryOperator_None, code);
+                IR_Group child = ir_from_child(ir, value_from_ir_object(dst), value_from_int(i), true, vtypes[i], code);
+                IR_Group assignment = ir_from_assignment(ir, true, child.value, value_from_ir_object(obj), BinaryOperator_None, code);
                 out = IR_append_3(out, child, assignment);
             }
         }
@@ -520,17 +520,17 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
     if (node0->kind == OpKind_IntLiteral)
     {
         OpNode_NumericLiteral* node = (OpNode_NumericLiteral*)node0;
-        return ir_from_none(ir_value_from_int(node->int_literal));
+        return ir_from_none(value_from_int(node->int_literal));
     }
     if (node0->kind == OpKind_CodepointLiteral)
     {
         OpNode_NumericLiteral* node = (OpNode_NumericLiteral*)node0;
-        return ir_from_none(ir_value_from_int(node->codepoint_literal));
+        return ir_from_none(value_from_int(node->codepoint_literal));
     }
     if (node0->kind == OpKind_BoolLiteral)
     {
         OpNode_NumericLiteral* node = (OpNode_NumericLiteral*)node0;
-        return ir_from_none(ir_value_from_bool(node->bool_literal));
+        return ir_from_none(value_from_bool(node->bool_literal));
     }
     if (node0->kind == OpKind_Symbol)
     {
@@ -543,7 +543,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         OpNode_StringLiteral* node = (OpNode_StringLiteral*)node0;
         
         if (node->expresions.count == 0) {
-            return ir_from_none(ir_value_from_string(ir->arena, node->value));
+            return ir_from_none(value_from_string(ir->arena, node->value));
         }
         
         String value = node->value;
@@ -585,15 +585,17 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                     
                     Value value = expression.value;
                     
-                    if (value.kind == ValueKind_Literal) {
-                        append(&builder, string_from_value(scratch.arena, value, true));
+                    if (value_is_compiletime(value)) {
+                        String str;
+                        ct_string_from_value(value, &str);
+                        append(&builder, str);
                     }
-                    else if (value.kind == ValueKind_Register || value.kind == ValueKind_LValue)
+                    else
                     {
                         String literal = string_from_builder(scratch.arena, &builder);
                         if (literal.size > 0) {
                             builder = string_builder_make(scratch.arena);
-                            array_add(&sources, ir_value_from_string(ir->arena, literal));
+                            array_add(&sources, value_from_string(ir->arena, literal));
                         }
                         
                         out = IR_append(out, expression);
@@ -609,10 +611,10 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         
         String literal = string_from_builder(scratch.arena, &builder);
         if (literal.size > 0) {
-            array_add(&sources, ir_value_from_string(ir->arena, literal));
+            array_add(&sources, value_from_string(ir->arena, literal));
         }
         
-        out.value = ir_value_from_string_array(ir->arena, array_from_pooled_array(scratch.arena, sources)); 
+        out.value = value_from_string_array(ir->arena, array_from_pooled_array(scratch.arena, sources)); 
         return out;
     }
     
@@ -634,7 +636,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         
         Value src = src_out.value;
         if (src.vtype == void_vtype && context.vtype->ID > VTypeID_Any) {
-            src = ir_value_from_type(context.vtype);
+            src = value_from_type(context.vtype);
         }
         
         String member = node->member;
@@ -643,7 +645,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         
         VariableTypeChild info = vtype_get_child(src.vtype, member);
         if (info.index >= 0) {
-            mem = ir_from_child(ir, src, ir_value_from_int(info.index), info.is_member, info.vtype, node->code);
+            mem = ir_from_child(ir, src, value_from_int(info.index), info.is_member, info.vtype, node->code);
         }
         else if (src.kind == ValueKind_Literal && src.vtype == VType_Type)
         {
@@ -652,7 +654,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
             if (vtype->kind == VariableKind_Enum)
             {
                 if (string_equals(member, "count")) {
-                    mem = ir_from_none(ir_value_from_int(vtype->_enum.values.count));
+                    mem = ir_from_none(value_from_int(vtype->_enum.values.count));
                 }
                 else if (string_equals(member, "array")) {
                     mem = ir_from_symbol(ir, string_format(scratch.arena, "$%S_array", vtype->name), node->code);
@@ -668,7 +670,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                     }
                     
                     if (value_index >= 0) {
-                        mem = ir_from_none(ir_value_from_enum(vtype, value_index));
+                        mem = ir_from_none(value_from_enum(vtype, value_index));
                     }
                 }
             }
@@ -872,7 +874,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
             
             if (vtype_is_tuple(return_value.vtype) && !context.allow_tuple) {
                 VariableType* vtype = vtype_unpack(scratch.arena, return_value.vtype)[0];
-                IR_Group child = ir_from_child(ir, return_value, ir_value_from_int(0), true, vtype, node->code);
+                IR_Group child = ir_from_child(ir, return_value, value_from_int(0), true, vtype, node->code);
                 out = IR_append(out, child);
             }
             else if (context.vtype == void_vtype && return_value.kind != ValueKind_None)
@@ -883,7 +885,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                     Array<VariableType*> vtypes = vtype_unpack(scratch.arena, return_value.vtype);
                     returns = array_make<Value>(scratch.arena, vtypes.count);
                     foreach(i, returns.count) {
-                        out = IR_append(out, ir_from_child(ir, return_value, ir_value_from_int(i), true, vtypes[i], node->code));
+                        out = IR_append(out, ir_from_child(ir, return_value, value_from_int(i), true, vtypes[i], node->code));
                         returns[i] = out.value;
                     }
                 }
@@ -1014,14 +1016,14 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         IR_Group init = array_expression;
         init = IR_append(init, ir_from_define_temporal(ir, VType_Int, node->code));
         Value internal_index = init.value;
-        init = IR_append(init, ir_from_assignment(ir, false, internal_index, ir_value_from_int(0), BinaryOperator_None, node->code));
+        init = IR_append(init, ir_from_assignment(ir, false, internal_index, value_from_int(0), BinaryOperator_None, node->code));
         
         if (!init.success)
             return ir_failed();
         
         // (internal_index < array.count)
         VariableTypeChild count_info = vtype_get_property(array.vtype, "count");
-        IR_Group condition = ir_from_child(ir, array, ir_value_from_int(count_info.index), count_info.is_member, count_info.vtype, node->code);
+        IR_Group condition = ir_from_child(ir, array, value_from_int(count_info.index), count_info.is_member, count_info.vtype, node->code);
         condition = IR_append(condition, ir_from_binary_operator(ir, internal_index, condition.value, BinaryOperator_LessThan, node->code));
         
         if (!condition.success)
@@ -1044,7 +1046,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         content = IR_append(content, ir_from_content_node(ir, node->content));
         
         // internal_index += 1
-        IR_Group update = ir_from_assignment(ir, false, internal_index, ir_value_from_int(1), BinaryOperator_Addition, node->code);
+        IR_Group update = ir_from_assignment(ir, false, internal_index, value_from_int(1), BinaryOperator_Addition, node->code);
         
         if (!content.success || !update.success)
             return ir_failed();
@@ -1087,7 +1089,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
             Array<Value> dimensions = array_make<Value>(scratch.arena, node->nodes.count + starting_dimensions);
             
             foreach(i, starting_dimensions) {
-                dimensions[i] = ir_value_from_int(0);
+                dimensions[i] = value_from_int(0);
             }
             
             foreach(i, node->nodes.count)
@@ -1106,7 +1108,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                 dimensions[index] = dim;
             }
             
-            out.value = ir_value_from_empty_array(ir->arena, base_vtype, dimensions);
+            out.value = value_from_empty_array(ir->arena, base_vtype, dimensions);
             return out;
         }
         else
@@ -1149,7 +1151,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                 }
             }
             
-            out.value = ir_value_from_array(ir->arena, array_vtype, elements);
+            out.value = value_from_array(ir->arena, array_vtype, elements);
         }
         
         
@@ -1377,8 +1379,8 @@ IR ir_generate_from_function_definition(FunctionDefinition* fn)
     
     out.value = value_none();
     if (return_obj != NULL) {
-        out.value = ir_value_from_ir_object(return_obj);
-        if (return_is_reference) out.value = ir_value_from_reference(out.value);
+        out.value = value_from_ir_object(return_obj);
+        if (return_is_reference) out.value = value_from_reference(out.value);
     }
     
     IR res = ir_make(ir->arena, ir->next_register_index, out);
@@ -1927,12 +1929,12 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script)
                     if (script_arg->value.size <= 0)
                     {
                         if (vtype->ID == VTypeID_Bool) {
-                            value = ir_value_from_bool(true);
+                            value = value_from_bool(true);
                         }
                     }
                     else
                     {
-                        value = ir_value_from_string_expression(yov->static_arena, script_arg->value, vtype);
+                        value = value_from_string_expression(yov->static_arena, script_arg->value, vtype);
                     }
                     
                     if (value.kind == ValueKind_None) {
@@ -1949,7 +1951,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script)
             
             // Default vtype
             if (value.kind == ValueKind_None) {
-                value = ir_value_from_default(vtype);
+                value = value_from_default(vtype);
             }
             
             //print_info("Arg %S: name=%S, required=%s\n", node->identifier, name, required ? "true" : "false");
@@ -2041,7 +2043,7 @@ void ir_generate()
             else
             {
                 fn->defined.ir = ir_generate_from_function_definition(fn);
-                //print_instructions(fn->identifier, fn->defined.ir.instructions);
+                //print_units(fn->identifier, fn->defined.ir.instructions);
             }
         }
         
@@ -2055,7 +2057,7 @@ void ir_generate()
                     VariableType* member_vtype = vtype->_struct.vtypes[i];
                     OpNode_StructDefinition* node = vtype->_struct.node;
                     if (node == NULL) {
-                        vtype->_struct.irs[i] = ir_generate_from_value(ir_value_from_default(member_vtype));
+                        vtype->_struct.irs[i] = ir_generate_from_value(value_from_default(member_vtype));
                     }
                     else {
                         OpNode* assignment = vtype->_struct.node->members[i]->assignment;

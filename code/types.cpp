@@ -326,9 +326,9 @@ VariableType* define_enum(String name, Array<String> names, Array<i64> values)
         VariableType* array_vtype = vtype_from_dimension(t, 1);
         Array<Value> elements = array_make<Value>(scratch.arena, names.count);
         foreach(i, elements.count) {
-            elements[i] = ir_value_from_enum(t, i);
+            elements[i] = value_from_enum(t, i);
         }
-        Value value = ir_value_from_array(yov->static_arena, array_vtype, elements);
+        Value value = value_from_array(yov->static_arena, array_vtype, elements);
         IR ir = ir_generate_from_value(value);
         define_global(obj_def_make(string_format(scratch.arena, "$%S_array", name), array_vtype, true, false, ir));
     }
@@ -487,11 +487,11 @@ Value value_none() {
     return v;
 }
 
-Value ir_value_from_ir_object(IR_Object* object) {
-    return ir_value_from_register(object->register_index, object->vtype, true);
+Value value_from_ir_object(IR_Object* object) {
+    return value_from_register(object->register_index, object->vtype, true);
 }
 
-Value ir_value_from_register(i32 index, VariableType* vtype, b32 is_lvalue) {
+Value value_from_register(i32 index, VariableType* vtype, b32 is_lvalue) {
     Value v{};
     v.vtype = vtype;
     v.register_index = index;
@@ -499,13 +499,13 @@ Value ir_value_from_register(i32 index, VariableType* vtype, b32 is_lvalue) {
     return v;
 }
 
-Value ir_value_from_reference(Value value) {
+Value value_from_reference(Value value) {
     assert(value.kind == ValueKind_LValue || value.kind == ValueKind_Register);
     value.take_reference = true;
     return value;
 }
 
-Value ir_value_from_int(i64 value) {
+Value value_from_int(i64 value) {
     Value v{};
     v.vtype = VType_Int;
     v.kind = ValueKind_Literal;
@@ -513,7 +513,7 @@ Value ir_value_from_int(i64 value) {
     return v;
 }
 
-Value ir_value_from_enum(VariableType* vtype, i64 value) {
+Value value_from_enum(VariableType* vtype, i64 value) {
     Value v{};
     v.vtype = vtype;
     v.kind = ValueKind_Literal;
@@ -521,7 +521,7 @@ Value ir_value_from_enum(VariableType* vtype, i64 value) {
     return v;
 }
 
-Value ir_value_from_bool(b32 value) {
+Value value_from_bool(b32 value) {
     Value v{};
     v.vtype = VType_Bool;
     v.kind = ValueKind_Literal;
@@ -529,7 +529,7 @@ Value ir_value_from_bool(b32 value) {
     return v;
 }
 
-Value ir_value_from_string(Arena* arena, String value) {
+Value value_from_string(Arena* arena, String value) {
     Value v{};
     v.vtype = VType_String;
     v.kind = ValueKind_Literal;
@@ -537,7 +537,7 @@ Value ir_value_from_string(Arena* arena, String value) {
     return v;
 }
 
-Value ir_value_from_string_array(Arena* arena, Array<Value> values)
+Value value_from_string_array(Arena* arena, Array<Value> values)
 {
     SCRATCH(arena);
     
@@ -559,7 +559,7 @@ Value ir_value_from_string_array(Arena* arena, Array<Value> values)
             append(&builder, str);
         }
         
-        return ir_value_from_string(arena, string_from_builder(scratch.arena, &builder));
+        return value_from_string(arena, string_from_builder(scratch.arena, &builder));
     }
     else
     {
@@ -571,7 +571,7 @@ Value ir_value_from_string_array(Arena* arena, Array<Value> values)
     }
 }
 
-Value ir_value_from_type(VariableType* type) {
+Value value_from_type(VariableType* type) {
     Value v{};
     v.vtype = VType_Type;
     v.kind = ValueKind_Literal;
@@ -579,7 +579,7 @@ Value ir_value_from_type(VariableType* type) {
     return v;
 }
 
-Value ir_value_from_array(Arena* arena, VariableType* array_vtype, Array<Value> elements)
+Value value_from_array(Arena* arena, VariableType* array_vtype, Array<Value> elements)
 {
     assert(array_vtype->kind == VariableKind_Array);
     Value v{};
@@ -590,7 +590,7 @@ Value ir_value_from_array(Arena* arena, VariableType* array_vtype, Array<Value> 
     return v;
 }
 
-Value ir_value_from_empty_array(Arena* arena, VariableType* base_vtype, Array<Value> dimensions)
+Value value_from_empty_array(Arena* arena, VariableType* base_vtype, Array<Value> dimensions)
 {
     assert(base_vtype->kind != VariableKind_Array);
     Value v{};
@@ -601,7 +601,7 @@ Value ir_value_from_empty_array(Arena* arena, VariableType* base_vtype, Array<Va
     return v;
 }
 
-Value ir_value_from_default(VariableType* vtype)
+Value value_from_default(VariableType* vtype)
 {
     Value v{};
     v.vtype = vtype;
@@ -609,7 +609,7 @@ Value ir_value_from_default(VariableType* vtype)
     return v;
 }
 
-Value ir_value_from_constant(Arena* arena, VariableType* vtype, String identifier)
+Value value_from_constant(Arena* arena, VariableType* vtype, String identifier)
 {
     Value v{};
     v.vtype = vtype;
@@ -618,28 +618,28 @@ Value ir_value_from_constant(Arena* arena, VariableType* vtype, String identifie
     return v;
 }
 
-Value ir_value_from_string_expression(Arena* arena, String str, VariableType* vtype)
+Value value_from_string_expression(Arena* arena, String str, VariableType* vtype)
 {
     SCRATCH(arena);
     if (str.size <= 0) return value_none();
-    // TODO(Jose): if (string_equals(str, "null")) return ir_value_null();
+    // TODO(Jose): if (string_equals(str, "null")) return value_null();
     
     if (vtype->ID == VTypeID_Int) {
         i64 value;
         if (!i64_from_string(str, &value)) return value_none();
-        return ir_value_from_int(value);
+        return value_from_int(value);
     }
     
     if (vtype->ID == VTypeID_Bool) {
-        if (string_equals(str, "true")) return ir_value_from_bool(true);
-        if (string_equals(str, "false")) return ir_value_from_bool(false);
-        if (string_equals(str, "1")) return ir_value_from_bool(true);
-        if (string_equals(str, "0")) return ir_value_from_bool(false);
+        if (string_equals(str, "true")) return value_from_bool(true);
+        if (string_equals(str, "false")) return value_from_bool(false);
+        if (string_equals(str, "1")) return value_from_bool(true);
+        if (string_equals(str, "0")) return value_from_bool(false);
         return value_none();
     }
     
     if (vtype->ID == VTypeID_String) {
-        return ir_value_from_string(arena, str);
+        return value_from_string(arena, str);
     }
     
     if (vtype->kind == VariableKind_Enum)
@@ -654,7 +654,7 @@ Value ir_value_from_string_expression(Arena* arena, String str, VariableType* vt
         
         String enum_name = string_substring(str, start_name, str.size - start_name);
         foreach(i, vtype->_enum.names.count) {
-            if (string_equals(vtype->_enum.names[i], enum_name)) return ir_value_from_enum(vtype, i);
+            if (string_equals(vtype->_enum.names[i], enum_name)) return value_from_enum(vtype, i);
         }
         return value_none();
     }

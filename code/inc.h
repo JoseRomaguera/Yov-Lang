@@ -925,20 +925,20 @@ inline_fn b32 value_is_compiletime(Value value) { return value.kind == ValueKind
 inline_fn b32 value_is_rvalue(Value value) { return value.kind != ValueKind_None && value.kind != ValueKind_LValue; }
 
 Value value_none();
-Value ir_value_from_ir_object(IR_Object* object);
-Value ir_value_from_register(i32 index, VariableType* vtype, b32 is_lvalue);
-Value ir_value_from_reference(Value value);
-Value ir_value_from_int(i64 value);
-Value ir_value_from_enum(VariableType* vtype, i64 value);
-Value ir_value_from_bool(b32 value);
-Value ir_value_from_string(Arena* arena, String value);
-Value ir_value_from_string_array(Arena* arena, Array<Value> values);
-Value ir_value_from_type(VariableType* type);
-Value ir_value_from_array(Arena* arena, VariableType* array_vtype, Array<Value> elements);
-Value ir_value_from_empty_array(Arena* arena, VariableType* base_vtype, Array<Value> dimensions);
-Value ir_value_from_default(VariableType* vtype);
-Value ir_value_from_constant(Arena* arena, VariableType* vtype, String identifier);
-Value ir_value_from_string_expression(Arena* arena, String str, VariableType* vtype);
+Value value_from_ir_object(IR_Object* object);
+Value value_from_register(i32 index, VariableType* vtype, b32 is_lvalue);
+Value value_from_reference(Value value);
+Value value_from_int(i64 value);
+Value value_from_enum(VariableType* vtype, i64 value);
+Value value_from_bool(b32 value);
+Value value_from_string(Arena* arena, String value);
+Value value_from_string_array(Arena* arena, Array<Value> values);
+Value value_from_type(VariableType* type);
+Value value_from_array(Arena* arena, VariableType* array_vtype, Array<Value> elements);
+Value value_from_empty_array(Arena* arena, VariableType* base_vtype, Array<Value> dimensions);
+Value value_from_default(VariableType* vtype);
+Value value_from_constant(Arena* arena, VariableType* vtype, String identifier);
+Value value_from_string_expression(Arena* arena, String str, VariableType* vtype);
 String string_from_value(Arena* arena, Value value, b32 raw = false);
 
 b32 ct_string_from_value(Value value, String* str);
