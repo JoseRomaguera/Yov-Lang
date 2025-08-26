@@ -1,0 +1,203 @@
+
+indent :: (count: Int) -> String {
+    str := "";
+    for (i := 0; i < count; i += 1) str += '\t';
+    return str;
+}
+
+transpile_script :: (script_path: String, result_path: String, function_name: String) -> Result
+{
+    out := yov_parse(script_path);
+    // print_parsing(out);
+    
+    if (out.reports.count > 0) {
+        for (report: out.reports) {
+            println(report);
+        }
+        return failed("Can't parse script", -1);
+    }
+    
+    file := "#pragma once\n\n";
+    
+    for (fn: out.functions) {
+        file += "void intrinsic__{fn.identifier}(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);\n";
+    }
+    
+    file += "\n";
+    file += "void {function_name}()\n";
+    file += "\{\n";
+    
+    for (def: out.enums)
+    {
+        file += "{indent(1)}// {string_from_enum_definition(def)}\n";
+        file += "{indent(1)}\{\n";
+        file += transpile_string_array(2, "names", def.elements);
+        file += transpile_int_array(2, "values", def.values);
+        file += "{indent(2)}define_enum(\"{def.identifier}\", names, values);\n";
+        file += "{indent(1)}\}\n";
+    }
+    
+    for (def: out.structs)
+    {
+        file += "{indent(1)}// {string_from_struct_definition(def)}\n";
+        file += "{indent(1)}\{\n";
+        file += transpile_object_definition_array(2, "members", def.members);
+        file += "{indent(2)}define_struct(\"{def.identifier}\", members);\n";
+        file += "{indent(1)}\}\n";
+    }
+    
+    for (fn: out.functions)
+    {
+        file += "{indent(1)}// {string_from_function_definition(fn)}\n";
+        file += "{indent(1)}\{\n";
+        file += transpile_object_definition_array(2, "parameters", fn.parameters);
+        file += transpile_object_definition_array(2, "returns", fn.returns);
+        file += "{indent(2)}define_intrinsic_function(NO_CODE, intrinsic__{fn.identifier}, \"{fn.identifier}\", parameters, returns);\n";
+        file += "{indent(1)}\}\n";
+    }
+    
+    for (def: out.globals)
+    {
+        file += "{indent(1)}// {string_from_object_definition(def)}\n";
+        file += "{indent(1)}\{\n";
+        file += "{indent(1)}ObjectDefinition def = {transpile_object_definition(def)};\n";
+        file += "{indent(2)}define_global(def);\n";
+        file += "{indent(1)}\}\n";
+    }
+    
+    file += "\}\n";
+    
+    //println(file);
+    
+    write_entire_file(result_path, file);
+    
+    return Result();
+}
+
+transpile_object_definition :: (def: ObjectDefinition) -> String
+{
+    return "obj_def_make(\"{def.identifier}\", vtype_from_name(\"{def.type.name}\"), {false})";
+}
+
+transpile_object_definition_array :: (in: Int, name: String, defs: ObjectDefinition[]) -> String
+{
+    values := [defs.count]->String;
+    for (def, i: defs) {
+        values[i] = transpile_object_definition(def);
+    }
+    return transpile_array(in, name, "ObjectDefinition", values);
+}
+
+transpile_string_array :: (in: Int, name: String, strings: String[]) -> String
+{
+    values := [strings.count]->String;
+    for (str, i: strings) {
+        values[i] = "\"{str}\"";
+    }
+    return transpile_array(in, name, "String", values);
+}
+
+transpile_int_array :: (in: Int, name: String, ints: Int[]) -> String
+{
+    values := [ints.count]->String;
+    for (int, i: ints) {
+        values[i] = "{int}";
+    }
+    return transpile_array(in, name, "i64", values);
+}
+
+transpile_array :: (in: Int, name: String, type: String, values: String[]) -> String
+{
+    str := "";
+    if (values.count > 0)
+    {
+        str += "{indent(in)}{type} {name}_[{values.count}];\n";
+        for (v, i: values) {
+            str += "{indent(in)}{name}_[{i}] = {values[i]};\n";
+        }
+        str += "{indent(in)}Array<{type}> {name} = array_make({name}_, countof({name}_));\n";
+    }
+    else
+    {
+        str += "{indent(in)}Array<{type}> {name} = \{\};\n";
+    }
+    return str;
+}
+
+print_parsing :: (out: YovParseOutput)
+{
+    println("-> Functions ({out.functions.count}):");
+    for (o, i : out.functions) {
+        println(string_from_function_definition(o));
+    }
+    
+    println("-> Structs ({out.structs.count}):");
+    for (o, i : out.structs) {
+        println(string_from_struct_definition(o));
+    }
+    
+    println("-> Enums ({out.enums.count}):");
+    for (o, i : out.enums) {
+        println(string_from_enum_definition(o));
+    }
+    
+    println("-> Globals ({out.globals.count}):");
+    for (o, i : out.globals) {
+        println(string_from_object_definition(o));
+    }
+}
+
+string_from_function_definition :: (fn: FunctionDefinition) -> String
+{
+    str := "{fn.identifier} :: (";
+    str += string_from_object_definition_array(fn.parameters);
+    str += ")";
+    
+    if (fn.returns.count > 0) {
+        str += " -> ";
+        
+        if (fn.returns.count == 1 && fn.returns[0].identifier == "return") {
+            str += fn.returns[0].type.name;
+        }
+        else {
+            str += "({string_from_object_definition_array(fn.returns)})";
+        }
+    }
+    
+    return str + ";";
+}
+
+string_from_struct_definition :: (def: StructDefinition) -> String
+{
+    str := "{def.identifier} :: struct \{ ";
+    str += string_from_object_definition_array(def.members);
+    str += " \}";
+    return str;
+}
+
+string_from_enum_definition :: (def: EnumDefinition) -> String
+{
+    str := "{def.identifier} :: enum \{ ";
+    for (e, i: def.elements) {
+        v := def.values[i];
+        
+        str += e;
+        if (v != i) str += " = {v}";
+        if (i < def.elements.count - 1) str += ", ";
+    }
+    str += " \}";
+    return str;
+}
+
+string_from_object_definition :: (o: ObjectDefinition) -> String {
+    return "{o.identifier}: {o.type.name}";
+}
+
+string_from_object_definition_array :: (objects: ObjectDefinition[]) -> String {
+    str := "";
+    for (o, i: objects) {
+        str += string_from_object_definition(o);
+        if (i < objects.count - 1) str += ", ";
+    }
+    return str;
+}

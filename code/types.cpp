@@ -33,7 +33,7 @@ inline_fn void vtype_add_core(VariableKind kind, String name, u64 assert_vtype) 
     assert(vtype->ID == assert_vtype);
 }
 
-void types_initialize()
+void types_initialize(b32 import_core)
 {
     yov->vtype_table = pooled_array_make<VariableType>(yov->static_arena, 32);
     yov->functions = pooled_array_make<FunctionDefinition>(yov->static_arena, 32);
@@ -65,7 +65,7 @@ void types_initialize()
         yov->enum_properties = array_copy(yov->static_arena, array_make(enum_properties, countof(enum_properties)));
     }
     
-    define_core();
+    if (import_core) define_core();
 }
 
 VariableType* vtype_add(VariableKind kind, String name, VariableType* child_next, VariableType* child_base)
@@ -405,7 +405,7 @@ void define_function(CodeLocation code, String identifier, Array<ObjectDefinitio
     array_add(&yov->functions, fn);
 }
 
-void define_intrinsic_function(CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns)
+void define_intrinsic_function(CodeLocation code, IntrinsicFunction* callback, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns)
 {
     FunctionDefinition fn{};
     fn.identifier = identifier;
@@ -413,6 +413,7 @@ void define_intrinsic_function(CodeLocation code, String identifier, Array<Objec
     fn.returns = array_copy(yov->static_arena, returns);
     fn.defined = {};
     fn.code = code;
+    fn.intrinsic.fn = callback;
     fn.is_intrinsic = true;
     fn.return_vtype = calculate_return_vtype_for_fn(&fn, returns);
     
@@ -753,6 +754,30 @@ String string_from_value(Arena* arena, Value value, b32 raw)
     return "";
 }
 
+b32 string_from_ct_value(Arena* arena, Value value, String* str)
+{
+    *str = {};
+    
+    if (value.vtype->ID == VTypeID_String) {
+        return ct_string_from_value(value, str);
+    }
+    
+    if (value.vtype->ID == VTypeID_Bool) {
+        b32 b;
+        b32 res = ct_bool_from_value(value, &b);
+        *str = b ? "true" : "false";
+        return res;
+    }
+    
+    if (value.vtype->ID == VTypeID_Int) {
+        i64 i;
+        b32 res = ct_int_from_value(value, &i);
+        *str = string_format(arena, "%l", i);
+        return res;
+    }
+    
+    return false;
+}
 
 b32 ct_string_from_value(Value value, String* str)
 {
@@ -794,6 +819,29 @@ b32 ct_bool_from_value(Value value, b32* b)
             ObjectDefinition* def = find_global(value.constant_identifier);
             if (def != NULL) {
                 return ct_bool_from_value(def->ir.value, b);
+            }
+        }
+    }
+    
+    return false;
+}
+
+b32 ct_int_from_value(Value value, i64* v)
+{
+    *v = 0;
+    
+    if (value.vtype->ID == VTypeID_Int)
+    {
+        if (value.kind == ValueKind_Literal) {
+            *v = value.literal_int;
+            return true;
+        }
+        if (value.kind == ValueKind_Default) return true;
+        if (value.kind == ValueKind_Constant)
+        {
+            ObjectDefinition* def = find_global(value.constant_identifier);
+            if (def != NULL) {
+                return ct_int_from_value(def->ir.value, v);
             }
         }
     }

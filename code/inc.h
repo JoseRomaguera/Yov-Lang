@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stdarg.h>
+#include <cstring>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -54,7 +55,7 @@ static_assert(sizeof(f64) == 8);
 #define CLAMP(x, _min, _max) MAX(MIN(x, _max), _min)
 #define ABS(x) (((x) < 0) ? (-(x)) : (x))
 #define SWAP(a, b) do { auto& _a = (a); auto& _b = (b); auto aux = _b; _b = _a; _a = aux; } while(0)
-#define BIT(x) (1ULL << (x)) 
+#define BIT(x) (1ULL << (x))
 
 #define _JOIN(x, y) x##y
 #define JOIN(x, y) _JOIN(x, y)
@@ -100,6 +101,7 @@ static_assert(sizeof(f64) == 8);
 #define inline_fn inline
 #define internal_fn static
 #define global_var extern
+#define per_thread_var __declspec(thread)
 
 #define countof(x) (sizeof(x) / sizeof(x[0]))
 #define foreach(it, count) for (u32 (it) = 0; (it) < (count); (it)++)
@@ -129,15 +131,15 @@ _defer<F> _defer_func(F f) {
 
 void assertion_failed(const char* text, const char* file, u32 line);
 
-void memory_copy(void* dst, const void* src, u64 size);
-void memory_zero(void* dst, u64 size);
+#define memory_copy(dst, src, size) memcpy(dst, src, size)
+#define memory_zero(dst, size) memset(dst, 0, size)
 
 #define STR(x) string_make(x)
 
 #define _MACRO_STR(x) #x
-#define MACRO_STR(x) _MACRO_STR(x) 
+#define MACRO_STR(x) _MACRO_STR(x)
 
-//- C STRING 
+//- C STRING
 
 u32 cstring_size(const char* str);
 u32 cstring_set(char* dst, const char* src, u32 src_size, u32 buff_size);
@@ -147,7 +149,7 @@ void cstring_from_u64(char* dst, u64 value, u32 base = 10);
 void cstring_from_i64(char* dst, i64 value, u32 base = 10);
 void cstring_from_f64(char* dst, f64 value, u32 decimals);
 
-//- BASE STRUCTS 
+//- BASE STRUCTS
 
 struct Arena;
 
@@ -294,7 +296,7 @@ inline_fn T* arena_push_struct(Arena* arena, u32 count = 1)
 }
 
 
-//- OS 
+//- OS
 
 void os_setup_memory_info();
 void os_initialize();
@@ -396,12 +398,12 @@ Result os_msvc_import_env(u32 mode);
 
 u64 os_timer_get();
 
-//- MATH 
+//- MATH
 
 u64 u64_divide_high(u64 n0, u64 n1);
 u32 pages_from_bytes(u64 bytes);
 
-//- STRING 
+//- STRING
 
 String string_make(const char* cstr, u64 size);
 String string_make(const char* cstr);
@@ -411,6 +413,7 @@ String string_copy(Arena* arena, String src);
 String string_substring(String str, u64 offset, u64 size);
 b32 string_equals(String s0, String s1);
 b32 string_starts(String str, String with);
+b32 string_ends(String str, String with);
 b32 u32_from_string(u32* dst, String str);
 b32 u32_from_char(u32* dst, char c);
 b32 i64_from_string(String str, i64* out);
@@ -432,14 +435,14 @@ b32 codepoint_is_text(u32 codepoint);
 
 #define string_format(arena, str, ...) string_format_ex(arena, STR(str), __VA_ARGS__)
 
-//- PATH 
+//- PATH
 
 Array<String> path_subdivide(Arena* arena, String path);
 String path_resolve(Arena* arena, String path);
 String path_append(Arena* arena, String str0, String str1);
 String path_get_last_element(String path);
 
-//- STRING BUILDER 
+//- STRING BUILDER
 
 StringBuilder string_builder_make(Arena* arena);
 void appendf_ex(StringBuilder* builder, String str, ...);
@@ -455,7 +458,7 @@ String string_from_builder(Arena* arena, StringBuilder* builder);
 
 #define appendf(builder, str, ...) appendf_ex(builder, STR(str), __VA_ARGS__)
 
-//- POOLED ARRAY 
+//- POOLED ARRAY
 
 struct PooledArrayBlock
 {
@@ -483,7 +486,7 @@ void array_erase(PooledArrayR* array, u32 index);
 void array_pop(PooledArrayR* array);
 u32 array_calculate_index(PooledArrayR* array, void* ptr);
 
-//- MISC 
+//- MISC
 
 enum BinaryOperator {
     BinaryOperator_Unknown,
@@ -601,7 +604,7 @@ void print_tokens(Array<Token> tokens);
 
 //- TYPE SYSTEM
 
-// TODO(Jose): 
+// TODO(Jose):
 struct Interpreter;
 struct OpNode;
 struct OpNode_Block;
@@ -809,6 +812,11 @@ struct Object_Struct : Object {
 #define VType_OS vtype_from_name("OS")
 #define VType_CallOutput vtype_from_name("CallOutput")
 #define VType_FileInfo vtype_from_name("FileInfo")
+#define VType_YovParseOutput vtype_from_name("YovParseOutput")
+#define VType_ObjectDefinition vtype_from_name("ObjectDefinition")
+#define VType_FunctionDefinition vtype_from_name("FunctionDefinition")
+#define VType_StructDefinition vtype_from_name("StructDefinition")
+#define VType_EnumDefinition vtype_from_name("EnumDefinition")
 
 #define VType_IntArray vtype_from_dimension(VType_Int, 1)
 #define VType_BoolArray vtype_from_dimension(VType_Bool, 1)
@@ -816,15 +824,6 @@ struct Object_Struct : Object {
 
 global_var Object* nil_obj;
 global_var Object* null_obj;
-
-typedef void IntrinsicFunction(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-
-struct IntrinsicDefinition {
-    String name;
-    IntrinsicFunction* fn;
-};
-
-Array<IntrinsicDefinition> get_intrinsics_table(Arena* arena);
 
 struct ObjectDefinition {
     VariableType* vtype;
@@ -843,6 +842,8 @@ inline_fn ObjectDefinition obj_def_make(String name, VariableType* vtype, b32 is
     d.ir = ir;
     return d;
 }
+
+typedef void IntrinsicFunction(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
 
 struct FunctionDefinition {
     String identifier;
@@ -879,7 +880,7 @@ struct VariableTypeChild {
     VariableType* vtype;
 };
 
-void types_initialize();
+void types_initialize(b32 import_core);
 
 VariableType* vtype_add(VariableKind kind, String name, VariableType* child_next, VariableType* child_base);
 VariableType* vtype_get(VTypeID ID);
@@ -904,7 +905,7 @@ VariableType* define_enum(String name, Array<String> names, Array<i64> values);
 VariableType* define_struct(String name, Array<ObjectDefinition> members, OpNode_StructDefinition* node = NULL, b32 is_tuple = false);
 void define_arg(String identifier, String name, Value value, b32 required, String description);
 void define_function(CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns, OpNode_Block* block);
-void define_intrinsic_function(CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns);
+void define_intrinsic_function(CodeLocation code, IntrinsicFunction* callback, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns);
 void define_global(ObjectDefinition def);
 
 FunctionDefinition* find_function(String identifier);
@@ -941,10 +942,12 @@ Value value_from_constant(Arena* arena, VariableType* vtype, String identifier);
 Value value_from_string_expression(Arena* arena, String str, VariableType* vtype);
 String string_from_value(Arena* arena, Value value, b32 raw = false);
 
+b32 string_from_ct_value(Arena* arena, Value value, String* str);
 b32 ct_string_from_value(Value value, String* str);
 b32 ct_bool_from_value(Value value, b32* b);
+b32 ct_int_from_value(Value value, i64* v);
 
-//- PROGRAM CONTEXT 
+//- PROGRAM CONTEXT
 
 void print_ex(Severity severity, String str, ...);
 #define print(severity, str, ...) print_ex(severity, STR(str), __VA_ARGS__)
@@ -996,7 +999,6 @@ struct Yov {
     Array<VariableTypeChild> enum_properties;
     
     PooledArray<Report> reports;
-    i32 error_count;
     
     struct {
         b8 analyze_only;
@@ -1016,23 +1018,26 @@ struct Yov {
     
     i64 exit_code;
     b8 exit_code_is_set;
+    b8 exit_requested;
 };
 
-extern Yov* yov;
+extern per_thread_var Yov* yov;
 
-void yov_initialize();
+void yov_initialize(b32 import_core);
 void yov_shutdown();
+
+void yov_config_from_args();
+void yov_config(String path, Array<ScriptArg> args);
 
 void yov_set_exit_code(i64 exit_code);
 
-void yov_run();
-
+void yov_print_script_help();
+void yov_compile(b32 require_args, b32 require_intrinsics);
 i32 yov_import_script(String path);
 
 YovScript* yov_get_script(i32 script_id);
 String yov_get_line_sample(Arena* arena, CodeLocation code);
 
-b32 yov_read_args();
 ScriptArg* yov_find_arg(String name);
 String yov_get_inherited_args(Arena* arena);
 
@@ -1044,9 +1049,10 @@ void yov_print_reports();
 
 #define report_error(code, text, ...) report_error_ex(code, STR(text), __VA_ARGS__);
 
+String string_from_report(Arena* arena, Report report);
 void print_report(Report report);
 
-//- SYNTACTIC REPORTS 
+//- SYNTACTIC REPORTS
 
 #define report_common_missing_closing_bracket(_code) report_error(_code, "Missing closing bracket");
 #define report_common_missing_opening_bracket(_code) report_error(_code, "Missing opening bracket");
@@ -1166,7 +1172,7 @@ Array<Token> lexer_generate_tokens(Arena* arena, String text, b32 discard_tokens
 BinaryOperator binary_operator_from_token(TokenKind token);
 b32 token_is_sign_or_binary_op(TokenKind token);
 
-//- AST 
+//- AST
 
 enum OpKind {
     OpKind_None,
@@ -1418,7 +1424,7 @@ Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast);
 
 void log_ast(OpNode* node, i32 depth);
 
-//- Intermediate Representation 
+//- Intermediate Representation
 
 struct IR_Unit {
     UnitKind kind;
@@ -1532,7 +1538,7 @@ b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value)
 b32 ct_string_from_node(OpNode* node, String* str);
 b32 ct_bool_from_node(OpNode* node, b32* b);
 
-void ir_generate();
+void ir_generate(b32 require_args, b32 require_intrinsics);
 
 enum SymbolType {
     SymbolType_None,
@@ -1568,17 +1574,17 @@ String string_from_unit_kind(Arena* arena, UnitKind unit);
 String string_from_unit(Arena* arena, u32 index, u32 index_digits, u32 line_digits, Unit unit);
 void print_units(String name, Array<Unit> instructions);
 
-//- INTERPRETER 
+//- INTERPRETER
 
 #define log_trace(code, text, ...) if (inter->mode == InterpreterMode_Execute && inter->settings.print_execution) { \
 String log = string_format(scratch.arena, text, __VA_ARGS__);\
 print_info("%S\n", log); \
 } \
-else do{}while(0) 
+else do{}while(0)
 
 #if DEV && 0
 #define log_mem_trace(text, ...) print_info(STR(text), __VA_ARGS__)
-#else 
+#else
 #define log_mem_trace(text, ...) do{}while(0)
 #endif
 
@@ -1723,6 +1729,11 @@ void object_assign_Result(Interpreter* inter, Object* obj, Result res);
 void object_assign_CallOutput(Interpreter* inter, Object* obj, CallOutput out);
 void object_assign_FileInfo(Interpreter* inter, Object* obj, FileInfo info);
 void object_assign_Type(Interpreter* inter, Object* obj, VariableType* vtype);
+void object_assign_YovParseOutput(Interpreter* inter, Object* obj, Yov* temp_yov);
+void object_assign_FunctionDefinition(Interpreter* inter, Object* obj, FunctionDefinition* fn);
+void object_assign_StructDefinition(Interpreter* inter, Object* obj, VariableType* vtype);
+void object_assign_EnumDefinition(Interpreter* inter, Object* obj, VariableType* vtype);
+void object_assign_ObjectDefinition(Interpreter* inter, Object* obj, ObjectDefinition def);
 
 Object* object_from_Result(Interpreter* inter, Result res);
 Result Result_from_object(Interpreter* inter, Object* obj);
@@ -1745,13 +1756,3 @@ void* gc_dynamic_allocate(Interpreter* inter, u64 size);
 void gc_dynamic_free(Interpreter* inter, void* ptr);
 
 void print_memory_usage(Interpreter* inter);
-
-//- TRANSPILER 
-
-void yov_transpile_core_definitions();
-
-String transpile_definitions(Arena* arena, OpNode_Block* ast);
-
-String transpile_definition_for_object_type(Arena* arena, OpNode_ObjectType* node, OpNode* assign_node);
-String transpile_definition_for_object_definition_from_node(Arena* arena, OpNode_ObjectDefinition* node);
-String transpile_definition_for_object_definition(Arena* arena, String name, String type, b32 is_reference);

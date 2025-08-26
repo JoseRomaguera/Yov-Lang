@@ -2,17 +2,41 @@
 
 int main()
 {
-    yov_initialize();
+    yov_initialize(true);
     
-#if DEV
-    if (0) {
-        yov_transpile_core_definitions();
-        yov->settings.wait_end = true;
-    }
-    else yov_run();
-#else
-    yov_run();
+    yov_config_from_args();
+    if (yov->exit_requested) goto on_exit;
+    
+#if DEV && 0
+    yov_transpile_core_definitions();
+    goto on_exit;
 #endif
+    
+    ScriptArg* help_arg = yov_find_arg("-help");
+    
+    if (help_arg != NULL && !string_equals(help_arg->value, "")) {
+        report_arg_wrong_value(NO_CODE, help_arg->name, help_arg->value);
+    }
+    
+    yov_compile(help_arg != NULL, true);
+    if (yov->exit_requested) goto on_exit;
+    
+    if (help_arg != NULL) {
+        yov_print_script_help();
+        goto on_exit;
+    }
+    
+    // Execute
+    if (!yov->settings.analyze_only) {
+        InterpreterSettings settings{};
+        settings.print_execution = yov->settings.trace;
+        settings.user_assertion = yov->settings.user_assert;
+        
+        interpret(settings);
+    }
+    
+    on_exit:
+    yov_print_reports();
     
     i64 exit_code = yov->exit_code;
     yov_shutdown();
@@ -26,17 +50,5 @@ int main()
 #include "types.cpp"
 #include "ir.cpp"
 #include "interpreter.cpp"
-#include "transpiler.cpp"
 #include "intrinsics.cpp"
 #include "os_windows.cpp"
-
-void* memcpy(void* dst, const void* src, size_t size) {
-    memory_copy(dst, src, (u64)size);
-    return dst;
-}
-void* memset(void* dst, int value, size_t size) {
-    assert(value == 0);
-    memory_zero(dst, size);
-    return dst;
-}
-extern "C" int _fltused = 0;

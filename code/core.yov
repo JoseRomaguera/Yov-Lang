@@ -77,9 +77,43 @@ str_get_codepoint :: (str: String, cursor: Int) -> (codepoint: Int, next_cursor:
 str_split :: (str: String, separator: String) -> String[];
 
 // Yov
+
 yov_require     :: (major: Int, minor: Int) -> Result;
 yov_require_min :: (major: Int, minor: Int) -> Result;
 yov_require_max :: (major: Int, minor: Int) -> Result;
+
+ObjectDefinition :: struct {
+    identifier: String;
+    type: Type;
+}
+
+FunctionDefinition :: struct {
+    identifier: String;
+    parameters: ObjectDefinition[];
+    returns: ObjectDefinition[];
+}
+
+StructDefinition :: struct {
+    identifier: String;
+    members: ObjectDefinition[];
+}
+
+EnumDefinition :: struct {
+    identifier: String;
+    elements: String[];
+    values: Int[];
+}
+
+YovParseOutput :: struct {
+    scripts: String[];
+    functions: FunctionDefinition[];
+    structs: StructDefinition[];
+    enums: EnumDefinition[];
+    globals: ObjectDefinition[];
+    reports: String[];
+}
+
+yov_parse :: (path: String) -> YovParseOutput;
 
 // User
 ask_yesno :: (text: String) -> Bool;

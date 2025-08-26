@@ -183,7 +183,7 @@ internal_fn IR_Group ir_from_symbol(IR_Context* ir, String identifier, CodeLocat
                 return ir_from_none(value_from_constant(ir->arena, def->vtype, def->name));
             }
             else {
-                IR_Object* object = ir_define_object(ir, def->name, def->vtype, -1, IR_ObjectContext_Global);
+                IR_Object* object = ir_define_object(ir, def->name, def->vtype, ir->scope, IR_ObjectContext_Global);
                 
                 IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Store, code);
                 unit->dst_index = object->register_index;
@@ -585,10 +585,9 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                     
                     Value value = expression.value;
                     
-                    if (value_is_compiletime(value)) {
-                        String str;
-                        ct_string_from_value(value, &str);
-                        append(&builder, str);
+                    String ct_str;
+                    if (value_is_compiletime(value) && string_from_ct_value(scratch.arena, value, &ct_str)) {
+                        append(&builder, ct_str);
                     }
                     else
                     {
@@ -614,7 +613,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
             array_add(&sources, value_from_string(ir->arena, literal));
         }
         
-        out.value = value_from_string_array(ir->arena, array_from_pooled_array(scratch.arena, sources)); 
+        out.value = value_from_string_array(ir->arena, array_from_pooled_array(scratch.arena, sources));
         return out;
     }
     
@@ -835,7 +834,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                 VariableType* expected_vtype = nil_vtype;
                 if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
                 
-                IR_Group param_IR = ir_from_node(ir, node->parameters[i], ExpresionContext_from_vtype(expected_vtype, true));
+                IR_Group param_IR = ir_from_node(ir, node->parameters[i], ExpresionContext_from_vtype(expected_vtype, false));
                 params[i] = param_IR.value;
                 out = IR_append(out, param_IR);
             }
@@ -876,6 +875,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                 VariableType* vtype = vtype_unpack(scratch.arena, return_value.vtype)[0];
                 IR_Group child = ir_from_child(ir, return_value, value_from_int(0), true, vtype, node->code);
                 out = IR_append(out, child);
+                return_value = out.value;
             }
             else if (context.vtype == void_vtype && return_value.kind != ValueKind_None)
             {
@@ -899,6 +899,8 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                         out = IR_append(out, ir_from_result_eval(ir, returns[i], node->code));
                 }
             }
+            
+            out.value = return_value;
             
             return out;
         }
@@ -1164,7 +1166,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
 
 internal_fn IR_Context* ir_context_alloc(VariableType* return_vtype, b32 return_is_reference)
 {
-    Arena* arena = yov->static_arena;// TODO(Jose): 
+    Arena* arena = yov->static_arena;// TODO(Jose):
     
     IR_Context* ir = arena_push_struct<IR_Context>(arena);
     ir->next_register_index = 0;
@@ -1553,7 +1555,7 @@ internal_fn b32 validate_arg_name(String name, CodeLocation code)
     return true;
 }
 
-internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script)
+internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b32 require_args, b32 require_intrinsics)
 {
     SCRATCH();
     
@@ -1826,7 +1828,19 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script)
         
         if (!valid) continue;
         
-        if (is_intrinsic) define_intrinsic_function(node->code, node->identifier, parameters, returns);
+        if (is_intrinsic)
+        {
+            b32 exists = find_function(node->identifier) != NULL;
+            
+            if (!exists) {
+                if (require_intrinsics) {
+                    report_intrinsic_not_resolved(node->code, node->identifier);
+                }
+                else {
+                    define_intrinsic_function(node->code, NULL, node->identifier, parameters, returns);
+                }
+            }
+        }
         else define_function(node->code, node->identifier, parameters, returns, block);
     }
     
@@ -1903,50 +1917,49 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script)
                 valid = false;
             }
             
-#if 0// TODO(Jose): // TODO(Jose): 
-            if (!valid || inter->mode == InterpreterMode_Help)
-            {
-                define_arg(node->identifier, name, vtype, false, description);
-                continue;
-            }
-#endif
-            
             Value value = value_none();
             
-            // From arg
-            if (value.kind == ValueKind_None)
+            if (!valid || require_args)
             {
-                ScriptArg* script_arg = yov_find_arg(name);
-                
-                if (script_arg == NULL) {
-                    if (required) {
-                        report_arg_is_required(node->code, name);
-                        continue;
-                    }
-                }
-                else
+                required = false;
+            }
+            else
+            {
+                // From arg
+                if (value.kind == ValueKind_None)
                 {
-                    if (script_arg->value.size <= 0)
-                    {
-                        if (vtype->ID == VTypeID_Bool) {
-                            value = value_from_bool(true);
+                    ScriptArg* script_arg = yov_find_arg(name);
+                    
+                    if (script_arg == NULL) {
+                        if (required) {
+                            report_arg_is_required(node->code, name);
+                            continue;
                         }
                     }
                     else
                     {
-                        value = value_from_string_expression(yov->static_arena, script_arg->value, vtype);
-                    }
-                    
-                    if (value.kind == ValueKind_None) {
-                        report_arg_wrong_value(NO_CODE, name, script_arg->value);
-                        continue;
+                        if (script_arg->value.size <= 0)
+                        {
+                            if (vtype->ID == VTypeID_Bool) {
+                                value = value_from_bool(true);
+                            }
+                        }
+                        else
+                        {
+                            value = value_from_string_expression(yov->static_arena, script_arg->value, vtype);
+                        }
+                        
+                        if (value.kind == ValueKind_None) {
+                            report_arg_wrong_value(NO_CODE, name, script_arg->value);
+                            continue;
+                        }
                     }
                 }
-            }
-            
-            // From default
-            if (value.kind == ValueKind_None && default_value.kind != ValueKind_None) {
-                value = default_value;
+                
+                // From default
+                if (value.kind == ValueKind_None && default_value.kind != ValueKind_None) {
+                    value = default_value;
+                }
             }
             
             // Default vtype
@@ -1996,7 +2009,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script)
     }
 }
 
-void ir_generate()
+void ir_generate(b32 require_args, b32 require_intrinsics)
 {
     SCRATCH();
     
@@ -2010,41 +2023,19 @@ void ir_generate()
             continue;
         }
         
-        extract_definitions(ast, it.index == 0);
+        extract_definitions(ast, it.index == 0, require_args, require_intrinsics);
     }
     
-    // Assign IR and solve intrinsics
+    // Assign IR
     {
-        Array<IntrinsicDefinition> table = get_intrinsics_table(scratch.arena);
-        
         for (auto it = pooled_array_make_iterator(&yov->functions); it.valid; ++it)
         {
             FunctionDefinition* fn = it.value;
             
-            if (fn->is_intrinsic)
-            {
-                IntrinsicDefinition* intr = NULL;
-                
-                foreach(i, table.count) {
-                    IntrinsicDefinition* intr0 = &table[i];
-                    if (string_equals(intr0->name, fn->identifier)) {
-                        intr = intr0;
-                        break;
-                    }
-                }
-                
-                if (intr == NULL) {
-                    report_intrinsic_not_resolved(fn->code, fn->identifier);
-                    continue;
-                }
-                
-                fn->intrinsic.fn = intr->fn;
-            }
-            else
-            {
-                fn->defined.ir = ir_generate_from_function_definition(fn);
-                //print_units(fn->identifier, fn->defined.ir.instructions);
-            }
+            if (fn->is_intrinsic) continue;
+            
+            fn->defined.ir = ir_generate_from_function_definition(fn);
+            //print_units(fn->identifier, fn->defined.ir.instructions);
         }
         
         for (auto it = pooled_array_make_iterator(&yov->vtype_table); it.valid; ++it)

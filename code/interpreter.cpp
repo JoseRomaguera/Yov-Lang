@@ -10,16 +10,6 @@ internal_fn void define_globals(Interpreter* inter)
         inter->global_objects[i] = null_obj;
     }
     
-    for (auto it = pooled_array_make_iterator(&yov->globals); it.valid; ++it)
-    {
-        ObjectDefinition* def = it.value;
-        if (global_get_by_index(inter, it.index) != null_obj) continue;
-        
-        Object* obj = execute_IR(inter, def->ir, {}, NO_CODE);
-        global_save_by_index(inter, it.index, obj);
-        
-    }
-    
     // Yov struct
     {
         Object* obj = object_alloc(inter, VType_YovInfo);
@@ -88,6 +78,16 @@ internal_fn void define_globals(Interpreter* inter)
         inter->globals.calls = obj;
         global_save(inter, "calls", obj);
     }
+    
+    for (auto it = pooled_array_make_iterator(&yov->globals); it.valid; ++it)
+    {
+        ObjectDefinition* def = it.value;
+        if (global_get_by_index(inter, it.index) != null_obj) continue;
+        
+        Object* obj = execute_IR(inter, def->ir, {}, NO_CODE);
+        global_save_by_index(inter, it.index, obj);
+        
+    }
 }
 
 internal_fn void report_invalid_arguments(Interpreter* inter)
@@ -150,13 +150,13 @@ void interpret(InterpreterSettings settings)
     if (inter->mode == InterpreterMode_Analysis) print_memory_usage(inter);
 #endif
     
-    assert(yov->error_count != 0 || inter->current_scope == inter->global_scope);
+    assert(yov->reports.count > 0 || inter->current_scope == inter->global_scope);
 }
 
 void interpreter_exit(Interpreter* inter, i64 exit_code)
 {
     yov_set_exit_code(exit_code);
-    yov->error_count++;// TODO(Jose): Weird
+    yov->exit_requested = true;
 }
 
 void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, Result result) {
@@ -335,7 +335,7 @@ Object* execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocation 
     
     scope->pc = 0;
     
-    while (scope->pc < ir.instructions.count && yov->error_count == 0)
+    while (scope->pc < ir.instructions.count && !yov->exit_requested)
     {
         if (inter->current_scope != scope) break;
         if (scope->return_requested) break;
@@ -538,6 +538,11 @@ void run_function_call(Interpreter* inter, i32 dst_index, FunctionDefinition* fn
     
     if (fn->is_intrinsic)
     {
+        if (fn->intrinsic.fn == NULL) {
+            report_intrinsic_not_resolved(code, fn->identifier);
+            return;
+        }
+        
         Array<Object*> params = array_make<Object*>(scratch.arena, parameters.count);
         foreach(i, params.count) {
             params[i] = object_from_value(inter, inter->current_scope, parameters[i]);
@@ -1365,6 +1370,151 @@ void object_assign_Type(Interpreter* inter, Object* obj, VariableType* vtype)
 {
     set_int_member(inter, obj, "ID", vtype->ID);
     set_string_member(inter, obj, "name", vtype->name);
+}
+
+void object_assign_YovParseOutput(Interpreter* inter, Object* obj, Yov* temp_yov)
+{
+    SCRATCH();
+    PooledArray<Object*> functions = pooled_array_make<Object*>(scratch.arena, 8);
+    PooledArray<Object*> structs = pooled_array_make<Object*>(scratch.arena, 8);
+    PooledArray<Object*> enums = pooled_array_make<Object*>(scratch.arena, 8);
+    PooledArray<Object*> globals = pooled_array_make<Object*>(scratch.arena, 8);
+    PooledArray<Object*> reports = pooled_array_make<Object*>(scratch.arena, 8);
+    
+    for (auto it = pooled_array_make_iterator(&temp_yov->functions); it.valid; ++it) {
+        FunctionDefinition* fn = it.value;
+        
+        Object* obj = object_alloc(inter, VType_FunctionDefinition);
+        object_assign_FunctionDefinition(inter, obj, fn);
+        array_add(&functions, obj);
+    }
+    
+    for (auto it = pooled_array_make_iterator(&temp_yov->vtype_table); it.valid; ++it) {
+        VariableType* vtype = it.value;
+        
+        if (vtype->kind == VariableKind_Struct)
+        {
+            if (vtype->_struct.is_tuple) continue;
+            
+            Object* obj = object_alloc(inter, VType_StructDefinition);
+            object_assign_StructDefinition(inter, obj, vtype);
+            array_add(&structs, obj);
+        }
+        else if (vtype->kind == VariableKind_Enum)
+        {
+            Object* obj = object_alloc(inter, VType_EnumDefinition);
+            object_assign_EnumDefinition(inter, obj, vtype);
+            array_add(&enums, obj);
+        }
+    }
+    
+    for (auto it = pooled_array_make_iterator(&temp_yov->globals); it.valid; ++it) {
+        ObjectDefinition* def = it.value;
+        if (string_starts(def->name, "$")) continue;
+        
+        Object* obj = object_alloc(inter, VType_ObjectDefinition);
+        object_assign_ObjectDefinition(inter, obj, *def);
+        array_add(&globals, obj);
+    }
+    
+    for (auto it = pooled_array_make_iterator(&temp_yov->reports); it.valid; ++it) {
+        Report* report = it.value;
+        Object* obj = alloc_string(inter, string_from_report(scratch.arena, *report));
+        array_add(&reports, obj);
+    }
+    
+    
+    Object* functions_obj = alloc_array(inter, VType_FunctionDefinition, functions.count, true);
+    for (auto it = pooled_array_make_iterator(&functions); it.valid; ++it) {
+        object_set_child(inter, functions_obj, it.index, *it.value);
+    }
+    
+    Object* structs_obj = alloc_array(inter, VType_StructDefinition, structs.count, true);
+    for (auto it = pooled_array_make_iterator(&structs); it.valid; ++it) {
+        object_set_child(inter, structs_obj, it.index, *it.value);
+    }
+    
+    Object* enums_obj = alloc_array(inter, VType_EnumDefinition, enums.count, true);
+    for (auto it = pooled_array_make_iterator(&enums); it.valid; ++it) {
+        object_set_child(inter, enums_obj, it.index, *it.value);
+    }
+    
+    Object* globals_obj = alloc_array(inter, VType_ObjectDefinition, globals.count, true);
+    for (auto it = pooled_array_make_iterator(&globals); it.valid; ++it) {
+        object_set_child(inter, globals_obj, it.index, *it.value);
+    }
+    
+    Object* reports_obj = alloc_array(inter, VType_String, reports.count, true);
+    for (auto it = pooled_array_make_iterator(&reports); it.valid; ++it) {
+        object_set_child(inter, reports_obj, it.index, *it.value);
+    }
+    
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "functions").index, functions_obj);
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "structs").index, structs_obj);
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "enums").index, enums_obj);
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "globals").index, globals_obj);
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "reports").index, reports_obj);
+}
+
+void object_assign_FunctionDefinition(Interpreter* inter, Object* obj, FunctionDefinition* fn)
+{
+    set_string_member(inter, obj, "identifier", fn->identifier);
+    
+    Object* parameters = alloc_array(inter, VType_ObjectDefinition, fn->parameters.count, false);
+    foreach(i, fn->parameters.count) {
+        Object* param = object_get_child(inter, parameters, i);
+        object_assign_ObjectDefinition(inter, param, fn->parameters[i]);
+    }
+    
+    Object* returns = alloc_array(inter, VType_ObjectDefinition, fn->returns.count, false);
+    foreach(i, fn->returns.count) {
+        Object* ret = object_get_child(inter, returns, i);
+        object_assign_ObjectDefinition(inter, ret, fn->returns[i]);
+    }
+    
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "parameters").index, parameters);
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "returns").index, returns);
+}
+
+void object_assign_StructDefinition(Interpreter* inter, Object* obj, VariableType* vtype)
+{
+    set_string_member(inter, obj, "identifier", vtype->name);
+    
+    Object* members = alloc_array(inter, VType_ObjectDefinition, vtype->_struct.names.count, false);
+    foreach(i, vtype->_struct.names.count) {
+        Object* mem = object_get_child(inter, members, i);
+        String name = vtype->_struct.names[i];
+        VariableType* mem_vtype = vtype->_struct.vtypes[i];
+        object_assign_ObjectDefinition(inter, mem, obj_def_make(name, mem_vtype));
+    }
+    
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "members").index, members);
+}
+
+void object_assign_EnumDefinition(Interpreter* inter, Object* obj, VariableType* vtype)
+{
+    set_string_member(inter, obj, "identifier", vtype->name);
+    
+    Object* elements = alloc_array(inter, VType_String, vtype->_enum.names.count, false);
+    Object* values = alloc_array(inter, VType_Int, vtype->_enum.names.count, false);
+    foreach(i, vtype->_enum.names.count) {
+        Object* element = object_get_child(inter, elements, i);
+        Object* value = object_get_child(inter, values, i);
+        set_string(inter, element, vtype->_enum.names[i]);
+        set_int(value, vtype->_enum.values[i]);
+    }
+    
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "elements").index, elements);
+    object_set_child(inter, obj, vtype_get_child(obj->vtype, "values").index, values);
+}
+
+void object_assign_ObjectDefinition(Interpreter* inter, Object* obj, ObjectDefinition def)
+{
+    set_string_member(inter, obj, "identifier", def.name);
+    
+    VariableTypeChild type_info = vtype_get_member(obj->vtype, "type");
+    Object* type = object_get_child(inter, obj, type_info.index, type_info.is_member);
+    object_assign_Type(inter, type, def.vtype);
 }
 
 Object* object_from_Result(Interpreter* inter, Result res)
