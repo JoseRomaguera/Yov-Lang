@@ -57,9 +57,17 @@ set_cd  :: (cd: String) -> Result;
 assert  :: (result: Bool) -> Result;
 failed :: (message: String, exit_code: Int) -> Result;
 
+thread_sleep :: (millis: Int);
+
 env            :: (name: String) -> (value: String, result: Result);
 env_path       :: (name: String) -> (value: String, result: Result);
 env_path_array :: (name: String) -> (value: String[], result: Result);
+
+// Console
+
+console_write :: (value: String);
+console_set_cursor :: (x: Int, y: Int);
+console_clear :: ();
 
 // External Calls
 
@@ -72,9 +80,14 @@ call_exe    :: (path: String, arguments: String) -> (out: CallOutput, result: Re
 call_script :: (path: String, arguments: String, yov_arguments: String) -> (out: CallOutput, result: Result);
 
 // String Utils
+
 path_resolve :: (path: String) -> String;
 str_get_codepoint :: (str: String, cursor: Int) -> (codepoint: Int, next_cursor: Int);
 str_split :: (str: String, separator: String) -> String[];
+
+// JSON
+
+json_route :: (json: String, route: String) -> (out: String, res: Result);
 
 // Yov
 

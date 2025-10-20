@@ -20,7 +20,7 @@ transpile_script :: (script_path: String, result_path: String, function_name: St
     file := "#pragma once\n\n";
     
     for (fn: out.functions) {
-        file += "void intrinsic__{fn.identifier}(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);\n";
+        file += "void intrinsic__{fn.identifier}(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);\n";
     }
     
     file += "\n";
@@ -42,7 +42,8 @@ transpile_script :: (script_path: String, result_path: String, function_name: St
         file += "{indent(1)}// {string_from_struct_definition(def)}\n";
         file += "{indent(1)}\{\n";
         file += transpile_object_definition_array(2, "members", def.members);
-        file += "{indent(2)}define_struct(\"{def.identifier}\", members);\n";
+        file += "{indent(2)}VariableType* vtype = vtype_define_struct(\"{def.identifier}\");\n";
+        file += "{indent(2)}vtype_init_struct(vtype, members);\n";
         file += "{indent(1)}\}\n";
     }
     

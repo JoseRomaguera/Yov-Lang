@@ -162,8 +162,17 @@ internal_fn IR_Group ir_from_reference(IR_Context* ir, b32 expects_lvalue, Value
         return ir_failed();
     }
     
-    value = value_from_reference(value);
-    return ir_from_none(value);
+    return ir_from_none(value_from_reference(value));
+}
+
+internal_fn IR_Group ir_from_dereference(IR_Context* ir, Value value, CodeLocation code)
+{
+    if (value.vtype->kind != VariableKind_Reference) {
+        invalid_codepath();
+        return ir_failed();
+    }
+    
+    return ir_from_none(value_from_dereference(value));
 }
 
 internal_fn IR_Group ir_from_symbol(IR_Context* ir, String identifier, CodeLocation code)
@@ -208,21 +217,51 @@ internal_fn IR_Group ir_from_symbol(IR_Context* ir, String identifier, CodeLocat
     return ir_failed();
 }
 
-internal_fn IR_Group ir_from_binary_operator(IR_Context* ir, Value left, Value right, BinaryOperator op, CodeLocation code)
+internal_fn IR_Group ir_from_binary_operator(IR_Context* ir, Value left, Value right, BinaryOperator op, b32 reuse_left, CodeLocation code)
 {
+    IR_Group out = ir_from_none();
+    
     VariableType* vtype = vtype_from_binary_operation(left.vtype, right.vtype, op);
-    if (vtype->ID <= VTypeID_Any) {
+    
+    if (vtype == nil_vtype)
+    {
+        b32 deref = false;
+        deref |= left.vtype->kind == VariableKind_Reference && right.vtype->kind != VariableKind_Reference;
+        deref |= right.vtype->kind == VariableKind_Reference && left.vtype->kind != VariableKind_Reference;
+        
+        if (deref)
+        {
+            reuse_left = false;
+            
+            if (left.vtype->kind == VariableKind_Reference) {
+                out = IR_append(out, ir_from_dereference(ir, left, code));
+                left = out.value;
+            }
+            else {
+                out = IR_append(out, ir_from_dereference(ir, right, code));
+                right = out.value;
+            }
+            
+            vtype = vtype_from_binary_operation(left.vtype, right.vtype, op);
+        }
+    }
+    
+    if (vtype == nil_vtype) {
         report_invalid_binary_op(code, left.vtype->name, string_from_binary_operator(op), right.vtype->name);
         return ir_failed();
     }
     
+    reuse_left = reuse_left && vtype->ID == left.vtype->ID && (left.kind == ValueKind_LValue || left.kind == ValueKind_Register);
+    
+    Value dst = reuse_left ? left : value_from_register(ir_alloc_register(ir), vtype, false);
+    
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_BinaryOperation, code);
-    unit->dst_index = ir_alloc_register(ir);
+    unit->dst_index = dst.reg.index;
     unit->binary_op.src0 = left;
     unit->binary_op.src1 = right;
     unit->binary_op.op = op;
     
-    return ir_from_single(unit, value_from_register(unit->dst_index, vtype, false));
+    return IR_append(out, ir_from_single(unit, dst));
 }
 
 internal_fn IR_Group ir_from_sign_operator(IR_Context* ir, Value src, BinaryOperator op, CodeLocation code)
@@ -250,9 +289,23 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
     
     IR_Group out = ir_from_none();
     
-    if (op != BinaryOperator_None) {
-        out = IR_append(out, ir_from_binary_operator(ir, dst, src, op, code));
+    if (op != BinaryOperator_None)
+    {
+        out = IR_append(out, ir_from_binary_operator(ir, dst, src, op, true, code));
         if (!out.success) return ir_failed();
+        src = out.value;
+        
+        if (value_equals(dst, src)) {
+            return out;
+        }
+    }
+    
+    if (dst.vtype->kind == VariableKind_Reference && dst.vtype->child_next == src.vtype) {
+        out = IR_append(out, ir_from_dereference(ir, dst, code));
+        dst = out.value;
+    }
+    else if (src.vtype->kind == VariableKind_Reference && src.vtype->child_next == dst.vtype) {
+        out = IR_append(out, ir_from_dereference(ir, src, code));
         src = out.value;
     }
     
@@ -261,11 +314,11 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
         return ir_failed();
     }
     
-    IR_Object* obj = ir_find_object_from_register(ir, dst.register_index);
+    IR_Object* obj = ir_find_object_from_value(ir, dst);
     if (obj != NULL) obj->assignment_count++;
     
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Assignment, code);
-    unit->dst_index = dst.register_index;
+    unit->dst_index = dst.reg.index;
     unit->assignment.src = src;
     
     return IR_append(out, ir_from_single(unit));
@@ -368,16 +421,6 @@ internal_fn IR_Group ir_from_return(IR_Context* ir, IR_Group expression, CodeLoc
         if (out.value.kind == ValueKind_None) {
             report_error(code, "Function is expecting a '%S' as a return", dst->vtype->name);
             return ir_failed();
-        }
-        
-        if (out.value.take_reference && !ir->return_is_reference) {
-            report_function_expects_no_ref_as_return(code);
-            return {};
-        }
-        
-        if (!out.value.take_reference && ir->return_is_reference) {
-            report_function_expects_ref_as_return(code);
-            return {};
         }
         
         IR_Group assignment = ir_from_assignment(ir, true, value_from_ir_object(dst), out.value, BinaryOperator_None, code);
@@ -504,7 +547,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         
         if (!left.success || !right.success) return ir_failed();
         
-        IR_Group op = ir_from_binary_operator(ir, left.value, right.value, node->op, node->code);
+        IR_Group op = ir_from_binary_operator(ir, left.value, right.value, node->op, false, node->code);
         return IR_append_3(left, right, op);
     }
     
@@ -585,8 +628,8 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                     
                     Value value = expression.value;
                     
-                    String ct_str;
-                    if (value_is_compiletime(value) && string_from_ct_value(scratch.arena, value, &ct_str)) {
+                    if (value_is_compiletime(value)) {
+                        String ct_str = string_from_compiletime(scratch.arena, ir->inter, value);
                         append(&builder, ct_str);
                     }
                     else
@@ -613,7 +656,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
             array_add(&sources, value_from_string(ir->arena, literal));
         }
         
-        out.value = value_from_string_array(ir->arena, array_from_pooled_array(scratch.arena, sources));
+        out.value = value_from_string_array(ir->inter, ir->arena, array_from_pooled_array(scratch.arena, sources));
         return out;
     }
     
@@ -638,25 +681,38 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
             src = value_from_type(context.vtype);
         }
         
+        if (src.vtype->kind == VariableKind_Reference) {
+            src_out = IR_append(src_out, ir_from_dereference(ir, src, node->code));
+            src = src_out.value;
+        }
+        
         String member = node->member;
         
-        IR_Group mem = {};
+        IR_Group mem = ir_failed();
         
         VariableTypeChild info = vtype_get_child(src.vtype, member);
-        if (info.index >= 0) {
+        
+        if (info.index >= 0)
+        {
             mem = ir_from_child(ir, src, value_from_int(info.index), info.is_member, info.vtype, node->code);
         }
-        else if (src.kind == ValueKind_Literal && src.vtype == VType_Type)
+        else if (src.vtype == VType_Type && value_is_compiletime(src))
         {
-            VariableType* vtype = src.literal_type;
+            VariableType* vtype = type_from_compiletime(ir->inter, src);
             
             if (vtype->kind == VariableKind_Enum)
             {
                 if (string_equals(member, "count")) {
                     mem = ir_from_none(value_from_int(vtype->_enum.values.count));
                 }
-                else if (string_equals(member, "array")) {
-                    mem = ir_from_symbol(ir, string_format(scratch.arena, "$%S_array", vtype->name), node->code);
+                else if (string_equals(member, "array"))
+                {
+                    Array<Value> values = array_make<Value>(scratch.arena, vtype->_enum.names.count);
+                    foreach(i, values.count) {
+                        values[i] = value_from_enum(vtype, vtype->_enum.values[i]);
+                    }
+                    
+                    mem = ir_from_none(value_from_array(ir->arena, vtype_from_dimension(vtype, 1), values));
                 }
                 else
                 {
@@ -730,7 +786,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         }
         
         // Explicit type
-        VariableType* definition_vtype = vtype_from_node(node->type, false);
+        VariableType* definition_vtype = vtype_from_node(node->type);
         if (definition_vtype->ID == VTypeID_Unknown) return ir_failed();
         b32 inference_type = definition_vtype == void_vtype || definition_vtype->ID == VTypeID_Any;
         
@@ -835,8 +891,15 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                 if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
                 
                 IR_Group param_IR = ir_from_node(ir, node->parameters[i], ExpresionContext_from_vtype(expected_vtype, false));
-                params[i] = param_IR.value;
                 out = IR_append(out, param_IR);
+                
+                Value param = out.value;
+                
+                if (param.kind == ValueKind_LValue && param.vtype->kind == VariableKind_Reference && param.vtype->child_next == expected_vtype) {
+                    param = value_from_dereference(param);
+                }
+                
+                params[i] = param;
             }
             
             if (params.count != fn->parameters.count) {
@@ -851,23 +914,9 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
                     report_function_wrong_parameter_type(node->code, fn->identifier, fn->parameters[i].vtype->name, i + 1);
                     return ir_failed();
                 }
-                
-                if (fn->parameters[i].is_reference && !params[i].take_reference) {
-                    report_function_expects_ref_as_parameter(node->code, fn->identifier, i + 1);
-                    return ir_failed();
-                }
-                if (!fn->parameters[i].is_reference && params[i].take_reference) {
-                    report_function_expects_noref_as_parameter(node->code, fn->identifier, i + 1);
-                    return ir_failed();
-                }
             }
             
             out = IR_append(out, ir_from_function_call(ir, fn, params, node->code));
-            
-            // Take Reference
-            if (fn->returns.count == 1 && !vtype_is_tuple(fn->return_vtype) && fn->returns[0].is_reference) {
-                out = IR_append(out, ir_from_reference(ir, false, out.value, node->code));
-            }
             
             Value return_value = out.value;
             
@@ -1026,13 +1075,13 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         // (internal_index < array.count)
         VariableTypeChild count_info = vtype_get_property(array.vtype, "count");
         IR_Group condition = ir_from_child(ir, array, value_from_int(count_info.index), count_info.is_member, count_info.vtype, node->code);
-        condition = IR_append(condition, ir_from_binary_operator(ir, internal_index, condition.value, BinaryOperator_LessThan, node->code));
+        condition = IR_append(condition, ir_from_binary_operator(ir, internal_index, condition.value, BinaryOperator_LessThan, false, node->code));
         
         if (!condition.success)
             return ir_failed();
         
         // "element" := array[internal_index]
-        IR_Group content = ir_from_define_local(ir, node->element_name, array.vtype->child_next, node->code);
+        IR_Group content = ir_from_define_local(ir, node->element_name, vtype_from_reference(array.vtype->child_next), node->code);
         Value element = content.value;
         content = IR_append(content, ir_from_child(ir, array, internal_index, true, array.vtype->child_next, node->code));
         content = IR_append(content, ir_from_reference(ir, false, content.value, node->code));
@@ -1063,7 +1112,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
         VariableType* array_vtype = void_vtype;
         
         if (node->type->kind == OpKind_ObjectType) {
-            array_vtype = vtype_from_node((OpNode_ObjectType*)node->type, false);
+            array_vtype = vtype_from_node((OpNode_ObjectType*)node->type);
             if (array_vtype == nil_vtype) return ir_failed();
         }
         
@@ -1164,11 +1213,12 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context)
     return ir_failed();
 }
 
-internal_fn IR_Context* ir_context_alloc(VariableType* return_vtype, b32 return_is_reference)
+internal_fn IR_Context* ir_context_alloc(Interpreter* inter, VariableType* return_vtype)
 {
     Arena* arena = yov->static_arena;// TODO(Jose):
     
     IR_Context* ir = arena_push_struct<IR_Context>(arena);
+    ir->inter = inter;
     ir->next_register_index = 0;
     ir->arena = arena;
     ir->temp_arena = yov->temp_arena;// TODO(Jose):
@@ -1176,7 +1226,6 @@ internal_fn IR_Context* ir_context_alloc(VariableType* return_vtype, b32 return_
     ir->looping_scopes = pooled_array_make<IR_LoopingScope>(ir->temp_arena, 8);
     ir->scope = 0;
     ir->return_vtype = return_vtype;
-    ir->return_is_reference = return_is_reference;
     return ir;
 }
 
@@ -1339,16 +1388,14 @@ internal_fn b32 validate_return_path(Array<Unit> units)
     }
 }
 
-IR ir_generate_from_function_definition(FunctionDefinition* fn)
+IR ir_generate_from_function_definition(Interpreter* inter, FunctionDefinition* fn)
 {
     SCRATCH();
     
     OpNode* node = fn->defined.block;
     VariableType* return_vtype = fn->return_vtype;
     
-    b32 return_is_reference = fn->returns.count == 1 && !vtype_is_tuple(return_vtype) && fn->returns[0].is_reference;
-    
-    IR_Context* ir = ir_context_alloc(return_vtype, return_is_reference);
+    IR_Context* ir = ir_context_alloc(inter, return_vtype);
     
     IR_Group out = ir_from_none();
     
@@ -1382,7 +1429,6 @@ IR ir_generate_from_function_definition(FunctionDefinition* fn)
     out.value = value_none();
     if (return_obj != NULL) {
         out.value = value_from_ir_object(return_obj);
-        if (return_is_reference) out.value = value_from_reference(out.value);
     }
     
     IR res = ir_make(ir->arena, ir->next_register_index, out);
@@ -1404,9 +1450,9 @@ IR ir_generate_from_function_definition(FunctionDefinition* fn)
     return res;
 }
 
-IR ir_generate_from_initializer(OpNode* node, ExpresionContext context)
+IR ir_generate_from_initializer(Interpreter* inter, OpNode* node, ExpresionContext context)
 {
-    IR_Context* ir = ir_context_alloc(void_vtype, false);
+    IR_Context* ir = ir_context_alloc(inter, void_vtype);
     IR_Group out = ir_from_node(ir, node, context);
     if (out.value.vtype == void_vtype && context.vtype->ID > VTypeID_Any) {
         out = IR_append(out, ir_from_default_initializer(ir, context.vtype, node->code));
@@ -1418,9 +1464,9 @@ IR ir_generate_from_value(Value value) {
     return ir_make(yov->static_arena, 0, ir_from_none(value));
 }
 
-b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value)
+b32 ct_value_from_node(Interpreter* inter, OpNode* node, VariableType* expected_vtype, Value* value)
 {
-    IR ir = ir_generate_from_initializer(node, ExpresionContext_from_vtype(expected_vtype, false));
+    IR ir = ir_generate_from_initializer(inter, node, ExpresionContext_from_vtype(expected_vtype, false));
     
     *value = value_none();
     
@@ -1433,7 +1479,7 @@ b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value)
         return false;
     }
     
-    if (v.kind != ValueKind_Literal && v.kind != ValueKind_Default) {
+    if (!value_is_compiletime(v)) {
         report_error(node->code, "Expecting a compile time resolved value");
         return false;
     }
@@ -1442,20 +1488,24 @@ b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value)
     return true;
 }
 
-b32 ct_string_from_node(OpNode* node, String* str)
+b32 ct_string_from_node(Arena* arena, Interpreter* inter, OpNode* node, String* str)
 {
     *str = {};
     Value v;
-    if (!ct_value_from_node(node, VType_String, &v)) return false;
-    return ct_string_from_value(v, str);
+    if (!ct_value_from_node(inter, node, VType_String, &v)) return false;
+    
+    *str = string_from_compiletime(arena, inter, v);
+    return true;
 }
 
-b32 ct_bool_from_node(OpNode* node, b32* b)
+b32 ct_bool_from_node(Interpreter* inter, OpNode* node, b32* b)
 {
     *b = {};
     Value v;
-    if (!ct_value_from_node(node, VType_Bool, &v)) return false;
-    return ct_bool_from_value(v, b);
+    if (!ct_value_from_node(inter, node, VType_Bool, &v)) return false;
+    
+    *b = bool_from_compiletime(inter, v);
+    return true;
 }
 
 internal_fn Array<OpNode_StructDefinition*> get_struct_definitions(Arena* arena, Array<OpNode*> nodes)
@@ -1555,7 +1605,7 @@ internal_fn b32 validate_arg_name(String name, CodeLocation code)
     return true;
 }
 
-internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b32 require_args, b32 require_intrinsics)
+internal_fn void extract_definitions(Interpreter* inter, OpNode_Block* block, b32 is_main_script, b32 require_args, b32 require_intrinsics)
 {
     SCRATCH();
     
@@ -1607,7 +1657,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
                 continue;
             }
             
-            IR ir = ir_generate_from_initializer(value_node, ExpresionContext_from_vtype(VType_Int, false));
+            IR ir = ir_generate_from_initializer(inter, value_node, ExpresionContext_from_vtype(VType_Int, false));
             if (!ir.success) continue;
             
             if (ir.value.kind != ValueKind_Literal || ir.value.vtype->ID != VTypeID_Int) {
@@ -1683,16 +1733,12 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
                 valid = false;
             }
             
+            VariableType* struct_vtype = vtype_define_struct(name, node, false);
+            
             PooledArray<ObjectDefinition> members = pooled_array_make<ObjectDefinition>(scratch.arena, 8);
             
             foreach(i, node->members.count) {
                 OpNode_ObjectDefinition* member_node = node->members[i];
-                
-                if (string_equals(member_node->type->name, name)) {
-                    report_struct_recursive(node->code);
-                    valid = false;
-                    continue;
-                }
                 
                 if (member_node->type->name.size == 0) {
                     report_struct_implicit_member_type(node->code);
@@ -1700,8 +1746,14 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
                     continue;
                 }
                 
-                VariableType* vtype = vtype_from_node(member_node->type, false);
+                VariableType* vtype = vtype_from_node(member_node->type);
                 if (vtype->ID == VTypeID_Unknown) {
+                    valid = false;
+                    continue;
+                }
+                
+                if (vtype == struct_vtype) {
+                    report_struct_recursive(node->code);
                     valid = false;
                     continue;
                 }
@@ -1718,7 +1770,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             
             if (!valid) continue;
             
-            define_struct(name, array_from_pooled_array(yov->static_arena, members), node, false);
+            vtype_init_struct(struct_vtype, array_from_pooled_array(scratch.arena, members));
         }
     }
     
@@ -1744,7 +1796,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             OpNode_ObjectDefinition* param_node = node->parameters[i];
             ObjectDefinition* def = &parameters[i];
             
-            VariableType* vtype = vtype_from_node(param_node->type, true);
+            VariableType* vtype = vtype_from_node(param_node->type);
             
             if (vtype == void_vtype || vtype == nil_vtype) {
                 valid = false;
@@ -1759,8 +1811,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             
             def->vtype = vtype;
             def->name = param_node->names[0];
-            def->ir = ir_generate_from_initializer(param_node->assignment, ExpresionContext_from_vtype(vtype, false));
-            def->is_reference = param_node->type->is_reference;
+            def->ir = ir_generate_from_initializer(inter, param_node->assignment, ExpresionContext_from_vtype(vtype, false));
         }
         
         PooledArray<ObjectDefinition> returns_list = pooled_array_make<ObjectDefinition>(scratch.arena, 8);
@@ -1774,20 +1825,19 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
                 OpNode_ObjectType* return_node = (OpNode_ObjectType*)return_node0;
                 
                 ObjectDefinition def = {};
-                def.vtype = vtype_from_node(return_node, true);
+                def.vtype = vtype_from_node(return_node);
                 def.name = "return";
                 def.ir = {};
-                def.is_reference = return_node->is_reference;
                 array_add(&returns_list, def);
             }
             else if (return_node0->kind == OpKind_ObjectDefinition)
             {
                 OpNode_ObjectDefinition* return_node = (OpNode_ObjectDefinition*)return_node0;
                 
-                VariableType* vtype = vtype_from_node(return_node->type, true);
+                VariableType* vtype = vtype_from_node(return_node->type);
                 
                 if (vtype == void_vtype) {
-                    IR out = ir_generate_from_initializer(return_node->assignment, ExpresionContext_from_inference());
+                    IR out = ir_generate_from_initializer(inter, return_node->assignment, ExpresionContext_from_inference());
                     vtype = out.value.vtype;
                 }
                 
@@ -1799,8 +1849,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
                 
                 ObjectDefinition def = {};
                 def.vtype = vtype;
-                def.ir = ir_generate_from_initializer(return_node->assignment, ExpresionContext_from_vtype(vtype, false));
-                def.is_reference = return_node->type->is_reference;
+                def.ir = ir_generate_from_initializer(inter, return_node->assignment, ExpresionContext_from_vtype(vtype, false));
                 foreach(i, return_node->names.count) {
                     def.name = return_node->names[i];
                     array_add(&returns_list, def);
@@ -1863,7 +1912,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             VariableType* vtype = VType_Bool;
             
             if (node->type->kind == OpKind_ObjectType) {
-                vtype = vtype_from_node((OpNode_ObjectType*)node->type, false);
+                vtype = vtype_from_node((OpNode_ObjectType*)node->type);
                 if (vtype->ID == VTypeID_Unknown) continue;
                 has_explicit_vtype = true;
             }
@@ -1872,7 +1921,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             {
                 OpNode_Assignment* assignment = (OpNode_Assignment*)node->name;
                 
-                if (!ct_string_from_node(assignment->source, &name)) {
+                if (!ct_string_from_node(scratch.arena, inter, assignment->source, &name)) {
                     valid = false;
                 }
                 else if (!validate_arg_name(name, assignment->code)) {
@@ -1884,7 +1933,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             {
                 OpNode_Assignment* assignment = (OpNode_Assignment*)node->description;
                 
-                if (!ct_string_from_node(assignment->source, &description)) {
+                if (!ct_string_from_node(scratch.arena, inter, assignment->source, &description)) {
                     valid = false;
                 }
             }
@@ -1893,7 +1942,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             {
                 OpNode_Assignment* assignment = (OpNode_Assignment*)node->required;
                 
-                if (!ct_bool_from_node(assignment->source, &required)) {
+                if (!ct_bool_from_node(inter, assignment->source, &required)) {
                     valid = false;
                 }
             }
@@ -1902,7 +1951,7 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             {
                 OpNode_Assignment* assignment = (OpNode_Assignment*)node->default_value;
                 
-                if (!ct_value_from_node(assignment->source, vtype, &default_value)) continue;
+                if (!ct_value_from_node(inter, assignment->source, vtype, &default_value)) continue;
                 
                 if (has_explicit_vtype && vtype != default_value.vtype) {
                     report_type_missmatch_assign(assignment->code, default_value.vtype->name, vtype->name);
@@ -1968,7 +2017,8 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
             }
             
             //print_info("Arg %S: name=%S, required=%s\n", node->identifier, name, required ? "true" : "false");
-            define_arg(node->identifier, name, value, required, description);
+            ObjectDefinition def = define_arg(node->identifier, name, value, required, description);
+            global_init(inter, def, node->code);
         }
     }
     
@@ -1979,13 +2029,13 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
         if (node0->kind != OpKind_ObjectDefinition) continue;
         OpNode_ObjectDefinition* node = (OpNode_ObjectDefinition*)node0;
         
-        VariableType* vtype = vtype_from_node(node->type, false);
+        VariableType* vtype = vtype_from_node(node->type);
         
         ExpresionContext context = {};
         if (vtype == void_vtype) context = ExpresionContext_from_inference();
         else context = ExpresionContext_from_vtype(vtype, false);
         
-        IR ir = ir_generate_from_initializer(node->assignment, context);
+        IR ir = ir_generate_from_initializer(inter, node->assignment, context);
         
         if (vtype == void_vtype) {
             vtype = ir.value.vtype;
@@ -2003,13 +2053,14 @@ internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b3
         if (vtype == void_vtype && ir.value.kind != ValueKind_None) vtype = ir.value.vtype;
         
         foreach(i, node->names.count) {
-            ObjectDefinition def = obj_def_make(node->names[i], vtype, node->is_constant, false, ir);
+            ObjectDefinition def = obj_def_make(node->names[i], vtype, node->is_constant, ir);
             define_global(def);
+            global_init(inter, def, node->code);
         }
     }
 }
 
-void ir_generate(b32 require_args, b32 require_intrinsics)
+void ir_generate(Interpreter* inter, b32 require_args, b32 require_intrinsics)
 {
     SCRATCH();
     
@@ -2023,7 +2074,7 @@ void ir_generate(b32 require_args, b32 require_intrinsics)
             continue;
         }
         
-        extract_definitions(ast, it.index == 0, require_args, require_intrinsics);
+        extract_definitions(inter, ast, it.index == 0, require_args, require_intrinsics);
     }
     
     // Assign IR
@@ -2034,8 +2085,10 @@ void ir_generate(b32 require_args, b32 require_intrinsics)
             
             if (fn->is_intrinsic) continue;
             
-            fn->defined.ir = ir_generate_from_function_definition(fn);
-            //print_units(fn->identifier, fn->defined.ir.instructions);
+            fn->defined.ir = ir_generate_from_function_definition(inter, fn);
+#if DEV_PRINT_AST
+            print_units(fn->identifier, fn->defined.ir.instructions);
+#endif
         }
         
         for (auto it = pooled_array_make_iterator(&yov->vtype_table); it.valid; ++it)
@@ -2052,10 +2105,22 @@ void ir_generate(b32 require_args, b32 require_intrinsics)
                     }
                     else {
                         OpNode* assignment = vtype->_struct.node->members[i]->assignment;
-                        vtype->_struct.irs[i] = ir_generate_from_initializer(assignment, ExpresionContext_from_vtype(member_vtype, false));
+                        vtype->_struct.irs[i] = ir_generate_from_initializer(inter, assignment, ExpresionContext_from_vtype(member_vtype, false));
                     }
                 }
             }
+        }
+    }
+    
+    // Validate args
+    foreach(i, yov->args.count)
+    {
+        String name = yov->args[i].name;
+        if (string_equals(name, "-help")) continue;
+        
+        ArgDefinition* def = find_arg_definition_by_name(name);
+        if (def == NULL) {
+            report_arg_unknown(NO_CODE, name);
         }
     }
 }
@@ -2073,6 +2138,14 @@ IR_Object* ir_find_object(IR_Context* ir, String identifier, b32 parent_scopes)
     }
     
     return res;
+}
+
+IR_Object* ir_find_object_from_value(IR_Context* ir, Value value)
+{
+    if (value.kind == ValueKind_LValue || value.kind == ValueKind_Register) {
+        return ir_find_object_from_register(ir, value.reg.index);
+    }
+    return NULL;
 }
 
 IR_Object* ir_find_object_from_register(IR_Context* ir, i32 register_index)

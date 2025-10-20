@@ -7,7 +7,7 @@ It can be run in different modes depending on your development or distribution n
 Mode :: enum { Dev, Dist, Manual }
 mode :: arg -> Mode {
     default = .Dist;
-    description = "specifies the build mode. Available options: {Mode.array}";
+    description = "specifies the build mode. Available options: Dev, Dist, Manual";
 }
 profiler_enabled :: arg {
     name = "-profiler";

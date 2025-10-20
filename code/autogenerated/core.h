@@ -1,40 +1,45 @@
 #pragma once
 
-void intrinsic__typeof(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__print(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__println(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__exit(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__set_cd(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__assert(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__failed(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__env(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__env_path(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__env_path_array(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__call(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__call_exe(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__call_script(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__path_resolve(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__str_get_codepoint(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__str_split(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__yov_require(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__yov_require_min(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__yov_require_max(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__yov_parse(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__ask_yesno(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__exists(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__create_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__delete_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__copy_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__move_directory(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__copy_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__move_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__delete_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__read_entire_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__write_entire_file(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__file_get_info(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__dir_get_files_info(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__msvc_import_env_x64(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
-void intrinsic__msvc_import_env_x86(Interpreter* inter, Array<Object*> params, Array<Object*> returns, CodeLocation code);
+void intrinsic__typeof(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__print(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__println(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__exit(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__set_cd(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__assert(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__failed(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__thread_sleep(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__env(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__env_path(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__env_path_array(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__console_write(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__console_set_cursor(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__console_clear(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__call(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__call_exe(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__call_script(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__path_resolve(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__str_get_codepoint(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__str_split(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__json_route(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__yov_require(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__yov_require_min(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__yov_require_max(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__yov_parse(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__ask_yesno(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__exists(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__create_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__delete_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__copy_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__move_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__copy_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__move_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__delete_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__read_entire_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__write_entire_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__file_get_info(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__dir_get_files_info(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__msvc_import_env_x64(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__msvc_import_env_x86(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
 
 void define_core()
 {
@@ -85,7 +90,8 @@ void define_core()
 		members_[1] = obj_def_make("message", vtype_from_name("String"), false);
 		members_[2] = obj_def_make("code", vtype_from_name("Int"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("Result", members);
+		VariableType* vtype = vtype_define_struct("Result");
+		vtype_init_struct(vtype, members);
 	}
 	// YovInfo :: struct { path: String, version: String, major: Int, minor: Int, revision: Int }
 	{
@@ -96,7 +102,8 @@ void define_core()
 		members_[3] = obj_def_make("minor", vtype_from_name("Int"), false);
 		members_[4] = obj_def_make("revision", vtype_from_name("Int"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("YovInfo", members);
+		VariableType* vtype = vtype_define_struct("YovInfo");
+		vtype_init_struct(vtype, members);
 	}
 	// Type :: struct { ID: Int, name: String }
 	{
@@ -104,28 +111,32 @@ void define_core()
 		members_[0] = obj_def_make("ID", vtype_from_name("Int"), false);
 		members_[1] = obj_def_make("name", vtype_from_name("String"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("Type", members);
+		VariableType* vtype = vtype_define_struct("Type");
+		vtype_init_struct(vtype, members);
 	}
 	// OS :: struct { kind: OSKind }
 	{
 		ObjectDefinition members_[1];
 		members_[0] = obj_def_make("kind", vtype_from_name("OSKind"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("OS", members);
+		VariableType* vtype = vtype_define_struct("OS");
+		vtype_init_struct(vtype, members);
 	}
 	// CallsContext :: struct { redirect_stdout: RedirectStdout }
 	{
 		ObjectDefinition members_[1];
 		members_[0] = obj_def_make("redirect_stdout", vtype_from_name("RedirectStdout"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("CallsContext", members);
+		VariableType* vtype = vtype_define_struct("CallsContext");
+		vtype_init_struct(vtype, members);
 	}
 	// CallOutput :: struct { stdout: String }
 	{
 		ObjectDefinition members_[1];
 		members_[0] = obj_def_make("stdout", vtype_from_name("String"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("CallOutput", members);
+		VariableType* vtype = vtype_define_struct("CallOutput");
+		vtype_init_struct(vtype, members);
 	}
 	// EnumDefinition :: struct { identifier: String, elements: String[], values: Int[] }
 	{
@@ -134,7 +145,8 @@ void define_core()
 		members_[1] = obj_def_make("elements", vtype_from_name("String[]"), false);
 		members_[2] = obj_def_make("values", vtype_from_name("Int[]"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("EnumDefinition", members);
+		VariableType* vtype = vtype_define_struct("EnumDefinition");
+		vtype_init_struct(vtype, members);
 	}
 	// FileInfo :: struct { path: String, is_directory: Bool }
 	{
@@ -142,7 +154,8 @@ void define_core()
 		members_[0] = obj_def_make("path", vtype_from_name("String"), false);
 		members_[1] = obj_def_make("is_directory", vtype_from_name("Bool"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("FileInfo", members);
+		VariableType* vtype = vtype_define_struct("FileInfo");
+		vtype_init_struct(vtype, members);
 	}
 	// Context :: struct { cd: String, script_dir: String, caller_dir: String, args: String[], types: Type[] }
 	{
@@ -153,7 +166,8 @@ void define_core()
 		members_[3] = obj_def_make("args", vtype_from_name("String[]"), false);
 		members_[4] = obj_def_make("types", vtype_from_name("Type[]"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("Context", members);
+		VariableType* vtype = vtype_define_struct("Context");
+		vtype_init_struct(vtype, members);
 	}
 	// ObjectDefinition :: struct { identifier: String, type: Type }
 	{
@@ -161,7 +175,8 @@ void define_core()
 		members_[0] = obj_def_make("identifier", vtype_from_name("String"), false);
 		members_[1] = obj_def_make("type", vtype_from_name("Type"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("ObjectDefinition", members);
+		VariableType* vtype = vtype_define_struct("ObjectDefinition");
+		vtype_init_struct(vtype, members);
 	}
 	// FunctionDefinition :: struct { identifier: String, parameters: ObjectDefinition[], returns: ObjectDefinition[] }
 	{
@@ -170,7 +185,8 @@ void define_core()
 		members_[1] = obj_def_make("parameters", vtype_from_name("ObjectDefinition[]"), false);
 		members_[2] = obj_def_make("returns", vtype_from_name("ObjectDefinition[]"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("FunctionDefinition", members);
+		VariableType* vtype = vtype_define_struct("FunctionDefinition");
+		vtype_init_struct(vtype, members);
 	}
 	// StructDefinition :: struct { identifier: String, members: ObjectDefinition[] }
 	{
@@ -178,7 +194,8 @@ void define_core()
 		members_[0] = obj_def_make("identifier", vtype_from_name("String"), false);
 		members_[1] = obj_def_make("members", vtype_from_name("ObjectDefinition[]"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("StructDefinition", members);
+		VariableType* vtype = vtype_define_struct("StructDefinition");
+		vtype_init_struct(vtype, members);
 	}
 	// YovParseOutput :: struct { scripts: String[], functions: FunctionDefinition[], structs: StructDefinition[], enums: EnumDefinition[], globals: ObjectDefinition[], reports: String[] }
 	{
@@ -190,7 +207,8 @@ void define_core()
 		members_[4] = obj_def_make("globals", vtype_from_name("ObjectDefinition[]"), false);
 		members_[5] = obj_def_make("reports", vtype_from_name("String[]"), false);
 		Array<ObjectDefinition> members = array_make(members_, countof(members_));
-		define_struct("YovParseOutput", members);
+		VariableType* vtype = vtype_define_struct("YovParseOutput");
+		vtype_init_struct(vtype, members);
 	}
 	// typeof :: (object: Any) -> Type;
 	{
@@ -257,6 +275,14 @@ void define_core()
 		Array<ObjectDefinition> returns = array_make(returns_, countof(returns_));
 		define_intrinsic_function(NO_CODE, intrinsic__failed, "failed", parameters, returns);
 	}
+	// thread_sleep :: (millis: Int);
+	{
+		ObjectDefinition parameters_[1];
+		parameters_[0] = obj_def_make("millis", vtype_from_name("Int"), false);
+		Array<ObjectDefinition> parameters = array_make(parameters_, countof(parameters_));
+		Array<ObjectDefinition> returns = {};
+		define_intrinsic_function(NO_CODE, intrinsic__thread_sleep, "thread_sleep", parameters, returns);
+	}
 	// env :: (name: String) -> (value: String, result: Result);
 	{
 		ObjectDefinition parameters_[1];
@@ -289,6 +315,29 @@ void define_core()
 		returns_[1] = obj_def_make("result", vtype_from_name("Result"), false);
 		Array<ObjectDefinition> returns = array_make(returns_, countof(returns_));
 		define_intrinsic_function(NO_CODE, intrinsic__env_path_array, "env_path_array", parameters, returns);
+	}
+	// console_write :: (value: String);
+	{
+		ObjectDefinition parameters_[1];
+		parameters_[0] = obj_def_make("value", vtype_from_name("String"), false);
+		Array<ObjectDefinition> parameters = array_make(parameters_, countof(parameters_));
+		Array<ObjectDefinition> returns = {};
+		define_intrinsic_function(NO_CODE, intrinsic__console_write, "console_write", parameters, returns);
+	}
+	// console_set_cursor :: (x: Int, y: Int);
+	{
+		ObjectDefinition parameters_[2];
+		parameters_[0] = obj_def_make("x", vtype_from_name("Int"), false);
+		parameters_[1] = obj_def_make("y", vtype_from_name("Int"), false);
+		Array<ObjectDefinition> parameters = array_make(parameters_, countof(parameters_));
+		Array<ObjectDefinition> returns = {};
+		define_intrinsic_function(NO_CODE, intrinsic__console_set_cursor, "console_set_cursor", parameters, returns);
+	}
+	// console_clear :: ();
+	{
+		Array<ObjectDefinition> parameters = {};
+		Array<ObjectDefinition> returns = {};
+		define_intrinsic_function(NO_CODE, intrinsic__console_clear, "console_clear", parameters, returns);
 	}
 	// call :: (command: String) -> (out: CallOutput, result: Result);
 	{
@@ -358,6 +407,18 @@ void define_core()
 		returns_[0] = obj_def_make("return", vtype_from_name("String[]"), false);
 		Array<ObjectDefinition> returns = array_make(returns_, countof(returns_));
 		define_intrinsic_function(NO_CODE, intrinsic__str_split, "str_split", parameters, returns);
+	}
+	// json_route :: (json: String, route: String) -> (out: String, res: Result);
+	{
+		ObjectDefinition parameters_[2];
+		parameters_[0] = obj_def_make("json", vtype_from_name("String"), false);
+		parameters_[1] = obj_def_make("route", vtype_from_name("String"), false);
+		Array<ObjectDefinition> parameters = array_make(parameters_, countof(parameters_));
+		ObjectDefinition returns_[2];
+		returns_[0] = obj_def_make("out", vtype_from_name("String"), false);
+		returns_[1] = obj_def_make("res", vtype_from_name("Result"), false);
+		Array<ObjectDefinition> returns = array_make(returns_, countof(returns_));
+		define_intrinsic_function(NO_CODE, intrinsic__json_route, "json_route", parameters, returns);
 	}
 	// yov_require :: (major: Int, minor: Int) -> Result;
 	{

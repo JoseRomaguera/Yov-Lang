@@ -91,6 +91,28 @@ void os_print(Severity severity, String text)
     //OutputDebugStringA(text0.data);
 }
 
+void os_console_set_cursor(i64 x, i64 y)
+{
+    HANDLE std = get_std_handle();
+    
+    COORD home = {(SHORT)x, (SHORT)y};
+    SetConsoleCursorPosition(std, home);
+}
+
+void os_console_clear()
+{
+    HANDLE std = get_std_handle();
+    
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    GetConsoleScreenBufferInfo(std, &info);
+    DWORD count;
+    
+    COORD home = {0, 0};
+    FillConsoleOutputCharacter(std, ' ', info.dwSize.X * info.dwSize.Y, home, &count);
+    FillConsoleOutputAttribute(std, info.wAttributes, info.dwSize.X * info.dwSize.Y, home, &count);
+    SetConsoleCursorPosition(std, home);
+}
+
 void* os_allocate_heap(u64 size) {
     return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size_t)size);
 }
@@ -117,6 +139,13 @@ void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count)
 void os_release_virtual_memory(void* address)
 {
     VirtualFree(address, 0, MEM_RELEASE);
+}
+
+void os_protect_virtual_memory(void* address, u32 pages)
+{
+    u64 bytes = (u64)pages * yov->os.page_size;
+    DWORD old_protect = PAGE_READWRITE;
+    VirtualProtect(address, bytes, PAGE_NOACCESS, &old_protect);
 }
 
 internal_fn String string_from_win_error(DWORD error)

@@ -428,7 +428,7 @@ OpNode* extract_expresion(Parser* parser)
             else if (string_equals(raw, "\\t")) v = '\t';
             else
             {
-                u64 cursor;
+                u64 cursor = 0;
                 v = string_get_codepoint(raw, &cursor);
                 
                 if (v == 0xFFFD || cursor != raw.size) {

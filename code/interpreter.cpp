@@ -4,33 +4,27 @@ internal_fn void define_globals(Interpreter* inter)
 {
     SCRATCH();
     
-    inter->global_objects = array_make<Object*>(yov->static_arena, yov->globals.count);
-    
-    foreach(i, inter->global_objects.count) {
-        inter->global_objects[i] = null_obj;
-    }
-    
     // Yov struct
     {
-        Object* obj = object_alloc(inter, VType_YovInfo);
-        inter->globals.yov = obj;
-        global_save(inter, "yov", obj);
+        inter->common_globals.yov = object_alloc(inter, VType_YovInfo);
+        Reference ref = inter->common_globals.yov;
+        global_save(inter, "yov", ref);
         
-        set_int_member(inter, obj, "minor", YOV_MINOR_VERSION);
-        set_int_member(inter, obj, "major", YOV_MAJOR_VERSION);
-        set_int_member(inter, obj, "revision", YOV_REVISION_VERSION);
-        set_string_member(inter, obj, "version", YOV_VERSION);
-        set_string_member(inter, obj, "path", os_get_executable_path(scratch.arena));
+        set_int_member(inter, ref, "minor", YOV_MINOR_VERSION);
+        set_int_member(inter, ref, "major", YOV_MAJOR_VERSION);
+        set_int_member(inter, ref, "revision", YOV_REVISION_VERSION);
+        ref_member_set_string(inter, ref, "version", YOV_VERSION);
+        ref_member_set_string(inter, ref, "path", os_get_executable_path(scratch.arena));
     }
     
     // OS struct
     {
-        Object* obj = object_alloc(inter, VType_OS);
-        inter->globals.os = obj;
-        global_save(inter, "os", obj);
+        inter->common_globals.os = object_alloc(inter, VType_OS);
+        Reference ref = inter->common_globals.os;
+        global_save(inter, "os", ref);
         
 #if OS_WINDOWS
-        set_enum_index_member(inter, obj, "kind", 0);
+        set_enum_index_member(inter, ref, "kind", 0);
 #else
 #error TODO
 #endif
@@ -38,73 +32,59 @@ internal_fn void define_globals(Interpreter* inter)
     
     // Context struct
     {
-        Object* obj = object_alloc(inter, VType_Context);
-        inter->globals.context = obj;
-        global_save(inter, "context", obj);
+        inter->common_globals.context = object_alloc(inter, VType_Context);
+        Reference ref = inter->common_globals.context;
+        global_save(inter, "context", ref);
         
-        set_string_member(inter, obj, "cd", yov->scripts[0].dir);
-        set_string_member(inter, obj, "script_dir", yov->scripts[0].dir);
-        set_string_member(inter, obj, "caller_dir", yov->caller_dir);
+        ref_member_set_string(inter, ref, "cd", yov->scripts[0].dir);
+        ref_member_set_string(inter, ref, "script_dir", yov->scripts[0].dir);
+        ref_member_set_string(inter, ref, "caller_dir", yov->caller_dir);
         
         // Args
         {
             Array<ScriptArg> args = yov->args;
-            Object* array = alloc_array(inter, VType_String, args.count, true);
+            Reference array = alloc_array(inter, VType_String, args.count, true);
             foreach(i, args.count) {
-                object_set_child(inter, array, i, alloc_string(inter, args[i].name));
+                ref_set_member(inter, array, i, alloc_string(inter, args[i].name));
             }
             
-            object_set_member(inter, obj, "args", array);
+            ref_set_member(inter, ref, vtype_get_member(VType_Context, "args").index, array);
         }
         
         // Types
         {
-            Object* array = alloc_array(inter, VType_Type, yov->vtype_table.count, true);
+            Reference array = alloc_array(inter, VType_Type, yov->vtype_table.count, true);
             
             for (auto it = pooled_array_make_iterator(&yov->vtype_table); it.valid; ++it) {
                 u32 index = it.index;
-                Object* element = object_alloc(inter, VType_Type);
-                object_assign_Type(inter, element, it.value);
-                object_set_child(inter, array, it.index, element);
+                Reference element = object_alloc(inter, VType_Type);
+                ref_assign_Type(inter, element, it.value);
+                ref_set_member(inter, array, it.index, element);
             }
             
-            object_set_member(inter, obj, "types", array);
+            ref_set_member(inter, ref, vtype_get_member(VType_Context, "types").index, array);
         }
     }
     
     // Calls struct
     {
-        Object* obj = object_alloc(inter, VType_CallsContext);
-        inter->globals.calls = obj;
-        global_save(inter, "calls", obj);
+        Reference ref = object_alloc(inter, VType_CallsContext);
+        inter->common_globals.calls = ref;
+        global_save(inter, "calls", ref);
     }
     
     for (auto it = pooled_array_make_iterator(&yov->globals); it.valid; ++it)
     {
         ObjectDefinition* def = it.value;
-        if (global_get_by_index(inter, it.index) != null_obj) continue;
+        if (!is_null(global_get_by_index(inter, it.index))) continue;
         
-        Object* obj = execute_IR(inter, def->ir, {}, NO_CODE);
-        global_save_by_index(inter, it.index, obj);
+        Reference ref = execute_IR(inter, def->ir, {}, NO_CODE);
+        global_save_by_index(inter, it.index, ref);
         
     }
 }
 
-internal_fn void report_invalid_arguments(Interpreter* inter)
-{
-    foreach(i, yov->args.count)
-    {
-        String name = yov->args[i].name;
-        if (string_equals(name, "-help")) continue;
-        
-        ArgDefinition* def = find_arg_definition_by_name(name);
-        if (def == NULL) {
-            report_arg_unknown(NO_CODE, name);
-        }
-    }
-}
-
-void interpret(InterpreterSettings settings)
+Interpreter* interpreter_initialize(InterpreterSettings settings)
 {
     YovScript* main_script = yov_get_script(0);
     
@@ -116,39 +96,56 @@ void interpret(InterpreterSettings settings)
     inter->global_scope = arena_push_struct<Scope>(yov->static_arena);
     inter->current_scope = inter->global_scope;
     
-    report_invalid_arguments(inter);
-    define_globals(inter);
+    inter->globals = pooled_array_make<Reference>(yov->static_arena, 16);
     
-    {
-        String main_function_name = "main";
-        
-        FunctionDefinition* fn = find_function(main_function_name);
-        
-        if (fn != NULL && fn->return_vtype == void_vtype && fn->parameters.count == 0) {
-            run_function_call(inter, -1, fn, {}, fn->code);
-        }
-        else {
-            report_error(NO_CODE, "Main function not found");
-        }
+    foreach(i, yov->globals.count) {
+        array_add(&inter->globals, ref_from_object(null_obj));
     }
     
-    foreach(i, inter->global_objects.count) {
-        object_decrement_ref(inter->global_objects[i]);
+    define_globals(inter);
+    
+    return inter;
+}
+
+b32 interpreter_run(Interpreter* inter, FunctionDefinition* fn, Array<Value> params)
+{
+    object_free_unused_memory(inter);
+    
+    if (fn != NULL && fn->return_vtype == void_vtype && fn->parameters.count == params.count) {
+        run_function_call(inter, -1, fn, params, fn->code);
+        return true;
+    }
+    
+    invalid_codepath();
+    return false;
+}
+
+void interpreter_run_main(Interpreter* inter)
+{
+    FunctionDefinition* fn = find_function("main");
+    
+    if (!interpreter_run(inter, fn, {})) {
+        report_error(NO_CODE, "Main function not found");
+    }
+}
+
+void interpreter_shutdown(Interpreter* inter)
+{
+    if (inter == NULL) return;
+    
+    foreach(i, inter->globals.count) {
+        object_decrement_ref(inter->globals[i].parent);
     }
     
     scope_clear(inter, inter->global_scope);
-    object_free_unused(inter);
+    object_free_unused_memory(inter);
     
-    if (inter->object_count > 0) {
+    if (inter->gc.object_count > 0) {
         lang_report_unfreed_objects();
     }
-    else if (inter->allocation_count > 0) {
+    else if (inter->gc.allocation_count > 0) {
         lang_report_unfreed_dynamic();
     }
-    
-#if DEV && 0
-    if (inter->mode == InterpreterMode_Analysis) print_memory_usage(inter);
-#endif
     
     assert(yov->reports.count > 0 || inter->current_scope == inter->global_scope);
 }
@@ -170,9 +167,9 @@ Result user_assertion(Interpreter* inter, String message)
     return result_failed_make("Operation denied by user");
 }
 
-Object* get_cd(Interpreter* inter) {
+Reference get_cd(Interpreter* inter) {
     i32 index = vtype_get_member(VType_Context, "cd").index;
-    return object_get_child(inter, inter->globals.context, index);
+    return ref_get_member(inter, inter->common_globals.context, index);
 }
 
 String get_cd_value(Interpreter* inter) {
@@ -190,91 +187,110 @@ String path_absolute_to_cd(Arena* arena, Interpreter* inter, String path)
 
 RedirectStdout get_calls_redirect_stdout(Interpreter* inter)
 {
-    Object* calls = inter->globals.calls;
-    VariableTypeChild info = vtype_get_member(calls->vtype, "redirect_stdout");
-    Object* redirect_stdout = object_get_child(inter, calls, info.index);
+    Reference calls = inter->common_globals.calls;
+    VariableTypeChild info = vtype_get_member(calls.vtype, "redirect_stdout");
+    Reference redirect_stdout = ref_get_member(inter, calls, info.index);
     return (RedirectStdout)get_enum_index(redirect_stdout);
 }
 
-void global_save(Interpreter* inter, String identifier, Object* object)
+void global_init(Interpreter* inter, ObjectDefinition def, CodeLocation code)
 {
+    Reference ref = execute_IR(inter, def.ir, {}, code);
+    global_save(inter, def.name, ref);
+}
+
+void global_save(Interpreter* inter, String identifier, Reference ref)
+{
+    while (inter->globals.count < yov->globals.count) {
+        array_add(&inter->globals, ref_from_object(null_obj));
+    }
+    
     foreach(i, yov->globals.count) {
         if (string_equals(yov->globals[i].name, identifier)) {
-            global_save_by_index(inter, i, object);
+            global_save_by_index(inter, i, ref);
             return;
         }
     }
     invalid_codepath();
 }
 
-void global_save_by_index(Interpreter* inter, i32 index, Object* object)
+void global_save_by_index(Interpreter* inter, i32 index, Reference ref)
 {
-    object_decrement_ref(inter->global_objects[index]);
-    inter->global_objects[index] = object;
-    object_increment_ref(inter->global_objects[index]);
+    if (index >= inter->globals.count) {
+        invalid_codepath();
+        return;
+    }
+    object_decrement_ref(inter->globals[index].parent);
+    inter->globals[index] = ref;
+    object_increment_ref(inter->globals[index].parent);
 }
 
-Object* global_get(Interpreter* inter, String identifier)
+Reference global_get(Interpreter* inter, String identifier)
 {
     foreach(i, yov->globals.count) {
         if (string_equals(yov->globals[i].name, identifier)) {
             return global_get_by_index(inter, i);
         }
     }
-    return nil_obj;
+    return ref_from_object(nil_obj);
 }
 
-Object* global_get_by_index(Interpreter* inter, i32 index)
+Reference global_get_by_index(Interpreter* inter, i32 index)
 {
-    return inter->global_objects[index];
+    if (index >= inter->globals.count) {
+        invalid_codepath();
+        return ref_from_object(null_obj);
+    }
+    return inter->globals[index];
 }
 
-Object* object_from_value(Interpreter* inter, Scope* scope, Value value)
+Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
 {
     SCRATCH();
     
-    if (value.kind == ValueKind_None) return null_obj;
+    if (value.kind == ValueKind_None) return ref_from_object(null_obj);
     if (value.kind == ValueKind_Literal) {
         if (value.vtype->ID == VTypeID_Int) return alloc_int(inter, value.literal_int);
         if (value.vtype->ID == VTypeID_Bool) return alloc_bool(inter, value.literal_bool);
         if (value.vtype->ID == VTypeID_String) return alloc_string(inter, value.literal_string);
         if (value.vtype == VType_Type) {
-            Object* obj = object_alloc(inter, VType_Type);
-            object_assign_Type(inter, obj, value.literal_type);
-            return obj;
+            Reference ref = object_alloc(inter, VType_Type);
+            ref_assign_Type(inter, ref, value.literal_type);
+            return ref;
         }
         if (value.vtype->kind == VariableKind_Enum) {
             return alloc_enum(inter, value.vtype, value.literal_int);
         }
-        if (value.vtype->kind == VariableKind_Array)
-        {
-            Array<Value> values = value.literal_array.values;
-            b32 is_empty = value.literal_array.is_empty;
-            
-            if (is_empty)
-            {
-                Array<i64> dimensions = array_make<i64>(scratch.arena, values.count);
-                foreach(i, dimensions.count) {
-                    dimensions[i] = get_int(object_from_value(inter, scope, values[i]));
-                }
-                
-                VariableType* base_vtype = value.vtype->child_base;
-                Object* array = alloc_array_multidimensional(inter, base_vtype, dimensions);
-                return array;
-            }
-            else
-            {
-                VariableType* element_vtype = value.vtype->child_next;
-                Object* array = alloc_array(inter, element_vtype, values.count, true);
-                
-                foreach(i, values.count) {
-                    object_set_child(inter, array, i, object_from_value(inter, scope, values[i]));
-                }
-                return array;
-            }
-        }
         invalid_codepath();
-        return nil_obj;
+        return ref_from_object(nil_obj);
+    }
+    
+    if (value.kind == ValueKind_Array)
+    {
+        Array<Value> values = value.array.values;
+        b32 is_empty = value.array.is_empty;
+        
+        if (is_empty)
+        {
+            Array<i64> dimensions = array_make<i64>(scratch.arena, values.count);
+            foreach(i, dimensions.count) {
+                dimensions[i] = get_int(ref_from_value(inter, scope, values[i]));
+            }
+            
+            VariableType* base_vtype = value.vtype->child_base;
+            Reference array = alloc_array_multidimensional(inter, base_vtype, dimensions);
+            return array;
+        }
+        else
+        {
+            VariableType* element_vtype = value.vtype->child_next;
+            Reference array = alloc_array(inter, element_vtype, values.count, true);
+            
+            foreach(i, values.count) {
+                ref_set_member(inter, array, i, ref_from_value(inter, scope, values[i]));
+            }
+            return array;
+        }
     }
     
     if (value.kind == ValueKind_Default) {
@@ -290,9 +306,9 @@ Object* object_from_value(Interpreter* inter, Scope* scope, Value value)
             StringBuilder builder = string_builder_make(scratch.arena);
             foreach(i, sources.count)
             {
-                Object* source = object_from_value(inter, scope, sources[i]);
-                if (is_unknown(source)) return nil_obj;
-                append(&builder, string_from_object(scratch.arena, inter, source));
+                Reference source = ref_from_value(inter, scope, sources[i]);
+                if (is_unknown(source)) return ref_from_object(nil_obj);
+                append(&builder, string_from_ref(scratch.arena, inter, source));
             }
             
             return alloc_string(inter, string_from_builder(scratch.arena, &builder));
@@ -303,35 +319,58 @@ Object* object_from_value(Interpreter* inter, Scope* scope, Value value)
         return global_get(inter, value.constant_identifier);
     }
     
-    if (value.kind == ValueKind_LValue || value.kind == ValueKind_Register) {
-        return register_get(scope, value.register_index);
+    if (value.kind == ValueKind_LValue || value.kind == ValueKind_Register)
+    {
+        Reference ref = register_get(scope, value.reg.index);
+        
+        i32 op = value.reg.reference_op;
+        
+        while (op > 0) {
+            ref = alloc_reference(inter, ref);
+            op--;
+        }
+        
+        while (op < 0)
+        {
+            if (is_null(ref)) {
+                invalid_codepath();
+                return ref_from_object(nil_obj);
+            }
+            
+            ref = dereference(ref);
+            op++;
+        }
+        
+        return ref;
     }
     
     invalid_codepath();
-    return null_obj;
+    return ref_from_object(null_obj);
 }
 
-Object* execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocation code)
+Reference execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocation code)
 {
     SCRATCH();
     
     Scope* scope = arena_push_struct<Scope>(scratch.arena);
-    scope->registers = array_make<Register>(scratch.arena, ir.register_count);
+    scope->registers = array_make<Reference>(scratch.arena, ir.register_count);
     foreach(i, scope->registers.count) {
-        scope->registers[i] = register_make_root(i, null_obj);
+        scope->registers[i] = ref_from_object(null_obj);
     }
     
-    Scope* prev_scope = inter->current_scope;
+    scope->prev = inter->current_scope;
     inter->current_scope = scope;
-    DEFER(inter->current_scope = prev_scope);
+    DEFER(inter->current_scope = scope->prev);
     
     // Define params
     foreach(i, params.count) {
         i32 reg = i;
         Value param = params[i];
         run_store(inter, param.vtype, {}, reg, code);
-        run_assign(inter, reg, param, prev_scope, code);
+        run_assign(inter, reg, param, scope->prev, code);
     }
+    
+    u32 pc_decreased_count = 0;
     
     scope->pc = 0;
     
@@ -349,23 +388,59 @@ Object* execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocation 
         scope->pc++;
         
 #if DEV
-        //print_info("%S\n", string_from_Unit(scratch.arena, scope->pc - 1, 0, 0, unit));
+        b32 show = false;
+        
+        u32 gc_allocations = inter->gc.allocation_count;
+        u32 gc_objects = inter->gc.object_count;
+        u64 start_time = os_timer_get();
 #endif
         
+        i64 prev_pc = scope->pc;
         run_instruction(inter, unit);
         
-        // TODO(Jose): 
-        if (scope->pc % 10 == 0) {
-            object_free_unused(inter);
+#if DEV
+        gc_allocations = inter->gc.allocation_count - gc_allocations;
+        gc_objects = inter->gc.object_count - gc_objects;
+        f64 ellapsed_time = (os_timer_get() - start_time) / (f64)yov->timer_frequency;
+        
+        show &= gc_objects > 0;
+        //show &= (ellapsed_time * 1000000.0 > 100) && unit.kind != UnitKind_FunctionCall;
+        
+        if (show)
+        {
+            print_info("%S\n", string_from_unit(scratch.arena, scope->pc - 1, 3, 3, unit));
+            
+            String tab = "  ";
+            print_info("%S ellapsed: %S\n", tab, string_from_ellapsed_time(scratch.arena, ellapsed_time));
+            print_info("%S gc allocations: %u\n", tab, gc_allocations);
+            print_info("%S gc objects: %u\n", tab, gc_objects);
+            
+            print_info("%S gc total objects: %u\n", tab, inter->gc.object_count);
+            //print_info("%S temp memory: %l\n", tab, inter->temp_arena->memory_position);
+            print_info("\n");
+        }
+#endif
+        
+        // Asan
+#if DEV && 0
+        arena_protect_and_reset(inter->temp_arena);
+#endif
+        
+        if (prev_pc != scope->pc) {
+            pc_decreased_count++;
+            
+            if ((pc_decreased_count + 1) % 32 == 0) {
+                object_free_unused_memory(inter);
+            }
         }
     }
     
     // Retrieve return value
-    Object* return_object = object_from_value(inter, scope, ir.value);
+    Reference return_ref = ref_from_value(inter, scope, ir.value);
     
     scope_clear(inter, scope);
     
-    return return_object;
+    return return_ref;
 }
 
 void run_instruction(Interpreter* inter, Unit unit)
@@ -405,30 +480,36 @@ void run_instruction(Interpreter* inter, Unit unit)
     if (unit.kind == UnitKind_Jump)
     {
         i32 condition = unit.jump.condition;
-        Object* src = null_obj;
+        Reference src = ref_from_object(null_obj);
         i32 offset = unit.jump.offset;
         
-        if (condition != 0) src = object_from_value(inter, inter->current_scope, unit.jump.src);
+        if (condition != 0) src = ref_from_value(inter, inter->current_scope, unit.jump.src);
         run_jump(inter, src, condition, offset, code);
         return;
     }
     
     if (unit.kind == UnitKind_BinaryOperation) {
-        Object* src0 = object_from_value(inter, inter->current_scope, unit.binary_op.src0);
-        Object* src1 = object_from_value(inter, inter->current_scope, unit.binary_op.src1);
+        Reference dst = register_get(inter->current_scope, dst_index);
+        Reference src0 = ref_from_value(inter, inter->current_scope, unit.binary_op.src0);
+        Reference src1 = ref_from_value(inter, inter->current_scope, unit.binary_op.src1);
         BinaryOperator op = unit.binary_op.op;
         
-        Object* result = run_binary_operation(inter, src0, src1, op, code);
-        register_save_root(inter, dst_index, result);
+        Reference result = run_binary_operation(inter, dst, src0, src1, op, code);
+        
+        if (result.address != dst.address)
+        {
+            if (dst.vtype == result.vtype) ref_copy(inter, dst, result);
+            else register_save(inter, dst_index, result);
+        }
         return;
     }
     
     if (unit.kind == UnitKind_SignOperation) {
-        Object* src = object_from_value(inter, inter->current_scope, unit.sign_op.src);
+        Reference src = ref_from_value(inter, inter->current_scope, unit.sign_op.src);
         BinaryOperator op = unit.sign_op.op;
         
-        Object* result = run_sign_operation(inter, src, op, code);
-        register_save_root(inter, dst_index, result);
+        Reference result = run_sign_operation(inter, src, op, code);
+        register_save(inter, dst_index, result);
         return;
     }
     
@@ -436,8 +517,8 @@ void run_instruction(Interpreter* inter, Unit unit)
     {
         SCRATCH();
         b32 child_is_member = unit.child.child_is_member;
-        Object* child_index_obj = object_from_value(inter, inter->current_scope, unit.child.child_index);
-        Object* src = object_from_value(inter, inter->current_scope, unit.child.src);
+        Reference child_index_obj = ref_from_value(inter, inter->current_scope, unit.child.child_index);
+        Reference src = ref_from_value(inter, inter->current_scope, unit.child.src);
         
         if (is_unknown(src) || is_unknown(child_index_obj)) return;
         
@@ -448,32 +529,32 @@ void run_instruction(Interpreter* inter, Unit unit)
         
         i64 child_index = get_int(child_index_obj);
         
-        if (src == null_obj) {
+        if (is_null(src)) {
             report_error(code, "Null reference");
             return;
         }
         
-        // TODO(Jose):
-        u32 child_count = u32_max;
+        u32 child_count = ref_get_child_count(src, child_is_member);
         
         if (child_index < 0 || child_index >= child_count) {
             report_error(code, "Out of bounds");
             return;
         }
         
-        Object* child = object_get_child(inter, src, (u32)child_index, child_is_member);
-        register_save_child(inter, dst_index, child, src, (i32)child_index);
+        Reference child = ref_get_child(inter, src, (u32)child_index, child_is_member);
+        register_save(inter, dst_index, child);
+        
         return;
     }
     
     if (unit.kind == UnitKind_ResultEval)
     {
-        Object* src = object_from_value(inter, inter->current_scope, unit.result_eval.src);
+        Reference src = ref_from_value(inter, inter->current_scope, unit.result_eval.src);
         
-        assert(src->vtype == VType_Result);
+        assert(src.vtype == VType_Result);
         
-        if (src->vtype == VType_Result) {
-            Result result = Result_from_object(inter, src);
+        if (src.vtype == VType_Result) {
+            Result result = Result_from_ref(inter, src);
             if (result.failed) {
                 interpreter_report_runtime_error(inter, code, result);
             }
@@ -488,53 +569,54 @@ void run_assign(Interpreter* inter, i32 dst_index, Value src, Scope* src_scope, 
 {
     SCRATCH();
     
-    Object* dst_obj = register_get(inter->current_scope, dst_index);
-    Object* src_obj = object_from_value(inter, src_scope, src);
+    Reference dst_ref = register_get(inter->current_scope, dst_index);
+    Reference src_ref = ref_from_value(inter, src_scope, src);
     
-    if (is_unknown(dst_obj)) return;
-    if (is_unknown(src_obj)) return;
+    if (is_unknown(dst_ref)) return;
+    if (is_unknown(src_ref)) return;
     
-    if (src.take_reference) {
-        if (src_obj == null_obj) {
+    if (is_null(dst_ref)) {
+        dst_ref = object_alloc(inter, src_ref.vtype);
+        register_save(inter, dst_index, dst_ref);
+    }
+    
+    if (is_null(dst_ref) || is_null(src_ref)) {
+        report_error(code, "Null reference");
+        return;
+    }
+    
+    if (dst_ref.vtype->kind == VariableKind_Reference && dst_ref.vtype->child_next == src_ref.vtype) {
+        dst_ref = dereference(dst_ref);
+        
+        if (is_null(dst_ref)) {
             report_error(code, "Null reference");
             return;
         }
-        
-        register_save_reference(inter, dst_index, src_obj);
     }
-    else {
-        if (dst_obj == null_obj) {
-            dst_obj = object_alloc(inter, src_obj->vtype);
-            register_save_root(inter, dst_index, dst_obj);
-        }
-        
-        if (dst_obj == null_obj || src_obj == null_obj) {
-            report_error(code, "Null reference");
-            return;
-        }
-        
-        object_copy(inter, dst_obj, src_obj);
-    }
+    
+    ref_copy(inter, dst_ref, src_ref);
 }
 
 void run_store(Interpreter* inter, VariableType* vtype, String global_identifier, i32 index, CodeLocation code)
 {
-    Object* obj = null_obj;
-    
     if (global_identifier.size > 0)
     {
-        obj = global_get(inter, global_identifier);
-        assert(obj != nil_obj);
+        Reference ref = global_get(inter, global_identifier);
+        assert(is_valid(ref));
+        register_save(inter, index, ref);
     }
-    
-    register_save_root(inter, index, obj);
+    else
+    {
+        Reference ref = object_alloc(inter, vtype);
+        register_save(inter, index, ref);
+    }
 }
 
 void run_function_call(Interpreter* inter, i32 dst_index, FunctionDefinition* fn, Array<Value> parameters, CodeLocation code)
 {
     SCRATCH();
     
-    Object* return_object = null_obj;
+    Reference return_ref = ref_from_object(null_obj);
     
     if (fn->is_intrinsic)
     {
@@ -543,33 +625,37 @@ void run_function_call(Interpreter* inter, i32 dst_index, FunctionDefinition* fn
             return;
         }
         
-        Array<Object*> params = array_make<Object*>(scratch.arena, parameters.count);
+        Array<Reference> params = array_make<Reference>(scratch.arena, parameters.count);
         foreach(i, params.count) {
-            params[i] = object_from_value(inter, inter->current_scope, parameters[i]);
+            params[i] = ref_from_value(inter, inter->current_scope, parameters[i]);
         }
         
-        Array<Object*> returns = array_make<Object*>(scratch.arena, fn->returns.count);
+        Array<Reference> returns = array_make<Reference>(scratch.arena, fn->returns.count);
         
         fn->intrinsic.fn(inter, params, returns, code);
         
+        foreach(i, returns.count) {
+            assert(is_valid(returns[i]));
+        }
+        
         if (vtype_is_tuple(fn->return_vtype)) {
-            return_object = object_alloc(inter, fn->return_vtype);
+            return_ref = object_alloc(inter, fn->return_vtype);
             foreach(i, returns.count) {
-                object_set_child(inter, return_object, i, returns[i]);
+                ref_set_member(inter, return_ref, i, returns[i]);
             }
         }
         else if (fn->return_vtype != void_vtype) {
             assert(returns.count == 1);
-            return_object = returns[0];
+            return_ref = returns[0];
         }
     }
     else
     {
-        return_object = execute_IR(inter, fn->defined.ir, parameters, code);
+        return_ref = execute_IR(inter, fn->defined.ir, parameters, code);
     }
     
     if (dst_index >= 0) {
-        register_save_root(inter, dst_index, return_object);
+        register_save(inter, dst_index, return_ref);
     }
 }
 
@@ -579,20 +665,20 @@ void run_return(Interpreter* inter, CodeLocation code)
     scope->return_requested = true;
 }
 
-void run_jump(Interpreter* inter, Object* object, i32 condition, i32 offset, CodeLocation code)
+void run_jump(Interpreter* inter, Reference ref, i32 condition, i32 offset, CodeLocation code)
 {
     b32 jump = true;
     
     if (condition != 0)
     {
-        if (is_unknown(object)) return;
+        if (is_unknown(ref)) return;
         
-        if (!is_bool(object)) {
+        if (!is_bool(ref)) {
             report_expr_expects_bool(code, "If-Statement");
             return;
         }
         
-        jump = get_bool(object);
+        jump = get_bool(ref);
         if (condition < 0) jump = !jump;
     }
     
@@ -607,11 +693,22 @@ void run_jump(Interpreter* inter, Object* object, i32 condition, i32 offset, Cod
     }
 }
 
-Object* run_binary_operation(Interpreter* inter, Object* left, Object* right, BinaryOperator op, CodeLocation code)
+Reference run_binary_operation(Interpreter* inter, Reference dst, Reference left, Reference right, BinaryOperator op, CodeLocation code)
 {
     SCRATCH();
-    VariableType* left_vtype = left->vtype;
-    VariableType* right_vtype = right->vtype;
+    VariableType* left_vtype = left.vtype;
+    VariableType* right_vtype = right.vtype;
+    
+    b32 can_reuse_left = dst.address == left.address;
+    
+    if (is_reference(left) && left.vtype == right.vtype)
+    {
+        void* v0 = dereference(left).address;
+        void* v1 = dereference(right).address;
+        
+        if (op == BinaryOperator_Equals) return alloc_bool(inter, v0 == v1);
+        if (op == BinaryOperator_NotEquals) return alloc_bool(inter, v0 != v1);
+    }
     
     if (is_int(left) && is_int(right)) {
         if (op == BinaryOperator_Addition) return alloc_int(inter, get_int(left) + get_int(right));
@@ -643,9 +740,17 @@ Object* run_binary_operation(Interpreter* inter, Object* left, Object* right, Bi
     
     if (is_string(left) && is_string(right))
     {
-        if (op == BinaryOperator_Addition) {
-            String str = string_format(scratch.arena, "%S%S", get_string(left), get_string(right));
-            return alloc_string(inter, str);
+        if (op == BinaryOperator_Addition)
+        {
+            if (can_reuse_left)
+            {
+                ref_string_append(inter, dst, get_string(right));
+                return dst;
+            }
+            else {
+                String str = string_format(scratch.arena, "%S%S", get_string(left), get_string(right));
+                return alloc_string(inter, str);
+            }
         }
         else if (op == BinaryOperator_Division)
         {
@@ -671,8 +776,8 @@ Object* run_binary_operation(Interpreter* inter, Object* left, Object* right, Bi
     {
         i32 index = vtype_get_member(VType_Type, "ID").index;
         
-        i64 left_id = get_int(object_get_child(inter, left, index));
-        i64 right_id = get_int(object_get_child(inter, right, index));
+        i64 left_id = get_int(ref_get_member(inter, left, index));
+        i64 right_id = get_int(ref_get_member(inter, right, index));
         if (op == BinaryOperator_Equals) {
             return alloc_bool(inter, left_id == right_id);
         }
@@ -685,16 +790,23 @@ Object* run_binary_operation(Interpreter* inter, Object* left, Object* right, Bi
     {
         if (op == BinaryOperator_Addition)
         {
-            Object* string_object = is_string(left) ? left : right;
-            Object* codepoint_object = is_int(left) ? left : right;
+            Reference string_ref = is_string(left) ? left : right;
+            Reference codepoint_ref = is_int(left) ? left : right;
             
-            String codepoint_str = string_from_codepoint(scratch.arena, (u32)get_int(codepoint_object));
+            String codepoint_str = string_from_codepoint(scratch.arena, (u32)get_int(codepoint_ref));
             
-            String left_str = is_string(left) ? get_string(left) : codepoint_str;
-            String right_str = is_string(right) ? get_string(right) : codepoint_str;
-            
-            String str = string_format(scratch.arena, "%S%S", left_str, right_str);
-            return alloc_string(inter, str);
+            if (can_reuse_left && is_string(dst))
+            {
+                ref_string_append(inter, dst, codepoint_str);
+                return dst;
+            }
+            else {
+                String left_str = is_string(left) ? get_string(left) : codepoint_str;
+                String right_str = is_string(right) ? get_string(right) : codepoint_str;
+                
+                String str = string_format(scratch.arena, "%S%S", left_str, right_str);
+                return alloc_string(inter, str);
+            }
         }
     }
     
@@ -711,18 +823,18 @@ Object* run_binary_operation(Interpreter* inter, Object* left, Object* right, Bi
     {
         VariableType* element_vtype = left_vtype->child_next;
         
-        i32 left_count = get_array(left).count;
-        i32 right_count = get_array(right).count;
+        i32 left_count = get_array(left)->count;
+        i32 right_count = get_array(right)->count;
         
         if (op == BinaryOperator_Addition) {
-            Object* array = alloc_array(inter, element_vtype, left_count + right_count, true);
+            Reference array = alloc_array(inter, element_vtype, left_count + right_count, true);
             for (u32 i = 0; i < left_count; ++i) {
-                Object* src = object_get_child(inter, left, i);
-                object_set_child(inter, array, i, src);
+                Reference src = ref_get_child(inter, left, i, true);
+                ref_set_member(inter, array, i, src);
             }
             for (u32 i = 0; i < right_count; ++i) {
-                Object* src = object_get_child(inter, right, i);
-                object_set_child(inter, array, left_count + i, src);
+                Reference src = ref_get_child(inter, right, i, true);
+                ref_set_member(inter, array, left_count + i, src);
             }
             return array;
         }
@@ -735,47 +847,47 @@ Object* run_binary_operation(Interpreter* inter, Object* left, Object* right, Bi
         
         if (array_type->child_next->ID != element_type->ID) {
             report_type_missmatch_append(code, element_type->name, array_type->name);
-            return nil_obj;
+            return ref_from_object(nil_obj);
         }
         
-        Object* array_src = (left_vtype->kind == VariableKind_Array) ? left : right;
-        Object* element = (left_vtype->kind == VariableKind_Array) ? right : left;
+        Reference array_src = (left_vtype->kind == VariableKind_Array) ? left : right;
+        Reference element = (left_vtype->kind == VariableKind_Array) ? right : left;
         
-        i32 array_src_count = get_array(array_src).count;
-        Object* array = alloc_array(inter, element_type, array_src_count + 1, true);
+        i32 array_src_count = get_array(array_src)->count;
+        Reference array = alloc_array(inter, element_type, array_src_count + 1, true);
         
         i32 array_offset = (left_vtype->kind == VariableKind_Array) ? 0 : 1;
         
         for (i32 i = 0; i < array_src_count; ++i) {
-            Object* src = object_get_child(inter, array_src, i);
-            object_set_child(inter, array, i + array_offset, src);
+            Reference src = ref_get_child(inter, array_src, i, true);
+            ref_set_member(inter, array, i + array_offset, src);
         }
         
         i32 element_offset = (left_vtype->kind == VariableKind_Array) ? array_src_count : 0;
-        object_set_child(inter, array, element_offset, element);
+        ref_set_member(inter, array, element_offset, element);
         return array;
     }
     
     report_invalid_binary_op(code, left_vtype->name, string_from_binary_operator(op), right_vtype->name);
-    return nil_obj;
+    return ref_from_object(nil_obj);
 }
 
-Object* run_sign_operation(Interpreter* inter, Object* object, BinaryOperator op, CodeLocation code)
+Reference run_sign_operation(Interpreter* inter, Reference ref, BinaryOperator op, CodeLocation code)
 {
     SCRATCH();
     
-    VariableType* vtype = object->vtype;
+    VariableType* vtype = ref.vtype;
     
     if (vtype->ID == VTypeID_Int) {
-        if (op == BinaryOperator_Addition) return object;
-        if (op == BinaryOperator_Substraction) return alloc_int(inter, -get_int(object));
+        if (op == BinaryOperator_Addition) return ref;
+        if (op == BinaryOperator_Substraction) return alloc_int(inter, -get_int(ref));
     }
     
     if (vtype->ID == VTypeID_Bool) {
-        if (op == BinaryOperator_LogicalNot) return alloc_bool(inter, !get_bool(object));
+        if (op == BinaryOperator_LogicalNot) return alloc_bool(inter, !get_bool(ref));
     }
     
-    return nil_obj;
+    return ref_from_object(nil_obj);
 }
 
 //- SCOPE
@@ -788,83 +900,46 @@ void scope_clear(Interpreter* inter, Scope* scope)
     }
     
     foreach(i, scope->registers.count) {
-        object_decrement_ref(scope->registers[i].object);
+        object_decrement_ref(scope->registers[i].parent);
     }
 }
 
-void register_save_root(Interpreter* inter, i32 index, Object* object)
+void register_save(Interpreter* inter, i32 index, Reference ref)
 {
     Scope* scope = inter->current_scope;
-    object_decrement_ref(scope->registers[index].object);
+    Reference* reg = &scope->registers[index];
     
-    scope->registers[index] = register_make_root(index, object);
-    object_increment_ref(object);
+    object_decrement_ref(reg->parent);
+    *reg = ref;
+    object_increment_ref(reg->parent);
 }
 
-void register_save_child(Interpreter* inter, i32 index, Object* object, Object* parent, i32 child_index)
-{
-    Scope* scope = inter->current_scope;
-    object_decrement_ref(scope->registers[index].object);
-    
-    scope->registers[index] = register_make_child(object, parent, child_index);
-    object_increment_ref(object);
-}
-
-void register_save_reference(Interpreter* inter, i32 index, Object* object)
-{
-    Scope* scope = inter->current_scope;
-    Register* reg = &scope->registers[index];
-    
-    if (reg->parent == NULL) {
-        register_save_root(inter, index, object);
-    }
-    else {
-        object_decrement_ref(reg->object);
-        object_set_child(inter, reg->parent, reg->child_index, object);
-        
-        reg->object = object;
-        object_increment_ref(object);
-    }
-}
-
-Object* register_get(Scope* scope, i32 index) {
-    return scope->registers[index].object;
-}
-
-Register register_make_root(i32 index, Object* object)
-{
-    Register reg{};
-    reg.object = object;
-    reg.child_index = -1;
-    return reg;
-}
-
-Register register_make_child(Object* object, Object* parent, i32 child_index)
-{
-    Register reg{};
-    reg.object = object;
-    reg.parent = parent;
-    reg.child_index = child_index;
-    return reg;
+Reference register_get(Scope* scope, i32 index) {
+    return scope->registers[index];
 }
 
 //- OBJECT 
 
 String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 raw) {
+    return string_from_ref(arena, inter, ref_from_object(object), raw);
+}
+
+String string_from_ref(Arena* arena, Interpreter* inter, Reference ref, b32 raw)
+{
     SCRATCH(arena);
     
-    if (is_null(object)) {
+    if (is_null(ref)) {
         return "null";
     }
     
-    VariableType* vtype = object->vtype;
+    VariableType* vtype = ref.vtype;
     
     if (vtype->ID == VTypeID_String) {
-        if (raw) return get_string(object);
-        return string_format(arena, "\"%S\"", get_string(object));
+        if (raw) return get_string(ref);
+        return string_format(arena, "\"%S\"", get_string(ref));
     }
-    if (vtype->ID == VTypeID_Int) { return string_format(arena, "%l", get_int(object)); }
-    if (vtype->ID == VTypeID_Bool) { return get_bool(object) ? "true" : "false"; }
+    if (vtype->ID == VTypeID_Int) { return string_format(arena, "%l", get_int(ref)); }
+    if (vtype->ID == VTypeID_Bool) { return get_bool(ref) ? "true" : "false"; }
     if (vtype->ID == VTypeID_Void) { return "void"; }
     if (vtype->ID == VTypeID_Unknown) { return "unknown"; }
     
@@ -874,12 +949,12 @@ String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 
         
         append(&builder, "{ ");
         
-        Array<Object*> array = get_array(object);
+        ObjectData_Array* array = get_array(ref);
         
-        foreach(i, array.count) {
-            Object* element = array[i];
-            append(&builder, string_from_object(scratch.arena, inter, element, false));
-            if (i < array.count - 1) append(&builder, ", ");
+        foreach(i, array->count) {
+            Reference element = ref_get_member(inter, ref, i);
+            append(&builder, string_from_ref(scratch.arena, inter, element, false));
+            if (i < array->count - 1) append(&builder, ", ");
         }
         
         append(&builder, " }");
@@ -889,7 +964,7 @@ String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 
     
     if (vtype->kind == VariableKind_Enum)
     {
-        i64 index = get_enum_index(object);
+        i64 index = get_enum_index(ref);
         if (index < 0 || index >= vtype->_enum.names.count) return "?";
         String name = vtype->_enum.names[(u32)index];
         if (!raw) name = string_format(arena, "\"%S\"", name);
@@ -902,13 +977,12 @@ String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 
         
         append(&builder, "{ ");
         
-        Object_Struct* struct_obj = (Object_Struct*)object;
-        
         foreach(i, vtype->_struct.vtypes.count)
         {
             String member_name = vtype->_struct.names[i];
-            Object* member = struct_obj->members[i];
-            appendf(&builder, "%S = %S", member_name, string_from_object(scratch.arena, inter, member, false));
+            
+            Reference member = ref_get_member(inter, ref, i);
+            appendf(&builder, "%S = %S", member_name, string_from_ref(scratch.arena, inter, member, false));
             if (i < vtype->_struct.vtypes.count - 1) append(&builder, ", ");
         }
         
@@ -917,191 +991,239 @@ String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 
         return string_from_builder(arena, &builder);
     }
     
+    if (vtype->kind == VariableKind_Reference) {
+        return string_from_ref(arena, inter, dereference(ref), raw);
+    }
+    
     invalid_codepath();
     return "?";
 }
 
-Array<Object*> object_get_childs_objects(Arena* arena, Interpreter* inter, Object* obj)
+String string_from_compiletime(Arena* arena, Interpreter* inter, Value value, b32 raw)
 {
-    VariableType* vtype = obj->vtype;
-    
-    if (vtype->kind == VariableKind_Array) {
-        return ((Object_Array*)obj)->elements;
-    }
-    else if (vtype->kind == VariableKind_Struct) {
-        return ((Object_Struct*)obj)->members;
-    }
-    else if (vtype->kind == VariableKind_Primitive) {}
-    else if (vtype->kind == VariableKind_Enum) {}
-    else {
+    if (!value_is_compiletime(value)) {
         invalid_codepath();
+        return {};
     }
-    
-    return {};
+    Reference ref = ref_from_value(inter, inter->global_scope, value);
+    String str = string_from_ref(arena, inter, ref, raw);
+    object_free_unused_memory(inter);
+    return str;
 }
 
-b32 object_set_child(Interpreter* inter, Object* obj, u32 index, Object* child)
+b32 bool_from_compiletime(Interpreter* inter, Value value)
 {
-    VariableType* vtype = obj->vtype;
+    if (!value_is_compiletime(value)) {
+        invalid_codepath();
+        return false;
+    }
+    Reference ref = ref_from_value(inter, inter->global_scope, value);
+    if (ref.vtype->ID != VTypeID_Bool) {
+        invalid_codepath();
+        return false;
+    }
+    b32 res = get_bool(ref);
+    object_free_unused_memory(inter);
+    return res;
+}
+
+VariableType* type_from_compiletime(Interpreter* inter, Value value)
+{
+    if (!value_is_compiletime(value)) {
+        invalid_codepath();
+        return nil_vtype;
+    }
+    Reference ref = ref_from_value(inter, inter->global_scope, value);
+    if (ref.vtype != VType_Type) {
+        invalid_codepath();
+        return nil_vtype;
+    }
+    
+    VariableType* res = get_Type(inter, ref);
+    object_free_unused_memory(inter);
+    return res;
+}
+
+Reference ref_from_object(Object* object)
+{
+    Reference ref = {};
+    ref.parent = object;
+    ref.vtype = object->vtype;
+    ref.address = object + 1;
+    return ref;
+}
+
+Reference ref_from_address(Object* parent, VariableType* vtype, void* address)
+{
+    Reference member = {};
+    member.parent = parent;
+    member.vtype = vtype;
+    member.address = address;
+    return member;
+}
+
+void ref_set_member(Interpreter* inter, Reference ref, u32 index, Reference member)
+{
+    Reference dst = ref_get_member(inter, ref, index);
+    ref_copy(inter, dst, member);
+}
+
+Reference ref_get_child(Interpreter* inter, Reference ref, u32 index, b32 is_member)
+{
+    if (is_member) {
+        Reference child = ref_get_member(inter, ref, index);
+        // TODO(Jose): What about memory requirements
+        return child;
+    }
+    else return ref_get_property(inter, ref, index);
+}
+
+Reference ref_get_member(Interpreter* inter, Reference ref, u32 index)
+{
+    if (is_unknown(ref) || is_null(ref)) {
+        invalid_codepath();
+        return ref_from_object(nil_obj);
+    }
+    
+    VariableType* vtype = ref.vtype;
     
     if (vtype->kind == VariableKind_Array)
     {
-        Array<Object*> array = ((Object_Array*)obj)->elements;
-        if (index >= array.count) {
-            return false;
+        ObjectData_Array* array = get_array(ref);
+        
+        if (index >= array->count) {
+            invalid_codepath();
+            return ref_from_object(nil_obj);
         }
-        object_decrement_ref(array[index]);
-        array[index] = child;
-        object_increment_ref(child);
-        return true;
+        
+        VariableType* element_vtype = ref.vtype->child_next;
+        
+        u32 offset = element_vtype->size * index;
+        return ref_from_address(ref.parent, element_vtype, array->data + offset);
     }
-    else if (vtype->kind == VariableKind_Struct)
-    {
-        Array<Object*> array = ((Object_Struct*)obj)->members;
-        if (index >= array.count) {
-            return false;
-        }
-        object_decrement_ref(array[index]);
-        array[index] = child;
-        object_increment_ref(child);
-        return true;
-    }
-    else {
-        invalid_codepath();
-    }
-    
-    return {};
-}
-
-b32 object_set_member(Interpreter* inter, Object* object, String member_name, Object* child)
-{
-    VariableType* vtype = object->vtype;
     
     if (vtype->kind == VariableKind_Struct)
     {
-        foreach(i, vtype->_struct.names.count)
-        {
-            if (string_equals(member_name, vtype->_struct.names[i])) {
-                return object_set_child(inter, object, i, child);
-            }
+        Array<VariableType*> vtypes = vtype->_struct.vtypes;
+        
+        if (index >= vtypes.count) {
+            invalid_codepath();
+            return ref_from_object(nil_obj);
         }
+        
+        u8* data = (u8*)ref.address;
+        u32 offset = vtype->_struct.offsets[index];
+        
+        return ref_from_address(ref.parent, vtypes[index], data + offset);
     }
     
-    return false;
+    invalid_codepath();
+    return ref_from_object(nil_obj);
 }
 
-Object* object_get_child(Interpreter* inter, Object* object, u32 index, b32 is_member)
+Reference ref_get_property(Interpreter* inter, Reference ref, u32 index)
 {
-    if (is_unknown(object) || is_null(object)) {
+    if (is_unknown(ref) || is_null(ref)) {
         invalid_codepath();
-        return nil_obj;
+        return ref_from_object(nil_obj);
     }
     
-    VariableType* vtype = object->vtype;
+    VariableType* vtype = ref.vtype;
     
-    if (is_member)
+    if (vtype->ID == VTypeID_String)
     {
-        if (vtype->kind == VariableKind_Array || vtype->kind == VariableKind_Struct)
-        {
-            Array<Object*> array = {};
-            
-            if (vtype->kind == VariableKind_Array) array = ((Object_Array*)object)->elements;
-            else if (vtype->kind == VariableKind_Struct) array = ((Object_Struct*)object)->members;
-            
-            if (index < 0 || index >= array.count) {
-                invalid_codepath();
-                return nil_obj;
-            }
-            
-            return array[index];
-        }
+        if (index == 0) return alloc_int(inter, get_string(ref).size);
     }
-    else
+    
+    if (vtype->kind == VariableKind_Array)
     {
-        if (vtype->ID == VTypeID_String)
-        {
-            if (index == 0) return alloc_int(inter, get_string(object).size);
+        if (index == 0) return alloc_int(inter, get_array(ref)->count);
+    }
+    
+    if (vtype->kind == VariableKind_Enum)
+    {
+        i64 v = get_enum_index(ref);
+        if (index == 0) return alloc_int(inter, v);
+        if (index == 1) {
+            if (v < 0 || v >= vtype->_enum.values.count) return alloc_int(inter, -1);
+            return alloc_int(inter, vtype->_enum.values[v]);
         }
-        
-        if (vtype->kind == VariableKind_Array)
-        {
-            if (index == 0) return alloc_int(inter, get_array(object).count);
-        }
-        
-        if (vtype->kind == VariableKind_Enum)
-        {
-            i64 v = get_enum_index(object);
-            if (index == 0) return alloc_int(inter, v);
-            if (index == 1) {
-                if (v < 0 || v >= vtype->_enum.values.count) return alloc_int(inter, -1);
-                return alloc_int(inter, vtype->_enum.values[v]);
-            }
-            if (index == 2) {
-                if (v < 0 || v >= vtype->_enum.names.count) return alloc_string(inter, "?");
-                return alloc_string(inter, vtype->_enum.names[v]);
-            }
+        if (index == 2) {
+            if (v < 0 || v >= vtype->_enum.names.count) return alloc_string(inter, "?");
+            return alloc_string(inter, vtype->_enum.names[v]);
         }
     }
     
     invalid_codepath();
-    return nil_obj;
+    return ref_from_object(nil_obj);
 }
 
-Object* alloc_int(Interpreter* inter, i64 value)
+u32 ref_get_child_count(Reference ref, b32 is_member)
 {
-    Object* obj = object_alloc(inter, VType_Int);
-    set_int(obj, value);
-    return obj;
+    if (is_member) return ref_get_member_count(ref);
+    else return ref_get_property_count(ref);
 }
 
-Object* alloc_bool(Interpreter* inter, b32 value)
+u32 ref_get_property_count(Reference ref) {
+    return vtype_get_properties(ref.vtype).count;
+}
+
+u32 ref_get_member_count(Reference ref)
 {
-    Object* obj = object_alloc(inter, VType_Bool);
-    set_bool(obj, value);
-    return obj;
+    if (ref.vtype->kind == VariableKind_Array) {
+        return get_array(ref)->count;
+    }
+    else if (ref.vtype->kind == VariableKind_Struct) {
+        return ref.vtype->_struct.vtypes.count;
+    }
+    return 0;
 }
 
-Object* alloc_string(Interpreter* inter, String value)
+Reference alloc_int(Interpreter* inter, i64 value)
 {
-    Object* obj = object_alloc(inter, VType_String);
-    set_string(inter, obj, value);
-    return obj;
+    Reference ref = object_alloc(inter, VType_Int);
+    set_int(ref, value);
+    return ref;
 }
 
-Object* alloc_array(Interpreter* inter, VariableType* element_vtype, i64 count, b32 null_elements)
+Reference alloc_bool(Interpreter* inter, b32 value)
+{
+    Reference ref = object_alloc(inter, VType_Bool);
+    set_bool(ref, value);
+    return ref;
+}
+
+Reference alloc_string(Interpreter* inter, String value)
+{
+    Reference ref = object_alloc(inter, VType_String);
+    ref_string_set(inter, ref, value);
+    return ref;
+}
+
+Reference alloc_array(Interpreter* inter, VariableType* element_vtype, i64 count, b32 null_elements)
 {
     VariableType* vtype = vtype_from_dimension(element_vtype, 1);
     
     if (vtype->kind != VariableKind_Array) {
         invalid_codepath();
-        return nil_obj;
+        return ref_from_object(nil_obj);
     }
     
-    Object_Array* obj = (Object_Array*)object_alloc(inter, vtype);
+    Reference ref = object_alloc(inter, vtype);
+    ObjectData_Array* array = get_array(ref);
     
-    Object** element_memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * count);
-    obj->elements = array_make(element_memory, (u32)count);
+    u32 element_size = element_vtype->size;
     
-    if (null_elements) {
-        foreach(i, obj->elements.count) {
-            obj->elements[i] = null_obj;
-        }
-    }
-    else {
-        foreach(i, obj->elements.count) {
-            obj->elements[i] = object_alloc(inter, element_vtype);
-            object_increment_ref(obj->elements[i]);
-        }
-    }
-    
-    return obj;
+    array->data = (u8*)object_dynamic_allocate(inter, element_size * count);
+    array->count = (u32)count;
+    return ref;
 }
 
-Object* alloc_array_multidimensional(Interpreter* inter, VariableType* base_vtype, Array<i64> dimensions)
+Reference alloc_array_multidimensional(Interpreter* inter, VariableType* base_vtype, Array<i64> dimensions)
 {
     if (dimensions.count <= 0) {
         invalid_codepath();
-        return nil_obj;
+        return ref_from_object(nil_obj);
     }
     
     VariableType* vtype = vtype_from_dimension(base_vtype, dimensions.count);
@@ -1113,10 +1235,12 @@ Object* alloc_array_multidimensional(Interpreter* inter, VariableType* base_vtyp
     }
     else
     {
+        invalid_codepath();
+#if 0// TODO(Jose): 
         Object_Array* obj = (Object_Array*)object_alloc(inter, vtype);
         
         u32 count = (u32)dimensions[0];
-        Object** element_memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * count);
+        Object** element_memory = (Object**)object_dynamic_allocate(inter, sizeof(Object*) * count);
         obj->elements = array_make(element_memory, count);
         
         foreach(i, obj->elements.count) {
@@ -1125,268 +1249,381 @@ Object* alloc_array_multidimensional(Interpreter* inter, VariableType* base_vtyp
         }
         
         return obj;
+#endif
+        return ref_from_object(nil_obj);
     }
 }
 
-Object* alloc_array_from_enum(Interpreter* inter, VariableType* enum_vtype)
+Reference alloc_array_from_enum(Interpreter* inter, VariableType* enum_vtype)
 {
     if (enum_vtype->kind != VariableKind_Enum) {
         invalid_codepath();
-        return nil_obj;
+        return ref_from_object(nil_obj);
     }
     
+    invalid_codepath();
+#if 0// TODO(Jose): 
     Object_Array* array = (Object_Array*)alloc_array(inter, enum_vtype, enum_vtype->_enum.values.count, false);
     foreach(i, array->elements.count) {
         Object* element = array->elements[i];
         set_enum_index(element, i);
     }
     return array;
+#endif
+    return ref_from_object(nil_obj);
 }
 
-Object* alloc_enum(Interpreter* inter, VariableType* vtype, i64 index)
+Reference alloc_enum(Interpreter* inter, VariableType* vtype, i64 index)
 {
-    Object* obj = object_alloc(inter, vtype);
-    set_enum_index(obj, index);
-    return obj;
+    Reference ref = object_alloc(inter, vtype);
+    set_enum_index(ref, index);
+    return ref;
 }
 
-b32 is_valid(Object* obj) {
-    return !is_unknown(obj);
-}
-b32 is_unknown(Object* obj) {
-    if (obj == NULL) return true;
-    return obj->vtype->ID == VTypeID_Unknown;
+Reference alloc_reference(Interpreter* inter, Reference ref)
+{
+    Reference res = object_alloc(inter, vtype_from_reference(ref.vtype));
+    set_reference(inter, res, ref);
+    return res;
 }
 
-b32 is_const(Object* obj) {
+b32 is_valid(Reference ref) {
+    return !is_unknown(ref);
+}
+b32 is_unknown(Reference ref) {
+    if (ref.parent == NULL) return true;
+    if (ref.vtype->ID == VTypeID_Unknown) return true;
+    return ref.parent->vtype->ID == VTypeID_Unknown;
+}
+
+b32 is_const(Reference ref) {
     // TODO(Jose): return value.kind == ValueKind_LValue && value.lvalue.ref->constant;
     return false;
 }
 
-b32 is_null(Object* obj) {
-    if (obj == NULL) return true;
-    return obj->vtype == void_vtype;
+b32 is_null(Reference ref) {
+    if (is_unknown(ref)) return true;
+    return ref.vtype == void_vtype && ref.parent->vtype == void_vtype;
 }
 
-b32 is_int(Object* obj) { return obj->vtype->ID == VTypeID_Int; }
-b32 is_bool(Object* obj) { return obj->vtype->ID == VTypeID_Bool; }
-b32 is_string(Object* obj) { return obj->vtype->ID == VTypeID_String; }
+b32 is_int(Reference ref) { return is_valid(ref) && ref.vtype->ID == VTypeID_Int; }
+b32 is_bool(Reference ref) { return is_valid(ref) && ref.vtype->ID == VTypeID_Bool; }
+b32 is_string(Reference ref) { return is_valid(ref) && ref.vtype->ID == VTypeID_String; }
 
-b32 is_array(Object* obj) {
-    if (is_unknown(obj)) return false;
-    return vtype_is_array(obj->vtype);
+b32 is_array(Reference ref) {
+    if (is_unknown(ref)) return false;
+    return vtype_is_array(ref.vtype);
 }
 
-b32 is_enum(Object* obj) {
-    if (is_unknown(obj)) return false;
-    return vtype_is_enum(obj->vtype);
+b32 is_enum(Reference ref) {
+    if (is_unknown(ref)) return false;
+    return vtype_is_enum(ref.vtype);
 }
 
-i64 get_int(Object* obj)
+b32 is_reference(Reference ref) {
+    if (is_unknown(ref)) return false;
+    return vtype_is_reference(ref.vtype);
+}
+
+i64 get_int(Reference ref)
 {
-    if (!is_int(obj)) {
+    if (!is_int(ref)) {
         invalid_codepath();
         return 0;
     }
     
-    Object_Int* obj0 = (Object_Int*)obj;
-    return obj0->value;
+    i64* data = (i64*)ref.address;
+    assert(ref.vtype->size == sizeof(i64));
+    return *data;
 }
 
-b32 get_bool(Object* obj)
+b32 get_bool(Reference ref)
 {
-    if (!is_bool(obj)) {
+    if (!is_bool(ref)) {
+        invalid_codepath();
+        return false;
+    }
+    
+    b32* data = (b32*)ref.address;
+    assert(ref.vtype->size == sizeof(b32));
+    return *data;
+}
+
+i64 get_enum_index(Reference ref) {
+    if (!is_enum(ref)) {
         invalid_codepath();
         return 0;
     }
     
-    Object_Bool* obj0 = (Object_Bool*)obj;
-    return obj0->value;
+    i64* data = (i64*)ref.address;
+    assert(ref.vtype->size == sizeof(i64));
+    return *data;
 }
 
-i64 get_enum_index(Object* obj) {
-    if (!is_enum(obj)) {
+String get_string(Reference ref)
+{
+    if (!is_string(ref)) {
         invalid_codepath();
         return 0;
     }
     
-    Object_Enum* obj0 = (Object_Enum*)obj;
-    return obj0->index;
+    ObjectData_String* data = (ObjectData_String*)ref.address;
+    assert(ref.vtype->size == sizeof(ObjectData_String));
+    return string_make(data->chars, data->size);
 }
 
-String get_string(Object* obj)
+ObjectData_Array* get_array(Reference ref)
 {
-    if (!is_string(obj)) {
-        invalid_codepath();
-        return 0;
-    }
-    
-    Object_String* obj0 = (Object_String*)obj;
-    return obj0->value;
-}
-
-Array<Object*> get_array(Object* obj)
-{
-    if (!is_array(obj)) {
+    if (!is_array(ref)) {
         invalid_codepath();
         return {};
     }
     
-    Object_Array* obj0 = (Object_Array*)obj;
-    return obj0->elements;
+    ObjectData_Array* array = (ObjectData_Array*)ref.address;
+    assert(ref.vtype->size == sizeof(ObjectData_Array));
+    return array;
 }
 
-i64 get_int_member(Interpreter* inter, Object* obj, String member)
+Reference dereference(Reference ref)
 {
-    i32 index = vtype_get_member(obj->vtype, member).index;
-    Object* member_object = object_get_child(inter, obj, index);
-    return get_int(member_object);
+    if (!is_reference(ref)) {
+        invalid_codepath();
+        return {};
+    }
+    
+    ObjectData_Ref* data = (ObjectData_Ref*)ref.address;
+    assert(ref.vtype->size == sizeof(ObjectData_Ref));
+    
+    if (data->parent == null_obj || data->parent == NULL) {
+        return ref_from_object(null_obj);
+    }
+    
+    Reference deref = {};
+    deref.parent = data->parent;
+    deref.address = data->address;
+    deref.vtype = ref.vtype->child_next;
+    return deref;
 }
 
-b32 get_bool_member(Interpreter* inter, Object* obj, String member)
+i64 get_int_member(Interpreter* inter, Reference ref, String member)
 {
-    i32 index = vtype_get_member(obj->vtype, member).index;
-    Object* member_object = object_get_child(inter, obj, index);
-    return get_bool(member_object);
+    i32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(inter, ref, index);
+    return get_int(member_ref);
 }
 
-String get_string_member(Interpreter* inter, Object* obj, String member)
+b32 get_bool_member(Interpreter* inter, Reference ref, String member)
 {
-    i32 index = vtype_get_member(obj->vtype, member).index;
-    Object* member_object = object_get_child(inter, obj, index);
-    return get_string(member_object);
+    i32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(inter, ref, index);
+    return get_bool(member_ref);
 }
 
-void set_int(Object* obj, i64 v)
+String get_string_member(Interpreter* inter, Reference ref, String member)
 {
-    if (!is_int(obj)) {
+    i32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(inter, ref, index);
+    return get_string(member_ref);
+}
+
+void set_int(Reference ref, i64 v)
+{
+    if (!is_int(ref)) {
         invalid_codepath();
         return;
     }
     
-    Object_Int* obj_int = (Object_Int*)obj;
-    obj_int->value = v;
+    i64* data = (i64*)ref.address;
+    assert(ref.vtype->size == sizeof(i64));
+    *data = v;
 }
 
-void set_bool(Object* obj, b32 v)
+void set_bool(Reference ref, b32 v)
 {
-    if (!is_bool(obj)) {
+    if (!is_bool(ref)) {
         invalid_codepath();
         return;
     }
     
-    Object_Bool* obj_bool = (Object_Bool*)obj;
-    obj_bool->value = v;
+    b32* data = (b32*)ref.address;
+    assert(ref.vtype->size == sizeof(b32));
+    *data = v;
 }
 
-void set_enum_index(Object* obj, i64 v)
+void set_enum_index(Reference ref, i64 v)
 {
-    if (!is_enum(obj)) {
+    if (!is_enum(ref)) {
         invalid_codepath();
         return;
     }
     
-    Object_Enum* obj_enum = (Object_Enum*)obj;
-    obj_enum->index = v;
+    i64* data = (i64*)ref.address;
+    assert(ref.vtype->size == sizeof(i64));
+    *data = v;
 }
 
-void set_string(Interpreter* inter, Object* obj, String v)
+ObjectData_String* ref_string_get_data(Interpreter* inter, Reference ref)
 {
-    if (!is_string(obj)) {
+    if (!is_string(ref)) {
+        invalid_codepath();
+        return NULL;
+    }
+    
+    ObjectData_String* data = (ObjectData_String*)ref.address;
+    assert(ref.vtype->size == sizeof(ObjectData_String));
+    
+    return data;
+}
+
+void ref_string_prepare(Interpreter* inter, Reference ref, u64 new_size, b32 can_discard)
+{
+    ObjectData_String* data = ref_string_get_data(inter, ref);
+    if (data == NULL) return;
+    
+    if (data->capacity > 0 && new_size <= 0)
+    {
+        object_dynamic_free(inter, data->chars);
+        *data = {};
+        return;
+    }
+    
+    if (new_size <= data->capacity) return;
+    
+    data->capacity = MAX(new_size, data->capacity * 2);
+    
+    char* old_chars = data->chars;
+    char* new_chars = (char*)object_dynamic_allocate(inter, data->capacity);
+    
+    if (!can_discard) memory_copy(new_chars, old_chars, data->size);
+    
+    object_dynamic_free(inter, old_chars);
+    data->chars = new_chars;
+}
+
+void ref_string_clear(Interpreter* inter, Reference ref)
+{
+    ObjectData_String* data = ref_string_get_data(inter, ref);
+    if (data == NULL) return;
+    object_dynamic_free(inter, data->chars);
+    *data = {};
+}
+
+void ref_string_set(Interpreter* inter, Reference ref, String v)
+{
+    ObjectData_String* data = ref_string_get_data(inter, ref);
+    if (data == NULL) return;
+    
+    ref_string_prepare(inter, ref, v.size, true);
+    
+    memory_copy(data->chars, v.data, v.size);
+    data->size = v.size;
+}
+
+void ref_string_append(Interpreter* inter, Reference ref, String v)
+{
+    ObjectData_String* data = ref_string_get_data(inter, ref);
+    if (data == NULL) return;
+    
+    u64 new_size = data->size + v.size;
+    ref_string_prepare(inter, ref, new_size, false);
+    
+    memory_copy(data->chars + data->size, v.data, v.size);
+    data->size = new_size;
+}
+
+void set_reference(Interpreter* inter, Reference ref, Reference src)
+{
+    if (!is_reference(ref) || (!is_null(src) && ref.vtype->child_next != src.vtype)) {
         invalid_codepath();
         return;
     }
     
-    Object_String* obj_str = (Object_String*)obj;
+    ObjectData_Ref* data = (ObjectData_Ref*)ref.address;
+    assert(ref.vtype->size == sizeof(ObjectData_Ref));
     
-    char* old_data = obj_str->value.data;
-    char* new_data = (v.size > 0) ? (char*)gc_dynamic_allocate(inter, v.size) : NULL;
-    
-    memory_copy(new_data, v.data, v.size);
-    if (old_data != NULL) gc_dynamic_free(inter, old_data);
-    
-    obj_str->value.data = new_data;
-    obj_str->value.size = v.size;
+    object_decrement_ref(data->parent);
+    data->parent = src.parent;
+    data->address = src.address;
+    object_increment_ref(data->parent);
 }
 
-void set_int_member(Interpreter* inter, Object* obj, String member, i64 v)
+void set_int_member(Interpreter* inter, Reference ref, String member, i64 v)
 {
-    i32 index = vtype_get_member(obj->vtype, member).index;
-    Object* member_object = object_get_child(inter, obj, index);
-    if (is_unknown(member_object)) return;
-    if (is_null(member_object)) object_set_member(inter, obj, member, alloc_int(inter, v));
-    else set_int(member_object, v);
+    i32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(inter, ref, index);
+    if (is_unknown(member_ref)) return;
+    if (is_null(member_ref)) ref_set_member(inter, ref, index, alloc_int(inter, v));
+    else set_int(member_ref, v);
 }
 
-void set_bool_member(Interpreter* inter, Object* obj, String member, b32 v)
+void set_bool_member(Interpreter* inter, Reference ref, String member, b32 v)
 {
-    i32 index = vtype_get_member(obj->vtype, member).index;
-    Object* member_object = object_get_child(inter, obj, index);
-    if (is_unknown(member_object)) return;
-    if (is_null(member_object)) object_set_member(inter, obj, member, alloc_bool(inter, v));
-    else set_bool(member_object, v);
+    i32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(inter, ref, index);
+    if (is_unknown(member_ref)) return;
+    if (is_null(member_ref)) ref_set_member(inter, ref, index, alloc_bool(inter, v));
+    else set_bool(member_ref, v);
 }
 
-void set_enum_index_member(Interpreter* inter, Object* obj, String member, i64 v)
+void set_enum_index_member(Interpreter* inter, Reference ref, String member, i64 v)
 {
-    i32 index = vtype_get_member(obj->vtype, member).index;
-    Object* member_object = object_get_child(inter, obj, index);
-    if (is_unknown(member_object)) return;
-    if (is_null(member_object)) {
-        VariableTypeChild info = vtype_get_member(obj->vtype, member);
-        object_set_member(inter, obj, member, alloc_enum(inter, info.vtype, v));
+    i32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(inter, ref, index);
+    if (is_unknown(member_ref)) return;
+    if (is_null(member_ref)) {
+        VariableTypeChild info = vtype_get_member(ref.vtype, member);
+        ref_set_member(inter, ref, index, alloc_enum(inter, info.vtype, v));
     }
-    else set_enum_index(member_object, v);
+    else set_enum_index(member_ref, v);
 }
 
-void set_string_member(Interpreter* inter, Object* obj, String member, String v)
+void ref_member_set_string(Interpreter* inter, Reference ref, String member, String v)
 {
-    i32 index = vtype_get_member(obj->vtype, member).index;
-    Object* member_object = object_get_child(inter, obj, index);
-    if (is_unknown(member_object)) return;
-    if (is_null(member_object)) object_set_member(inter, obj, member, alloc_string(inter, v));
-    else set_string(inter, member_object, v);
+    i32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(inter, ref, index);
+    if (is_unknown(member_ref)) return;
+    if (is_null(member_ref)) ref_set_member(inter, ref, index, alloc_string(inter, v));
+    else ref_string_set(inter, member_ref, v);
 }
 
-void object_assign_Result(Interpreter* inter, Object* obj, Result res)
+void ref_assign_Result(Interpreter* inter, Reference ref, Result res)
 {
-    set_string_member(inter, obj, "message", res.message);
-    set_int_member(inter, obj, "code", res.code);
-    set_bool_member(inter, obj, "failed", res.failed);
+    assert(ref.vtype == VType_Result);
+    ref_member_set_string(inter, ref, "message", res.message);
+    set_int_member(inter, ref, "code", res.code);
+    set_bool_member(inter, ref, "failed", res.failed);
 }
 
-void object_assign_CallOutput(Interpreter* inter, Object* obj, CallOutput res)
+void ref_assign_CallOutput(Interpreter* inter, Reference ref, CallOutput res)
 {
-    set_string_member(inter, obj, "stdout", res.stdout);
+    assert(ref.vtype == VType_CallOutput);
+    ref_member_set_string(inter, ref, "stdout", res.stdout);
 }
 
-void object_assign_FileInfo(Interpreter* inter, Object* obj, FileInfo info)
+void ref_assign_FileInfo(Interpreter* inter, Reference ref, FileInfo info)
 {
-    set_string_member(inter, obj, "path", info.path);
-    set_bool_member(inter, obj, "is_directory", info.is_directory);
+    assert(ref.vtype == VType_FileInfo);
+    ref_member_set_string(inter, ref, "path", info.path);
+    set_bool_member(inter, ref, "is_directory", info.is_directory);
 }
 
-void object_assign_Type(Interpreter* inter, Object* obj, VariableType* vtype)
+void ref_assign_YovParseOutput(Interpreter* inter, Reference ref, Yov* temp_yov)
 {
-    set_int_member(inter, obj, "ID", vtype->ID);
-    set_string_member(inter, obj, "name", vtype->name);
-}
-
-void object_assign_YovParseOutput(Interpreter* inter, Object* obj, Yov* temp_yov)
-{
+    assert(ref.vtype == VType_YovParseOutput);
+    
     SCRATCH();
-    PooledArray<Object*> functions = pooled_array_make<Object*>(scratch.arena, 8);
-    PooledArray<Object*> structs = pooled_array_make<Object*>(scratch.arena, 8);
-    PooledArray<Object*> enums = pooled_array_make<Object*>(scratch.arena, 8);
-    PooledArray<Object*> globals = pooled_array_make<Object*>(scratch.arena, 8);
-    PooledArray<Object*> reports = pooled_array_make<Object*>(scratch.arena, 8);
+    PooledArray<Reference> functions = pooled_array_make<Reference>(scratch.arena, 8);
+    PooledArray<Reference> structs = pooled_array_make<Reference>(scratch.arena, 8);
+    PooledArray<Reference> enums = pooled_array_make<Reference>(scratch.arena, 8);
+    PooledArray<Reference> globals = pooled_array_make<Reference>(scratch.arena, 8);
+    PooledArray<Reference> reports = pooled_array_make<Reference>(scratch.arena, 8);
     
     for (auto it = pooled_array_make_iterator(&temp_yov->functions); it.valid; ++it) {
         FunctionDefinition* fn = it.value;
         
-        Object* obj = object_alloc(inter, VType_FunctionDefinition);
-        object_assign_FunctionDefinition(inter, obj, fn);
-        array_add(&functions, obj);
+        Reference ref = object_alloc(inter, VType_FunctionDefinition);
+        ref_assign_FunctionDefinition(inter, ref, fn);
+        array_add(&functions, ref);
     }
     
     for (auto it = pooled_array_make_iterator(&temp_yov->vtype_table); it.valid; ++it) {
@@ -1396,15 +1633,15 @@ void object_assign_YovParseOutput(Interpreter* inter, Object* obj, Yov* temp_yov
         {
             if (vtype->_struct.is_tuple) continue;
             
-            Object* obj = object_alloc(inter, VType_StructDefinition);
-            object_assign_StructDefinition(inter, obj, vtype);
-            array_add(&structs, obj);
+            Reference ref = object_alloc(inter, VType_StructDefinition);
+            ref_assign_StructDefinition(inter, ref, vtype);
+            array_add(&structs, ref);
         }
         else if (vtype->kind == VariableKind_Enum)
         {
-            Object* obj = object_alloc(inter, VType_EnumDefinition);
-            object_assign_EnumDefinition(inter, obj, vtype);
-            array_add(&enums, obj);
+            Reference ref = object_alloc(inter, VType_EnumDefinition);
+            ref_assign_EnumDefinition(inter, ref, vtype);
+            array_add(&enums, ref);
         }
     }
     
@@ -1412,139 +1649,150 @@ void object_assign_YovParseOutput(Interpreter* inter, Object* obj, Yov* temp_yov
         ObjectDefinition* def = it.value;
         if (string_starts(def->name, "$")) continue;
         
-        Object* obj = object_alloc(inter, VType_ObjectDefinition);
-        object_assign_ObjectDefinition(inter, obj, *def);
-        array_add(&globals, obj);
+        Reference ref = object_alloc(inter, VType_ObjectDefinition);
+        ref_assign_ObjectDefinition(inter, ref, *def);
+        array_add(&globals, ref);
     }
     
     for (auto it = pooled_array_make_iterator(&temp_yov->reports); it.valid; ++it) {
         Report* report = it.value;
-        Object* obj = alloc_string(inter, string_from_report(scratch.arena, *report));
-        array_add(&reports, obj);
+        Reference ref = alloc_string(inter, string_from_report(scratch.arena, *report));
+        array_add(&reports, ref);
     }
     
     
-    Object* functions_obj = alloc_array(inter, VType_FunctionDefinition, functions.count, true);
+    Reference functions_ref = alloc_array(inter, VType_FunctionDefinition, functions.count, true);
     for (auto it = pooled_array_make_iterator(&functions); it.valid; ++it) {
-        object_set_child(inter, functions_obj, it.index, *it.value);
+        ref_set_member(inter, functions_ref, it.index, *it.value);
     }
     
-    Object* structs_obj = alloc_array(inter, VType_StructDefinition, structs.count, true);
+    Reference structs_ref = alloc_array(inter, VType_StructDefinition, structs.count, true);
     for (auto it = pooled_array_make_iterator(&structs); it.valid; ++it) {
-        object_set_child(inter, structs_obj, it.index, *it.value);
+        ref_set_member(inter, structs_ref, it.index, *it.value);
     }
     
-    Object* enums_obj = alloc_array(inter, VType_EnumDefinition, enums.count, true);
+    Reference enums_ref = alloc_array(inter, VType_EnumDefinition, enums.count, true);
     for (auto it = pooled_array_make_iterator(&enums); it.valid; ++it) {
-        object_set_child(inter, enums_obj, it.index, *it.value);
+        ref_set_member(inter, enums_ref, it.index, *it.value);
     }
     
-    Object* globals_obj = alloc_array(inter, VType_ObjectDefinition, globals.count, true);
+    Reference globals_ref = alloc_array(inter, VType_ObjectDefinition, globals.count, true);
     for (auto it = pooled_array_make_iterator(&globals); it.valid; ++it) {
-        object_set_child(inter, globals_obj, it.index, *it.value);
+        ref_set_member(inter, globals_ref, it.index, *it.value);
     }
     
-    Object* reports_obj = alloc_array(inter, VType_String, reports.count, true);
+    Reference reports_ref = alloc_array(inter, VType_String, reports.count, true);
     for (auto it = pooled_array_make_iterator(&reports); it.valid; ++it) {
-        object_set_child(inter, reports_obj, it.index, *it.value);
+        ref_set_member(inter, reports_ref, it.index, *it.value);
     }
     
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "functions").index, functions_obj);
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "structs").index, structs_obj);
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "enums").index, enums_obj);
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "globals").index, globals_obj);
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "reports").index, reports_obj);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "functions").index, functions_ref);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "structs").index, structs_ref);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "enums").index, enums_ref);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "globals").index, globals_ref);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "reports").index, reports_ref);
 }
 
-void object_assign_FunctionDefinition(Interpreter* inter, Object* obj, FunctionDefinition* fn)
+void ref_assign_FunctionDefinition(Interpreter* inter, Reference ref, FunctionDefinition* fn)
 {
-    set_string_member(inter, obj, "identifier", fn->identifier);
+    ref_member_set_string(inter, ref, "identifier", fn->identifier);
     
-    Object* parameters = alloc_array(inter, VType_ObjectDefinition, fn->parameters.count, false);
+    Reference parameters = alloc_array(inter, VType_ObjectDefinition, fn->parameters.count, false);
     foreach(i, fn->parameters.count) {
-        Object* param = object_get_child(inter, parameters, i);
-        object_assign_ObjectDefinition(inter, param, fn->parameters[i]);
+        Reference param = ref_get_member(inter, parameters, i);
+        ref_assign_ObjectDefinition(inter, param, fn->parameters[i]);
     }
     
-    Object* returns = alloc_array(inter, VType_ObjectDefinition, fn->returns.count, false);
+    Reference returns = alloc_array(inter, VType_ObjectDefinition, fn->returns.count, false);
     foreach(i, fn->returns.count) {
-        Object* ret = object_get_child(inter, returns, i);
-        object_assign_ObjectDefinition(inter, ret, fn->returns[i]);
+        Reference ret = ref_get_member(inter, returns, i);
+        ref_assign_ObjectDefinition(inter, ret, fn->returns[i]);
     }
     
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "parameters").index, parameters);
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "returns").index, returns);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "parameters").index, parameters);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "returns").index, returns);
 }
 
-void object_assign_StructDefinition(Interpreter* inter, Object* obj, VariableType* vtype)
+void ref_assign_StructDefinition(Interpreter* inter, Reference ref, VariableType* vtype)
 {
-    set_string_member(inter, obj, "identifier", vtype->name);
+    ref_member_set_string(inter, ref, "identifier", vtype->name);
     
-    Object* members = alloc_array(inter, VType_ObjectDefinition, vtype->_struct.names.count, false);
+    Reference members = alloc_array(inter, VType_ObjectDefinition, vtype->_struct.names.count, false);
     foreach(i, vtype->_struct.names.count) {
-        Object* mem = object_get_child(inter, members, i);
+        Reference mem = ref_get_member(inter, members, i);
         String name = vtype->_struct.names[i];
         VariableType* mem_vtype = vtype->_struct.vtypes[i];
-        object_assign_ObjectDefinition(inter, mem, obj_def_make(name, mem_vtype));
+        ref_assign_ObjectDefinition(inter, mem, obj_def_make(name, mem_vtype));
     }
     
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "members").index, members);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "members").index, members);
 }
 
-void object_assign_EnumDefinition(Interpreter* inter, Object* obj, VariableType* vtype)
+void ref_assign_EnumDefinition(Interpreter* inter, Reference ref, VariableType* vtype)
 {
-    set_string_member(inter, obj, "identifier", vtype->name);
+    ref_member_set_string(inter, ref, "identifier", vtype->name);
     
-    Object* elements = alloc_array(inter, VType_String, vtype->_enum.names.count, false);
-    Object* values = alloc_array(inter, VType_Int, vtype->_enum.names.count, false);
+    Reference elements = alloc_array(inter, VType_String, vtype->_enum.names.count, false);
+    Reference values = alloc_array(inter, VType_Int, vtype->_enum.names.count, false);
     foreach(i, vtype->_enum.names.count) {
-        Object* element = object_get_child(inter, elements, i);
-        Object* value = object_get_child(inter, values, i);
-        set_string(inter, element, vtype->_enum.names[i]);
+        Reference element = ref_get_member(inter, elements, i);
+        Reference value = ref_get_member(inter, values, i);
+        ref_string_set(inter, element, vtype->_enum.names[i]);
         set_int(value, vtype->_enum.values[i]);
     }
     
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "elements").index, elements);
-    object_set_child(inter, obj, vtype_get_child(obj->vtype, "values").index, values);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "elements").index, elements);
+    ref_set_member(inter, ref, vtype_get_child(ref.vtype, "values").index, values);
 }
 
-void object_assign_ObjectDefinition(Interpreter* inter, Object* obj, ObjectDefinition def)
+void ref_assign_ObjectDefinition(Interpreter* inter, Reference ref, ObjectDefinition def)
 {
-    set_string_member(inter, obj, "identifier", def.name);
+    ref_member_set_string(inter, ref, "identifier", def.name);
     
-    VariableTypeChild type_info = vtype_get_member(obj->vtype, "type");
-    Object* type = object_get_child(inter, obj, type_info.index, type_info.is_member);
-    object_assign_Type(inter, type, def.vtype);
+    VariableTypeChild type_info = vtype_get_member(ref.vtype, "type");
+    Reference type = ref_get_member(inter, ref, type_info.index);
+    ref_assign_Type(inter, type, def.vtype);
 }
 
-Object* object_from_Result(Interpreter* inter, Result res)
+void ref_assign_Type(Interpreter* inter, Reference ref, VariableType* vtype)
 {
-    Object* obj = object_alloc(inter, VType_Result);
-    object_assign_Result(inter, obj, res);
-    return obj;
+    assert(ref.vtype == VType_Type);
+    set_int_member(inter, ref, "ID", vtype->ID);
+    ref_member_set_string(inter, ref, "name", vtype->name);
 }
 
-Result Result_from_object(Interpreter* inter, Object* obj)
+VariableType* get_Type(Interpreter* inter, Reference ref)
 {
-    if (obj->vtype->ID != VType_Result->ID) {
+    i64 ID = get_int_member(inter, ref, "ID");
+    return vtype_get(ID);
+}
+
+Reference ref_from_Result(Interpreter* inter, Result res)
+{
+    Reference ref = object_alloc(inter, VType_Result);
+    ref_assign_Result(inter, ref, res);
+    return ref;
+}
+
+Result Result_from_ref(Interpreter* inter, Reference ref)
+{
+    if (ref.vtype->ID != VType_Result->ID) {
         invalid_codepath();
         return {};
     }
     
     Result res;
-    res.message = get_string_member(inter, obj, "message");
-    res.code = (i32)get_int_member(inter, obj, "code");
-    res.failed = get_bool_member(inter, obj, "failed");
+    res.message = get_string_member(inter, ref, "message");
+    res.code = (i32)get_int_member(inter, ref, "code");
+    res.failed = get_bool_member(inter, ref, "failed");
     return res;
 }
-
-//- GARBAGE COLLECTOR
 
 u32 object_generate_id(Interpreter* inter) {
     return ++inter->object_id_counter;
 }
 
-Object* object_alloc(Interpreter* inter, VariableType* vtype)
+Reference object_alloc(Interpreter* inter, VariableType* vtype)
 {
     SCRATCH();
     assert(vtype->ID > VTypeID_Any);
@@ -1553,61 +1801,28 @@ Object* object_alloc(Interpreter* inter, VariableType* vtype)
     
     log_mem_trace("Alloc obj(%u): %S\n", ID, string_from_vtype(scratch.arena, inter, vtype));
     
-    u32 type_size = vtype_get_size(vtype);
-    assert(type_size > sizeof(Object));
+    u32 type_size = sizeof(Object) + vtype->size;
     
-    Object* obj = (Object*)gc_dynamic_allocate(inter, type_size);
+    Object* obj = NULL;
     
-    obj->next = inter->object_list;
-    if (inter->object_list) inter->object_list->prev = obj;
-    inter->object_list = obj;
-    inter->object_count++;
+    obj = (Object*)object_dynamic_allocate(inter, type_size);
+    
+    b32 use_gc = true;
+    
+    if (use_gc) {
+        obj->next = inter->gc.object_list;
+        if (inter->gc.object_list) inter->gc.object_list->prev = obj;
+        inter->gc.object_list = obj;
+        inter->gc.object_count++;
+    }
     
     obj->ID = ID;
     obj->vtype = vtype;
     obj->ref_count = 0;
     
-    if (vtype->kind == VariableKind_Struct)
-    {
-        Object** members_memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * vtype->_struct.vtypes.count);
-        Array<Object*> members = array_make(members_memory, vtype->_struct.vtypes.count);
-        
-        foreach(i, vtype->_struct.vtypes.count)
-        {
-            VariableType* member_vtype = vtype->_struct.vtypes[i];
-            IR member_initialize_ir = vtype->_struct.irs[i];
-            u32 member_size = vtype_get_size(member_vtype);
-            
-            Object* member = null_obj;
-            
-            b32 null_members = false;
-            
-            if (!null_members)
-            {
-                b32 has_initializer = member_initialize_ir.value.kind != ValueKind_None;
-                
-                if (has_initializer) {
-                    member = execute_IR(inter, member_initialize_ir, {}, NO_CODE);
-                }
-                else {
-                    member = object_alloc(inter, member_vtype);
-                }
-            }
-            
-            object_increment_ref(member);
-            members[i] = member;
-        }
-        
-        ((Object_Struct*)obj)->members = members;
-    }
-    else if (vtype->kind == VariableKind_Array) { }
-    else if (vtype->kind == VariableKind_Enum) { }
-    else if (vtype->kind == VariableKind_Primitive) { }
-    else {
-        invalid_codepath();
-    }
-    
-    return obj;
+    Reference ref = ref_from_object(obj);
+    ref_init(inter, ref, {});
+    return ref;
 }
 
 void object_free(Interpreter* inter, Object* obj)
@@ -1617,30 +1832,282 @@ void object_free(Interpreter* inter, Object* obj)
     
     log_mem_trace("Free obj(%u): %S\n", obj->ID, string_from_vtype(scratch.arena, inter, obj->vtype));
     
-    if (obj == inter->object_list)
+    b32 use_gc = true;
+    
+    if (use_gc)
     {
-        assert(obj->prev == NULL);
-        inter->object_list = obj->next;
-        if (inter->object_list != NULL) inter->object_list->prev = NULL;
+        if (obj == inter->gc.object_list)
+        {
+            assert(obj->prev == NULL);
+            inter->gc.object_list = obj->next;
+            if (inter->gc.object_list != NULL) inter->gc.object_list->prev = NULL;
+        }
+        else
+        {
+            if (obj->next != NULL) obj->next->prev = obj->prev;
+            obj->prev->next = obj->next;
+        }
+        inter->gc.object_count--;
+    }
+    
+    ref_release_internal(inter, ref_from_object(obj));
+    
+    *obj = {};
+    
+    if (use_gc) {
+        object_dynamic_free(inter, obj);
+    }
+}
+
+void object_increment_ref(Object* obj)
+{
+    if (obj == NULL || obj->vtype->ID == VTypeID_Unknown || obj->vtype->ID == VTypeID_Void) return;
+    obj->ref_count++;
+}
+
+void object_decrement_ref(Object* obj)
+{
+    if (obj == NULL || obj->vtype->ID == VTypeID_Unknown || obj->vtype->ID == VTypeID_Void) return;
+    obj->ref_count--;
+    assert(obj->ref_count >= 0);
+}
+
+void ref_release_internal(Interpreter* inter, Reference ref)
+{
+    SCRATCH();
+    
+    VariableType* vtype = ref.vtype;
+    
+    if (!vtype_needs_internal_release(vtype)) return;
+    
+    if (vtype->kind == VariableKind_Array)
+    {
+        ObjectData_Array* array = get_array(ref);
+        VariableType* element_vtype = vtype->child_next;
+        
+        if (vtype_needs_internal_release(element_vtype))
+        {
+            u32 element_size = element_vtype->size;
+            
+            u8* it = array->data;
+            u8* end = array->data + element_size * array->count;
+            
+            while (it < end)
+            {
+                Reference member = ref_from_address(ref.parent, element_vtype, it);
+                ref_release_internal(inter, member);
+                it += element_size;
+            }
+        }
+        
+        object_dynamic_free(inter, array->data);
+        *array = {};
+    }
+    else if (vtype->kind == VariableKind_Struct)
+    {
+        Array<VariableType*> vtypes = vtype->_struct.vtypes;
+        
+        foreach(i, vtypes.count)
+        {
+            u8* data = (u8*)ref.address;
+            u32 offset = vtype->_struct.offsets[i];
+            
+            Reference member = ref_from_address(ref.parent, vtypes[i], data + offset);
+            ref_release_internal(inter, member);
+        }
+    }
+    else if (vtype->kind == VariableKind_Reference) {
+        Reference deref = dereference(ref);
+        object_decrement_ref(deref.parent);
+    }
+    else if (vtype->ID == VTypeID_String) {
+        ref_string_clear(inter, ref);
+    }
+}
+
+void ref_init(Interpreter* inter, Reference ref, IR ir)
+{
+    b32 has_initializer = ir.value.kind != ValueKind_None;
+    
+    if (has_initializer) {
+        Reference ir_ref = execute_IR(inter, ir, {}, NO_CODE);
+        ref_copy(inter, ref, ir_ref);
     }
     else
     {
-        if (obj->next != NULL) obj->next->prev = obj->prev;
-        obj->prev->next = obj->next;
+        VariableType* vtype = ref.vtype;
+        
+        if (vtype->kind == VariableKind_Struct)
+        {
+            foreach(i, vtype->_struct.vtypes.count)
+            {
+                IR member_initialize_ir = vtype->_struct.irs[i];
+                Reference member = ref_get_member(inter, ref, i);
+                ref_init(inter, member, member_initialize_ir);
+            }
+        }
+        else if (vtype->kind == VariableKind_Array) {
+            
+        }
+        else if (vtype->kind == VariableKind_Enum) { }
+        else if (vtype->kind == VariableKind_Primitive) { }
+        else if (vtype->kind == VariableKind_Reference) {
+            set_reference(inter, ref, ref_from_object(null_obj));
+        }
+        else {
+            invalid_codepath();
+        }
     }
-    inter->object_count--;
-    
-    object_release_internal(inter, obj);
-    
-    *obj = {};
-    gc_dynamic_free(inter, obj);
 }
 
-void object_free_unused(Interpreter* inter)
+void ref_copy(Interpreter* inter, Reference dst, Reference src)
+{
+    if (is_unknown(dst) || is_null(dst)) {
+        invalid_codepath();
+        return;
+    }
+    
+    if (is_unknown(src) || is_null(src)) {
+        invalid_codepath();
+        return;
+    }
+    
+    if (src.vtype != dst.vtype) {
+        invalid_codepath();
+        return;
+    }
+    
+    VariableType* vtype = dst.vtype;
+    
+    if (vtype->kind == VariableKind_Struct)
+    {
+        foreach(i, vtype->_struct.vtypes.count) {
+            Reference dst_mem = ref_get_member(inter, dst, i);
+            Reference src_mem = ref_get_member(inter, src, i);
+            ref_copy(inter, dst_mem, src_mem);
+        }
+    }
+    else if (vtype->kind == VariableKind_Primitive || vtype->kind == VariableKind_Enum)
+    {
+        if (vtype->ID == VTypeID_String)
+        {
+            ref_string_set(inter, dst, get_string(src));
+        }
+        else {
+            i64* v0 = (i64*)dst.address;
+            i64* v1 = (i64*)src.address;
+            memory_copy(dst.address, src.address, vtype->size);
+        }
+    }
+    else if (vtype->kind == VariableKind_Array)
+    {
+        ref_release_internal(inter, dst);
+        
+        ObjectData_Array* dst_array = get_array(dst);
+        ObjectData_Array* src_array = get_array(src);
+        
+        u32 element_size = vtype->child_next->size;
+        dst_array->data = (u8*)object_dynamic_allocate(inter, src_array->count * element_size);
+        dst_array->count = src_array->count;
+        
+        foreach(i, dst_array->count) {
+            Reference dst_element = ref_get_member(inter, dst, i);
+            Reference src_element = ref_get_member(inter, src, i);
+            ref_copy(inter, dst_element, src_element);
+        }
+    }
+    else if (vtype->kind == VariableKind_Reference)
+    {
+        Reference dst_deref = dereference(dst);
+        Reference src_deref = dereference(src);
+        
+        object_decrement_ref(dst_deref.parent);
+        object_increment_ref(src_deref.parent);
+        memory_copy(dst.address, src.address, vtype->size);
+    }
+    else {
+        invalid_codepath();
+    }
+}
+
+Reference ref_alloc_and_copy(Interpreter* inter, Reference src)
+{
+    if (is_unknown(src)) {
+        invalid_codepath();
+        return ref_from_object(nil_obj);
+    }
+    
+    if (is_null(src)) return ref_from_object(null_obj);
+    
+    Reference dst = object_alloc(inter, src.vtype);
+    ref_copy(inter, dst, src);
+    return dst;
+}
+
+void* object_dynamic_allocate(Interpreter* inter, u64 size)
+{
+    if (size == 0) return NULL;
+    
+    b32 use_gc = true;
+    
+    if (use_gc) {
+        return gc_allocate(inter, size);
+    }
+    else {
+#if 0
+        Arena* arena = NULL;
+        if (memory == ObjectMemory_Temp) arena = inter->temp_arena;
+        else if (memory == ObjectMemory_Static) arena = yov->static_arena;
+        else {
+            invalid_codepath();
+            return NULL;
+        }
+        
+        return arena_push(arena, size);
+#endif
+    }
+    
+    return NULL;
+}
+
+void object_dynamic_free(Interpreter* inter, void* ptr)
+{
+    if (ptr == NULL) return;
+    
+    b32 use_gc = true;
+    
+    if (use_gc) {
+        gc_free(inter, ptr);
+    }
+    else {
+        //assert(memory != ObjectMemory_Static);
+    }
+}
+
+void object_free_unused_memory(Interpreter* inter)
+{
+    //arena_pop_to(inter->temp_arena, 0);
+    gc_free_unused(inter);
+}
+
+void* gc_allocate(Interpreter* inter, u64 size)
+{
+    inter->gc.allocation_count++;
+    return os_allocate_heap(size);
+}
+
+void gc_free(Interpreter* inter, void* ptr)
+{
+    assert(inter->gc.allocation_count > 0);
+    inter->gc.allocation_count--;
+    os_free_heap(ptr);
+}
+
+void gc_free_unused(Interpreter* inter)
 {
     u32 free_count;
     do {
-        Object* obj = inter->object_list;
+        Object* obj = inter->gc.object_list;
         free_count = 0;
         
         while (obj != NULL)
@@ -1656,149 +2123,12 @@ void object_free_unused(Interpreter* inter)
     while (free_count != 0);
 }
 
-void object_increment_ref(Object* obj)
-{
-    if (is_unknown(obj)) return;
-    if (is_null(obj)) return;
-    obj->ref_count++;
-}
-
-void object_decrement_ref(Object* obj)
-{
-    if (is_unknown(obj)) return;
-    if (is_null(obj)) return;
-    obj->ref_count--;
-    assert(obj->ref_count >= 0);
-}
-
-void object_release_internal(Interpreter* inter, Object* obj)
-{
-    SCRATCH();
-    Array<Object*> childs = object_get_childs_objects(scratch.arena, inter, obj);
-    
-    foreach(i, childs.count) {
-        object_decrement_ref(childs[i]);
-    }
-    
-    if (obj->vtype->ID == VTypeID_String)
-    {
-        Object_String* str = (Object_String*)obj;
-        if (str->value.data != NULL) gc_dynamic_free(inter, str->value.data);
-    }
-    else
-    {
-        VariableType* vtype = obj->vtype;
-        
-        if (vtype->kind == VariableKind_Array) {
-            Array<Object*> elements = ((Object_Array*)obj)->elements;
-            if (elements.data != NULL) gc_dynamic_free(inter, elements.data);
-        }
-        else if (vtype->kind == VariableKind_Struct) {
-            Array<Object*> members = ((Object_Struct*)obj)->members;
-            if (members.data != NULL) gc_dynamic_free(inter, members.data);
-        }
-    }
-    
-    u32 type_size = vtype_get_size(obj->vtype);
-    memory_zero(obj + 1, type_size - sizeof(Object));
-}
-
-void object_copy(Interpreter* inter, Object* dst, Object* src)
-{
-    if (is_unknown(dst) || is_null(dst)) {
-        invalid_codepath();
-        return;
-    }
-    
-    if (is_unknown(src) || is_null(src)) {
-        invalid_codepath();
-        return;
-    }
-    
-    if (src->vtype != dst->vtype) {
-        invalid_codepath();
-        return;
-    }
-    
-    object_release_internal(inter, dst);
-    
-    u32 type_size = vtype_get_size(src->vtype);
-    memory_copy(dst + 1, src + 1, type_size - sizeof(Object));
-    
-    if (src->vtype->ID == VTypeID_String)
-    {
-        Object_String* src_str = (Object_String*)src;
-        Object_String* dst_str = (Object_String*)dst;
-        dst_str->value.data = (char*)gc_dynamic_allocate(inter, src_str->value.size);
-        dst_str->value.size = src_str->value.size;
-        memory_copy(dst_str->value.data, src_str->value.data, src_str->value.size);
-    }
-    else
-    {
-        VariableType* vtype = src->vtype;
-        
-        if (vtype->kind == VariableKind_Array)
-        {
-            Object_Array* dst_array = (Object_Array*)dst;
-            Object_Array* src_array = (Object_Array*)src;
-            
-            Object** memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * src_array->elements.count);
-            dst_array->elements.data = memory;
-            
-            foreach(i, src_array->elements.count) {
-                Object* element_obj = object_alloc_and_copy(inter, src_array->elements[i]);
-                object_increment_ref(element_obj);
-                dst_array->elements[i] = element_obj;
-            }
-        }
-        else if (vtype->kind == VariableKind_Struct)
-        {
-            Object_Struct* dst_struct = (Object_Struct*)dst;
-            Object_Struct* src_struct = (Object_Struct*)src;
-            
-            Object** memory = (Object**)gc_dynamic_allocate(inter, sizeof(Object*) * src_struct->members.count);
-            dst_struct->members.data = memory;
-            
-            foreach(i, src_struct->members.count) {
-                Object* member_obj = object_alloc_and_copy(inter, src_struct->members[i]);
-                object_increment_ref(member_obj);
-                dst_struct->members[i] = member_obj;
-            }
-        }
-    }
-}
-
-Object* object_alloc_and_copy(Interpreter* inter, Object* src)
-{
-    if (is_unknown(src)) {
-        invalid_codepath();
-        return nil_obj;
-    }
-    
-    if (is_null(src)) return null_obj;
-    
-    Object* dst = object_alloc(inter, src->vtype);
-    object_copy(inter, dst, src);
-    return dst;
-}
-
-void* gc_dynamic_allocate(Interpreter* inter, u64 size) {
-    inter->allocation_count++;
-    return os_allocate_heap(size);
-}
-
-void gc_dynamic_free(Interpreter* inter, void* ptr) {
-    assert(inter->allocation_count > 0);
-    inter->allocation_count--;
-    os_free_heap(ptr);
-}
-
 void print_memory_usage(Interpreter* inter)
 {
     print_separator();
     
 #if 1
-    Object* obj = inter->object_list;
+    Object* obj = inter->gc.object_list;
     while (obj != NULL)
     {
         Object* next = obj->next;
@@ -1807,7 +2137,7 @@ void print_memory_usage(Interpreter* inter)
     }
 #endif
     
-    print_info("Object Count: %u\n", inter->object_count);
-    print_info("Alloc Count: %u\n", inter->allocation_count);
+    print_info("Object Count: %u\n", inter->gc.object_count);
+    print_info("Alloc Count: %u\n", inter->gc.allocation_count);
     print_separator();
 }

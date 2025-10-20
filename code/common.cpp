@@ -60,6 +60,21 @@ void arena_pop_to(Arena* arena, u64 position)
     memory_zero((u8*)arena->memory + arena->memory_position, bytes_poped);
 }
 
+void arena_protect_and_reset(Arena* arena)
+{
+    os_protect_virtual_memory(arena->memory, arena->commited_pages);
+    arena->memory = (u8*)arena->memory + arena->commited_pages * yov->os.page_size;
+    arena->memory_position = 0;
+    arena->reserved_pages -= arena->commited_pages;
+    arena->commited_pages = 0;
+    
+    if (arena->reserved_pages * yov->os.page_size < GB(1))
+    {
+        arena->reserved_pages = pages_from_bytes(GB(32));
+        arena->memory = os_reserve_virtual_memory(arena->reserved_pages, false);
+    }
+}
+
 void initialize_scratch_arenas()
 {
     foreach(i, countof(yov->scratch_arenas)) {
@@ -549,6 +564,17 @@ String string_from_memory(Arena* arena, u64 bytes)
     }
     
     return string_format(arena, "%.2f GB", gb);
+}
+
+String string_from_ellapsed_time(Arena* arena, f64 seconds)
+{
+    f64 ns = seconds * 1000000000;
+    if (ns < 1000.0) return string_format(arena, "%.2fns", ns);
+    f64 us = seconds * 1000000;
+    if (us < 1000.0) return string_format(arena, "%.2fus", us);
+    f64 ms = seconds * 1000;
+    if (ms < 1000.0) return string_format(arena, "%.2fms", ms);
+    return string_format(arena, "%.2fs", seconds);
 }
 
 String string_join(Arena* arena, LinkedList<String> ll)
@@ -1627,7 +1653,7 @@ void yov_set_exit_code(i64 exit_code)
     yov->exit_code = exit_code;
 }
 
-void yov_print_script_help()
+void yov_print_script_help(Interpreter* inter)
 {
     SCRATCH();
     StringBuilder builder = string_builder_make(scratch.arena);
@@ -1638,12 +1664,11 @@ void yov_print_script_help()
         
         if (global != NULL) {
             Value value = global->ir.value;
+            Reference ref = ref_from_value(inter, inter->global_scope, value);
+            String description = string_from_ref(scratch.arena, inter, ref, true);
             
-            String description;
-            if (ct_string_from_value(value, &description)) {
-                append(&builder, description);
-                append(&builder, "\n\n");
-            }
+            append(&builder, description);
+            append(&builder, "\n\n");
         }
     }
     
@@ -1708,16 +1733,25 @@ void yov_print_script_help()
     print_info(log);
 }
 
-void yov_compile(b32 require_args, b32 require_intrinsics)
+Interpreter* yov_compile(InterpreterSettings settings, b32 require_args, b32 require_intrinsics)
 {
     i32 main_script_id = yov_import_script(yov->main_script_path);
     
     if (main_script_id < 0) {
         yov->exit_requested = true;
-        return;
+        yov_set_exit_code(-1);
+        return NULL;
     }
     
-    ir_generate(require_args, require_intrinsics);
+    Interpreter* inter = interpreter_initialize(settings);
+    ir_generate(inter, require_args, require_intrinsics);
+    
+    if (yov->exit_requested) {
+        yov_set_exit_code(-1);
+        return inter;
+    }
+    
+    return inter;
 }
 
 
