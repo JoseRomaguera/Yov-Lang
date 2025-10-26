@@ -289,18 +289,25 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
         }
     }
     
-    if (dst.vtype->kind == VariableKind_Reference && dst.vtype->child_next == src.vtype) {
+    i32 mode = 0; // 0 -> Invalid; 1 -> Copy; 2 -> Store
+    
+    if (dst.vtype == src.vtype) {
+        mode = 1;
+    }
+    else if (dst.vtype->kind == VariableKind_Reference && dst.vtype->child_next == src.vtype) {
         out = IR_append(out, ir_from_dereference(ir, dst, code));
         dst = out.value;
+        mode = 1;
     }
     else if (src.vtype->kind == VariableKind_Reference && src.vtype->child_next == dst.vtype) {
         out = IR_append(out, ir_from_dereference(ir, src, code));
         src = out.value;
+        mode = 1;
     }
-    
-    b32 copy = true;
-    
-    if (dst.vtype != src.vtype)
+    else if (dst.vtype->kind == VariableKind_Reference && value_is_null(src)) {
+        mode = 2;
+    }
+    else
     {
         IR_Object* dst_object = ir_find_object_from_value(ir, dst);
         
@@ -311,12 +318,12 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
             if (reg != NULL && reg->vtype == any_vtype) {
                 dst_object->vtype = src.vtype;
                 dst = value_from_ir_object(dst_object);
-                copy = false;
+                mode = 2;
             }
         }
     }
     
-    if (dst.vtype != src.vtype)
+    if (mode == 0)
     {
         report_type_missmatch_assign(code, src.vtype->name, dst.vtype->name);
         return ir_failed();
@@ -326,11 +333,11 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
     if (obj != NULL) obj->assignment_count++;
     
     if (dst.vtype == any_vtype) {
-        copy = false;
+        mode = 2;
     }
     
     IR_Unit* unit;
-    if (copy)
+    if (mode == 1)
     {
         unit = ir_unit_alloc(ir, UnitKind_Copy, code);
         unit->dst_index = dst.reg.index;
@@ -638,7 +645,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b
                 else
                 {
                     OpNode* expression_node = node->expresions[expresion_index++];
-                    IR_Group expression = ir_from_node(ir, expression_node, ExpresionContext_from_void(), false);
+                    IR_Group expression = ir_from_node(ir, expression_node, ExpresionContext_from_vtype(VType_String, 1), false);
                     if (!expression.success) return ir_failed();
                     
                     Value value = expression.value;
@@ -752,6 +759,11 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b
         }
         
         return IR_append(src_out, mem);
+    }
+    
+    if (node0->kind == OpKind_Null)
+    {
+        return ir_from_none(value_null());
     }
     
     if (node0->kind == OpKind_Indexing)
@@ -969,6 +981,11 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b
     if (node0->kind == OpKind_Return)
     {
         OpNode_Return* node = (OpNode_Return*)node0;
+        
+        VariableType* expected_vtype = void_vtype;
+        if (ir->returns.count == 1) expected_vtype = ir->returns[0];
+        
+        ExpresionContext context = (expected_vtype == void_vtype) ? ExpresionContext_from_void() : ExpresionContext_from_vtype(expected_vtype, 1);
         
         IR_Group expression = ir_from_node(ir, node->expresion, context, false);
         if (!expression.success) return ir_failed();

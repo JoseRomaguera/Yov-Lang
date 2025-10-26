@@ -14,7 +14,8 @@ internal_fn Token lexer_extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 
     token.code = code_location_make(lexer->cursor, lexer->code_start_line_offset, lexer->code_line, lexer->code_column, lexer->script_id);
     
     if (kind == TokenKind_Identifier) {
-        if (string_equals("if", token.value)) kind = TokenKind_IfKeyword;
+        if (string_equals("null", token.value)) kind = TokenKind_NullKeyword;
+        else if (string_equals("if", token.value)) kind = TokenKind_IfKeyword;
         else if (string_equals("else", token.value)) kind = TokenKind_ElseKeyword;
         else if (string_equals("while", token.value)) kind = TokenKind_WhileKeyword;
         else if (string_equals("for", token.value)) kind = TokenKind_ForKeyword;

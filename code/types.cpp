@@ -50,17 +50,17 @@ void types_initialize(b32 import_core)
     
     {
         VariableTypeChild string_properties[] = {
-            VariableTypeChild{ false, STR("size"), 0, VType_Int }
+            VariableTypeChild{ false, "size", 0, VType_Int }
         };
         
         VariableTypeChild array_properties[] = {
-            VariableTypeChild{ false, STR("count"), 0, VType_Int }
+            VariableTypeChild{ false, "count", 0, VType_Int }
         };
         
         VariableTypeChild enum_properties[] = {
-            VariableTypeChild{ false, STR("index"), 0, VType_Int },
-            VariableTypeChild{ false, STR("value"), 1, VType_Int },
-            VariableTypeChild{ false, STR("name"), 2, VType_String }
+            VariableTypeChild{ false, "index", 0, VType_Int },
+            VariableTypeChild{ false, "value", 1, VType_Int },
+            VariableTypeChild{ false, "name", 2, VType_String }
         };
         
         yov->string_properties = array_copy(yov->static_arena, array_make(string_properties, countof(string_properties)));
@@ -527,6 +527,10 @@ b32 value_is_compiletime(Value value)
 
 b32 value_is_rvalue(Value value) { return value.kind != ValueKind_None && value.kind != ValueKind_LValue; }
 
+b32 value_is_null(Value value) {
+    return value.kind == ValueKind_Literal && value.vtype == void_vtype;
+}
+
 b32 value_equals(Value v0, Value v1)
 {
     if (v0.kind != v1.kind) return false;
@@ -542,6 +546,13 @@ Value value_none() {
     Value v{};
     v.vtype = void_vtype;
     v.reg.index = -1;
+    return v;
+}
+
+Value value_null() {
+    Value v{};
+    v.vtype = void_vtype;
+    v.kind = ValueKind_Literal;
     return v;
 }
 
@@ -779,6 +790,7 @@ String string_from_value(Arena* arena, Value value, b32 raw)
             String escape = escape_string_from_raw_string(scratch.arena, value.literal_string);
             return string_format(arena, "\"%S\"", escape);
         }
+        if (value.vtype->ID == VTypeID_Void) return "null";
         if (value.vtype == VType_Type) return value.literal_type->name;
         if (value.vtype->kind == VariableKind_Enum) {
             i32 index = (i32)value.literal_int;

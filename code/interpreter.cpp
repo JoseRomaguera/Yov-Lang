@@ -5,6 +5,7 @@ internal_fn void define_globals(Interpreter* inter)
     SCRATCH();
     
     // Yov struct
+    if (VType_YovInfo != nil_vtype)
     {
         inter->common_globals.yov = object_alloc(inter, VType_YovInfo);
         Reference ref = inter->common_globals.yov;
@@ -18,6 +19,7 @@ internal_fn void define_globals(Interpreter* inter)
     }
     
     // OS struct
+    if (VType_OS != nil_vtype)
     {
         inter->common_globals.os = object_alloc(inter, VType_OS);
         Reference ref = inter->common_globals.os;
@@ -31,6 +33,7 @@ internal_fn void define_globals(Interpreter* inter)
     }
     
     // Context struct
+    if (VType_Context != nil_vtype)
     {
         inter->common_globals.context = object_alloc(inter, VType_Context);
         Reference ref = inter->common_globals.context;
@@ -67,6 +70,7 @@ internal_fn void define_globals(Interpreter* inter)
     }
     
     // Calls struct
+    if (VType_CallsContext != nil_vtype)
     {
         Reference ref = object_alloc(inter, VType_CallsContext);
         inter->common_globals.calls = ref;
@@ -252,6 +256,7 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
         if (value.vtype->ID == VTypeID_Int) return alloc_int(inter, value.literal_int);
         if (value.vtype->ID == VTypeID_Bool) return alloc_bool(inter, value.literal_bool);
         if (value.vtype->ID == VTypeID_String) return alloc_string(inter, value.literal_string);
+        if (value.vtype->ID == VTypeID_Void) return ref_from_object(null_obj);
         if (value.vtype == VType_Type) {
             Reference ref = object_alloc(inter, VType_Type);
             ref_assign_Type(inter, ref, value.literal_type);
@@ -421,7 +426,7 @@ void execute_ir(Interpreter* inter, IR ir, Array<Reference> output, Array<Value>
 #if DEV
         gc_allocations = inter->gc.allocation_count - gc_allocations;
         gc_objects = inter->gc.object_count - gc_objects;
-        f64 ellapsed_time = (os_timer_get() - start_time) / (f64)yov->timer_frequency;
+        f64 ellapsed_time = (os_timer_get() - start_time) / (f64)system_info.timer_frequency;
         
         show &= gc_objects > 0;
         //show &= (ellapsed_time * 1000000.0 > 100) && unit.kind != UnitKind_FunctionCall;

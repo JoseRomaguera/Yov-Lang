@@ -441,6 +441,11 @@ OpNode* extract_expresion(Parser* parser)
             node->codepoint_literal = v;
             return node;
         }
+        else if (token.kind == TokenKind_NullKeyword)
+        {
+            auto node = (OpNode*)alloc_node(parser, OpKind_Null, token.code);
+            return node;
+        }
     }
     
     // Parameter List

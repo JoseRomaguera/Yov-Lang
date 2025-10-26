@@ -11,13 +11,8 @@
 #include "Windows.h"
 #include <shellapi.h>
 
-struct Windows {
-};
-
 internal_fn void set_console_text_color(HANDLE std, Severity severity)
 {
-    Windows* windows = (Windows*)yov->os.internal;
-    
     CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
     WORD saved_attributes;
     
@@ -43,12 +38,18 @@ internal_fn void set_console_text_color(HANDLE std, Severity severity)
     SetConsoleTextAttribute(std, (WORD)att);
 }
 
-void os_setup_memory_info()
+void os_setup_system_info()
 {
-    SYSTEM_INFO system_info;
-    GetSystemInfo(&system_info);
-    yov->os.page_size = system_info.dwAllocationGranularity;
-    yov->os.logical_cores = MAX(system_info.dwNumberOfProcessors, 1);
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    system_info.page_size = info.dwAllocationGranularity;
+    system_info.logical_cores = MAX(info.dwNumberOfProcessors, 1);
+    
+    LARGE_INTEGER _windows_clock_frequency;
+    QueryPerformanceFrequency(&_windows_clock_frequency);
+    system_info.timer_frequency = _windows_clock_frequency.QuadPart;
+    
+    system_info.timer_start = os_timer_get();
 }
 
 internal_fn HANDLE get_std_handle() {
@@ -59,13 +60,6 @@ void os_initialize()
 {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-    
-    LARGE_INTEGER _windows_clock_frequency;
-    QueryPerformanceFrequency(&_windows_clock_frequency);
-    yov->timer_frequency = _windows_clock_frequency.QuadPart;
-    
-    yov->os.internal = arena_push_struct<Windows>(yov->static_arena);
-    Windows* windows = (Windows*)yov->os.internal;
 }
 
 void os_shutdown()
@@ -76,7 +70,6 @@ void os_shutdown()
 void os_print(Severity severity, String text)
 {
     SCRATCH();
-    Windows* windows = (Windows*)yov->os.internal;
     
     HANDLE std = get_std_handle();
     
@@ -139,14 +132,14 @@ void os_free_heap(void* address) {
 
 void* os_reserve_virtual_memory(u32 pages, b32 commit)
 {
-    u64 bytes = (u64)pages * yov->os.page_size;
+    u64 bytes = (u64)pages * system_info.page_size;
     u32 flags = MEM_RESERVE;
     if (commit) flags |= MEM_COMMIT;
     return VirtualAlloc(NULL, (size_t)bytes, flags, PAGE_READWRITE);
 }
 void os_commit_virtual_memory(void* address, u32 page_offset, u32 page_count)
 {
-    u64 page_size = yov->os.page_size;
+    u64 page_size = system_info.page_size;
     u64 byte_offset = (u64)page_offset * page_size;
     u8* ptr = (u8*)address + byte_offset;
     u64 bytes = (u64)page_count * page_size;
@@ -159,15 +152,15 @@ void os_release_virtual_memory(void* address)
 
 void os_protect_virtual_memory(void* address, u32 pages)
 {
-    u64 bytes = (u64)pages * yov->os.page_size;
+    u64 bytes = (u64)pages * system_info.page_size;
     DWORD old_protect = PAGE_READWRITE;
     VirtualProtect(address, bytes, PAGE_NOACCESS, &old_protect);
 }
 
 DWORD WINAPI win_thread_main(LPVOID param)
 {
-    initialize_scratch_arenas();
-    DEFER(shutdown_scratch_arenas());
+    yov_initialize_thread();
+    DEFER(yov_shutdown_thread());
     
     DEFER(os_free_heap(param));
     ThreadFn* fn = *(ThreadFn**)param;
@@ -1032,7 +1025,7 @@ u64 os_timer_get()
 {
     LARGE_INTEGER now;
 	QueryPerformanceCounter(&now);
-    return now.QuadPart - yov->timer_start;
+    return now.QuadPart - system_info.timer_start;
 }
 
 #endif

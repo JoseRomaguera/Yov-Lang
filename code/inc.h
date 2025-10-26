@@ -328,7 +328,7 @@ b32 lane_narrow(LaneContext* lane, u32 index = 0);
 
 //- OS
 
-void os_setup_memory_info();
+void os_setup_system_info();
 void os_initialize();
 void os_shutdown();
 
@@ -612,6 +612,7 @@ enum TokenKind {
     TokenKind_CompGreater, // >
     TokenKind_CompGreaterEquals, // >=
     
+    TokenKind_NullKeyword,
     TokenKind_IfKeyword,
     TokenKind_ElseKeyword,
     TokenKind_WhileKeyword,
@@ -992,10 +993,12 @@ ExpresionContext ExpresionContext_from_vtype(VariableType* vtype, u32 assignment
 
 b32 value_is_compiletime(Value value);
 b32 value_is_rvalue(Value value);
+b32 value_is_null(Value value);
 
 b32 value_equals(Value v0, Value v1);
 
 Value value_none();
+Value value_null();
 Value value_from_ir_object(IR_Object* object);
 Value value_from_register(i32 index, VariableType* vtype, b32 is_lvalue);
 Value value_from_reference(Value value);
@@ -1079,15 +1082,6 @@ struct Yov {
     
     YovSettings settings;
     
-    struct {
-        u64 page_size;
-        u32 logical_cores;
-        void* internal;
-    } os;
-    
-    u64 timer_start;
-    u64 timer_frequency;
-    
     i64 exit_code;
     b8 exit_code_is_set;
     b8 exit_requested;
@@ -1097,8 +1091,20 @@ struct YovThreadContext {
     Arena* scratch_arenas[2];
 };
 
+struct YovSystemInfo {
+    u64 page_size;
+    u32 logical_cores;
+    
+    u64 timer_start;
+    u64 timer_frequency;
+};
+
+extern YovSystemInfo system_info; 
 extern Yov* yov;
 extern per_thread_var YovThreadContext thread_context;
+
+void yov_initialize_thread();
+void yov_shutdown_thread();
 
 void yov_initialize(b32 import_core);
 void yov_shutdown();
@@ -1287,6 +1293,7 @@ enum OpKind {
     OpKind_StringLiteral,
     OpKind_CodepointLiteral,
     OpKind_MemberValue,
+    OpKind_Null,
     
     // Ops
     OpKind_Assignment,

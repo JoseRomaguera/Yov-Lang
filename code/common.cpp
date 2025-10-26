@@ -29,7 +29,7 @@ void* arena_push(Arena* arena, u64 size)
     u64 position = arena->memory_position;
     position = u64_divide_high(position, arena->alignment) * arena->alignment;
     
-    u64 page_size = yov->os.page_size;
+    u64 page_size = system_info.page_size;
     u64 commited_size = (u64)arena->commited_pages * page_size;
     u64 reserved_size = (u64)arena->reserved_pages * page_size;
     
@@ -63,12 +63,12 @@ void arena_pop_to(Arena* arena, u64 position)
 void arena_protect_and_reset(Arena* arena)
 {
     os_protect_virtual_memory(arena->memory, arena->commited_pages);
-    arena->memory = (u8*)arena->memory + arena->commited_pages * yov->os.page_size;
+    arena->memory = (u8*)arena->memory + arena->commited_pages * system_info.page_size;
     arena->memory_position = 0;
     arena->reserved_pages -= arena->commited_pages;
     arena->commited_pages = 0;
     
-    if (arena->reserved_pages * yov->os.page_size < GB(1))
+    if (arena->reserved_pages * system_info.page_size < GB(1))
     {
         arena->reserved_pages = pages_from_bytes(GB(32));
         arena->memory = os_reserve_virtual_memory(arena->reserved_pages, false);
@@ -115,7 +115,7 @@ internal_fn i32 lane_entry_point(void* data)
 
 LaneGroup* lane_group_start(Arena* arena, LaneFn* fn, u32 lane_count)
 {
-    u32 max_lane_count = MAX(yov->os.logical_cores, 2) - 1;
+    u32 max_lane_count = MAX(system_info.logical_cores, 2) - 1;
     
     lane_count = MIN(lane_count, max_lane_count);
     
@@ -206,7 +206,7 @@ u32 u32_divide_high(u32 n0, u32 n1)
 }
 
 u32 pages_from_bytes(u64 bytes) {
-    return (u32)u64_divide_high(bytes, yov->os.page_size);
+    return (u32)u64_divide_high(bytes, system_info.page_size);
 }
 
 //- CSTRING 
@@ -1386,6 +1386,7 @@ u32 get_node_size(OpKind kind) {
     if (kind == OpKind_StringLiteral) return sizeof(OpNode_StringLiteral);
     if (kind == OpKind_CodepointLiteral) return sizeof(OpNode_NumericLiteral);
     if (kind == OpKind_MemberValue) return sizeof(OpNode_MemberValue);
+    if (kind == OpKind_Null) return sizeof(OpNode);
     if (kind == OpKind_EnumDefinition) return sizeof(OpNode_EnumDefinition);
     if (kind == OpKind_StructDefinition) return sizeof(OpNode_StructDefinition);
     if (kind == OpKind_ArgDefinition) return sizeof(OpNode_ArgDefinition);
@@ -1503,21 +1504,30 @@ void print_ex(Severity severity, String str, ...)
     os_print(severity, result);
 }
 
+YovSystemInfo system_info; 
 Yov* yov;
 per_thread_var YovThreadContext thread_context;
 
+void yov_initialize_thread()
+{
+    initialize_scratch_arenas();
+}
+
+void yov_shutdown_thread()
+{
+    shutdown_scratch_arenas();
+}
+
 void yov_initialize(b32 import_core)
 {
-    yov = (Yov*)os_allocate_heap(sizeof(Yov));
+    Arena* static_arena = arena_alloc(GB(32), 8);
     
-    os_setup_memory_info();
+    yov = arena_push_struct<Yov>(static_arena);
     
-    yov->static_arena = arena_alloc(GB(32), 8);
+    yov->static_arena = static_arena;
     yov->temp_arena = arena_alloc(GB(32), 8);
-    initialize_scratch_arenas();
     
     os_initialize();
-    yov->timer_start = os_timer_get();
     
     yov->scripts = pooled_array_make<YovScript>(yov->static_arena, 8);
     yov->reports = pooled_array_make<Report>(yov->static_arena, 32);
@@ -1538,8 +1548,8 @@ void yov_shutdown()
         
         print_separator();
         
-        u64 committed_static_memory = yov->static_arena->commited_pages * yov->os.page_size;
-        u64 committed_temp_memory = yov->temp_arena->commited_pages * yov->os.page_size;
+        u64 committed_static_memory = yov->static_arena->commited_pages * system_info.page_size;
+        u64 committed_temp_memory = yov->temp_arena->commited_pages * system_info.page_size;
         u64 committed_total_memory = committed_static_memory + committed_temp_memory;
         
         u64 used_static_memory = yov->static_arena->memory_position;
@@ -1571,7 +1581,6 @@ void yov_shutdown()
         os_console_wait();
     }
     
-    shutdown_scratch_arenas();
     os_shutdown();
     
     arena_free(yov->temp_arena);
