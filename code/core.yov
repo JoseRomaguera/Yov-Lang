@@ -67,6 +67,7 @@ env_path_array :: (name: String) -> (value: String[], result: Result);
 
 console_write :: (value: String);
 console_set_cursor :: (x: Int, y: Int);
+console_get_cursor :: () -> (x: Int, y: Int);
 console_clear :: ();
 
 // External Calls

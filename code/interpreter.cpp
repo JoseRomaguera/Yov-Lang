@@ -42,7 +42,7 @@ internal_fn void define_globals(Interpreter* inter)
         
         // Args
         {
-            Array<ScriptArg> args = yov->args;
+            Array<ScriptArg> args = yov->script_args;
             Reference array = alloc_array(inter, VType_String, args.count, true);
             foreach(i, args.count) {
                 ref_set_member(inter, array, i, alloc_string(inter, args[i].name));
@@ -78,18 +78,17 @@ internal_fn void define_globals(Interpreter* inter)
         ObjectDefinition* def = it.value;
         if (!is_null(global_get_by_index(inter, it.index))) continue;
         
-        Reference ref = execute_IR(inter, def->ir, {}, NO_CODE);
+        Reference ref = execute_ir_single_return(inter, def->ir, {}, NO_CODE);
         global_save_by_index(inter, it.index, ref);
         
     }
 }
 
-Interpreter* interpreter_initialize(InterpreterSettings settings)
+Interpreter* interpreter_initialize()
 {
     YovScript* main_script = yov_get_script(0);
     
     Interpreter* inter = arena_push_struct<Interpreter>(yov->static_arena);
-    inter->settings = settings;
     
     inter->empty_op = arena_push_struct<OpNode>(yov->static_arena);
     
@@ -111,7 +110,7 @@ b32 interpreter_run(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
 {
     object_free_unused_memory(inter);
     
-    if (fn != NULL && fn->return_vtype == void_vtype && fn->parameters.count == params.count) {
+    if (fn != NULL && fn->returns.count == 0 && fn->parameters.count == params.count) {
         run_function_call(inter, -1, fn, params, fn->code);
         return true;
     }
@@ -163,7 +162,7 @@ void interpreter_report_runtime_error(Interpreter* inter, CodeLocation code, Res
 
 Result user_assertion(Interpreter* inter, String message)
 {
-    if (!inter->settings.user_assertion || yov_ask_yesno("User Assertion", message)) return RESULT_SUCCESS;
+    if (!yov->settings.user_assert || yov_ask_yesno("User Assertion", message)) return RESULT_SUCCESS;
     return result_failed_make("Operation denied by user");
 }
 
@@ -195,7 +194,7 @@ RedirectStdout get_calls_redirect_stdout(Interpreter* inter)
 
 void global_init(Interpreter* inter, ObjectDefinition def, CodeLocation code)
 {
-    Reference ref = execute_IR(inter, def.ir, {}, code);
+    Reference ref = execute_ir_single_return(inter, def.ir, {}, code);
     global_save(inter, def.name, ref);
 }
 
@@ -297,11 +296,11 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
         return object_alloc(inter, value.vtype);
     }
     
-    if (value.kind == ValueKind_Composition)
+    if (value.kind == ValueKind_StringComposition)
     {
         if (value.vtype->ID == VTypeID_String)
         {
-            Array<Value> sources = value.composition_string;
+            Array<Value> sources = value.string_composition;
             
             StringBuilder builder = string_builder_make(scratch.arena);
             foreach(i, sources.count)
@@ -313,6 +312,10 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
             
             return alloc_string(inter, string_from_builder(scratch.arena, &builder));
         }
+    }
+    
+    if (value.kind == ValueKind_MultipleReturn) {
+        return ref_from_value(inter, scope, value.multiple_return[0]);
     }
     
     if (value.kind == ValueKind_Constant) {
@@ -348,14 +351,27 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
     return ref_from_object(null_obj);
 }
 
-Reference execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocation code)
+void execute_ir(Interpreter* inter, IR ir, Array<Reference> output, Array<Value> params, CodeLocation code)
 {
     SCRATCH();
     
+    assert(ir.param_count == params.count);
+    
     Scope* scope = arena_push_struct<Scope>(scratch.arena);
-    scope->registers = array_make<Reference>(scratch.arena, ir.register_count);
-    foreach(i, scope->registers.count) {
-        scope->registers[i] = ref_from_object(null_obj);
+    scope->registers = array_make<Reference>(scratch.arena, ir.registers.count);
+    foreach(i, scope->registers.count)
+    {
+        IR_Register reg = ir.registers[i];
+        Reference ref = ref_from_object(null_obj);
+        
+        if (reg.global_identifier.size > 0) {
+            ref = global_get(inter, reg.global_identifier);
+        }
+        else if (reg.vtype->ID > VTypeID_Void) {
+            ref = object_alloc(inter, reg.vtype);
+        }
+        
+        register_save(inter, scope, i, ref);
     }
     
     scope->prev = inter->current_scope;
@@ -366,8 +382,12 @@ Reference execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocatio
     foreach(i, params.count) {
         i32 reg = i;
         Value param = params[i];
-        run_store(inter, param.vtype, {}, reg, code);
-        run_assign(inter, reg, param, scope->prev, code);
+        Reference ref = ref_from_value(inter, scope->prev, param);
+        
+        if (is_null(register_get(scope, reg)))
+            register_save(inter, scope, reg, object_alloc(inter, ref.vtype));
+        
+        run_copy(inter, reg, ref, code);
     }
     
     u32 pc_decreased_count = 0;
@@ -436,11 +456,24 @@ Reference execute_IR(Interpreter* inter, IR ir, Array<Value> params, CodeLocatio
     }
     
     // Retrieve return value
-    Reference return_ref = ref_from_value(inter, scope, ir.value);
+    {
+        Array<Value> returns = values_from_return(scratch.arena, ir.value);
+        assert(output.count <= returns.count);
+        
+        foreach(i, MIN(output.count, returns.count)) {
+            output[i] = ref_from_value(inter, scope, returns[i]);
+        }
+    }
     
     scope_clear(inter, scope);
-    
-    return return_ref;
+}
+
+Reference execute_ir_single_return(Interpreter* inter, IR ir, Array<Value> params, CodeLocation code)
+{
+    SCRATCH();
+    Array<Reference> output = array_make<Reference>(scratch.arena, 1);
+    execute_ir(inter, ir, output, params, code);
+    return output[0];
 }
 
 void run_instruction(Interpreter* inter, Unit unit)
@@ -449,17 +482,15 @@ void run_instruction(Interpreter* inter, Unit unit)
     
     i32 dst_index = unit.dst_index;
     
-    if (unit.kind == UnitKind_Assignment) {
-        Value src = unit.assignment.src;
-        run_assign(inter, dst_index, src, inter->current_scope, code);
+    if (unit.kind == UnitKind_Copy) {
+        Reference src = ref_from_value(inter, inter->current_scope, unit.copy.src);
+        run_copy(inter, dst_index, src, code);
         return;
     }
     
     if (unit.kind == UnitKind_Store) {
-        VariableType* vtype = unit.store.vtype;
-        String global_identifier = unit.store.global_identifier;
-        
-        run_store(inter, vtype, global_identifier, dst_index, code);
+        Reference src = ref_from_value(inter, inter->current_scope, unit.store.src);
+        run_store(inter, dst_index, src, code);
         return;
     }
     
@@ -499,7 +530,7 @@ void run_instruction(Interpreter* inter, Unit unit)
         if (result.address != dst.address)
         {
             if (dst.vtype == result.vtype) ref_copy(inter, dst, result);
-            else register_save(inter, dst_index, result);
+            else register_save(inter, NULL, dst_index, result);
         }
         return;
     }
@@ -509,7 +540,7 @@ void run_instruction(Interpreter* inter, Unit unit)
         BinaryOperator op = unit.sign_op.op;
         
         Reference result = run_sign_operation(inter, src, op, code);
-        register_save(inter, dst_index, result);
+        register_save(inter, NULL, dst_index, result);
         return;
     }
     
@@ -542,7 +573,7 @@ void run_instruction(Interpreter* inter, Unit unit)
         }
         
         Reference child = ref_get_child(inter, src, (u32)child_index, child_is_member);
-        register_save(inter, dst_index, child);
+        register_save(inter, NULL, dst_index, child);
         
         return;
     }
@@ -565,58 +596,52 @@ void run_instruction(Interpreter* inter, Unit unit)
     invalid_codepath();
 }
 
-void run_assign(Interpreter* inter, i32 dst_index, Value src, Scope* src_scope, CodeLocation code)
+void run_store(Interpreter* inter, i32 dst_index, Reference src, CodeLocation code)
+{
+    SCRATCH();
+    if (is_unknown(src)) {
+        invalid_codepath();
+        return;
+    }
+    register_save(inter, NULL, dst_index, src);
+}
+
+void run_copy(Interpreter* inter, i32 dst_index, Reference src, CodeLocation code)
 {
     SCRATCH();
     
-    Reference dst_ref = register_get(inter->current_scope, dst_index);
-    Reference src_ref = ref_from_value(inter, src_scope, src);
+    Reference dst = register_get(inter->current_scope, dst_index);
     
-    if (is_unknown(dst_ref)) return;
-    if (is_unknown(src_ref)) return;
-    
-    if (is_null(dst_ref)) {
-        dst_ref = object_alloc(inter, src_ref.vtype);
-        register_save(inter, dst_index, dst_ref);
+    if (is_unknown(dst) || is_unknown(src)) {
+        invalid_codepath();
+        return;
     }
     
-    if (is_null(dst_ref) || is_null(src_ref)) {
+    VariableType* src_vtype = src.vtype;
+    
+    if (is_null(dst) || is_null(src)) {
         report_error(code, "Null reference");
         return;
     }
     
-    if (dst_ref.vtype->kind == VariableKind_Reference && dst_ref.vtype->child_next == src_ref.vtype) {
-        dst_ref = dereference(dst_ref);
+    if (dst.vtype->kind == VariableKind_Reference && dst.vtype->child_next == src_vtype) {
+        dst = dereference(dst);
         
-        if (is_null(dst_ref)) {
+        if (is_null(dst)) {
             report_error(code, "Null reference");
             return;
         }
     }
     
-    ref_copy(inter, dst_ref, src_ref);
+    ref_copy(inter, dst, src);
 }
 
-void run_store(Interpreter* inter, VariableType* vtype, String global_identifier, i32 index, CodeLocation code)
-{
-    if (global_identifier.size > 0)
-    {
-        Reference ref = global_get(inter, global_identifier);
-        assert(is_valid(ref));
-        register_save(inter, index, ref);
-    }
-    else
-    {
-        Reference ref = object_alloc(inter, vtype);
-        register_save(inter, index, ref);
-    }
-}
 
 void run_function_call(Interpreter* inter, i32 dst_index, FunctionDefinition* fn, Array<Value> parameters, CodeLocation code)
 {
     SCRATCH();
     
-    Reference return_ref = ref_from_object(null_obj);
+    Array<Reference> returns = array_make<Reference>(scratch.arena, fn->returns.count);
     
     if (fn->is_intrinsic)
     {
@@ -630,32 +655,22 @@ void run_function_call(Interpreter* inter, i32 dst_index, FunctionDefinition* fn
             params[i] = ref_from_value(inter, inter->current_scope, parameters[i]);
         }
         
-        Array<Reference> returns = array_make<Reference>(scratch.arena, fn->returns.count);
-        
         fn->intrinsic.fn(inter, params, returns, code);
         
         foreach(i, returns.count) {
             assert(is_valid(returns[i]));
         }
-        
-        if (vtype_is_tuple(fn->return_vtype)) {
-            return_ref = object_alloc(inter, fn->return_vtype);
-            foreach(i, returns.count) {
-                ref_set_member(inter, return_ref, i, returns[i]);
-            }
-        }
-        else if (fn->return_vtype != void_vtype) {
-            assert(returns.count == 1);
-            return_ref = returns[0];
-        }
     }
     else
     {
-        return_ref = execute_IR(inter, fn->defined.ir, parameters, code);
+        execute_ir(inter, fn->defined.ir, returns, parameters, code);
     }
     
     if (dst_index >= 0) {
-        register_save(inter, dst_index, return_ref);
+        foreach(i, returns.count) {
+            i32 reg = dst_index + i;
+            register_save(inter, NULL, reg, returns[i]);
+        }
     }
 }
 
@@ -786,6 +801,17 @@ Reference run_binary_operation(Interpreter* inter, Reference dst, Reference left
         }
     }
     
+    if (right_vtype->ID == VType_Type->ID)
+    {
+        i32 index = vtype_get_member(VType_Type, "ID").index;
+        
+        i64 type_id = get_int(ref_get_member(inter, right, index));
+        
+        if (op == BinaryOperator_Is) {
+            return alloc_bool(inter, type_id == left.vtype->ID);
+        }
+    }
+    
     if ((is_string(left) && is_int(right)) || (is_int(left) && is_string(right)))
     {
         if (op == BinaryOperator_Addition)
@@ -869,6 +895,7 @@ Reference run_binary_operation(Interpreter* inter, Reference dst, Reference left
     }
     
     report_invalid_binary_op(code, left_vtype->name, string_from_binary_operator(op), right_vtype->name);
+    invalid_codepath();
     return ref_from_object(nil_obj);
 }
 
@@ -904,9 +931,9 @@ void scope_clear(Interpreter* inter, Scope* scope)
     }
 }
 
-void register_save(Interpreter* inter, i32 index, Reference ref)
+void register_save(Interpreter* inter, Scope* scope, i32 index, Reference ref)
 {
-    Scope* scope = inter->current_scope;
+    if (scope == NULL) scope = inter->current_scope;
     Reference* reg = &scope->registers[index];
     
     object_decrement_ref(reg->parent);
@@ -1631,8 +1658,6 @@ void ref_assign_YovParseOutput(Interpreter* inter, Reference ref, Yov* temp_yov)
         
         if (vtype->kind == VariableKind_Struct)
         {
-            if (vtype->_struct.is_tuple) continue;
-            
             Reference ref = object_alloc(inter, VType_StructDefinition);
             ref_assign_StructDefinition(inter, ref, vtype);
             array_add(&structs, ref);
@@ -1795,7 +1820,7 @@ u32 object_generate_id(Interpreter* inter) {
 Reference object_alloc(Interpreter* inter, VariableType* vtype)
 {
     SCRATCH();
-    assert(vtype->ID > VTypeID_Any);
+    assert(vtype->ID > VTypeID_Void);
     
     u32 ID = object_generate_id(inter);
     
@@ -1930,7 +1955,7 @@ void ref_init(Interpreter* inter, Reference ref, IR ir)
     b32 has_initializer = ir.value.kind != ValueKind_None;
     
     if (has_initializer) {
-        Reference ir_ref = execute_IR(inter, ir, {}, NO_CODE);
+        Reference ir_ref = execute_ir_single_return(inter, ir, {}, NO_CODE);
         ref_copy(inter, ref, ir_ref);
     }
     else

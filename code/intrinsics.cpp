@@ -169,6 +169,15 @@ void intrinsic__console_set_cursor(Interpreter* inter, Array<Reference> params, 
     os_console_set_cursor(x, y);
 }
 
+void intrinsic__console_get_cursor(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code)
+{
+    i64 x, y;
+    os_console_get_cursor(&x, &y);
+    
+    returns[0] = alloc_int(inter, x);
+    returns[1] = alloc_int(inter, y);
+}
+
 void intrinsic__console_clear(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code)
 {
     os_console_clear();
@@ -427,11 +436,15 @@ void intrinsic__yov_parse(Interpreter* inter, Array<Reference> params, Array<Ref
     b32 file_is_core = string_ends(path, "code/core.yov");
     
     Yov* last_yov = yov;
-    yov_initialize(!file_is_core);
-    yov_config(path, {});
     
-    InterpreterSettings settings = {};
-    Interpreter* inter0 = yov_compile(settings, false, !file_is_core);
+    YovSettings settings = {};
+    settings.analyze_only = true;
+    settings.no_user = true;
+    
+    yov_initialize(!file_is_core);
+    yov_config(path, settings, {});
+    
+    yov_run();
     
     Yov* temp_yov = yov;
     yov = last_yov;
@@ -441,7 +454,6 @@ void intrinsic__yov_parse(Interpreter* inter, Array<Reference> params, Array<Ref
     
     yov = temp_yov;
     
-    interpreter_shutdown(inter0);
     yov_shutdown();
     yov = last_yov;
     

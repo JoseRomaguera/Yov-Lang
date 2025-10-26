@@ -1,27 +1,31 @@
+#include "inc.h"
+
 constexpr Object _make_object(VariableType* vtype) {
     Object obj{};
     obj.vtype = vtype;
     return obj;
 }
-constexpr VariableType _make_vtype(VTypeID ID, VariableType* child, const char* name, u32 name_size) {
+constexpr VariableType _make_vtype(VTypeID ID, VariableType* child, VariableKind kind, const char* name, u32 name_size) {
     VariableType type{};
     type.ID = ID;
     type.name.size = name_size;
     type.name.data = (char*)name;
-    type.kind = VariableKind_Unknown;
+    type.kind = kind;
     type.child_next = child;
     type.child_base = child;
     return type;
 }
 
-read_only VariableType _nil_vtype = _make_vtype(VTypeID_Unknown, &_nil_vtype, "Unknown", sizeof("Unknown"));
-read_only VariableType _void_vtype = _make_vtype(VTypeID_Void, &_nil_vtype, "void", sizeof("void"));
+read_only VariableType _nil_vtype = _make_vtype(VTypeID_Unknown, &_nil_vtype, VariableKind_Unknown, "Unknown", sizeof("Unknown")-1);
+read_only VariableType _void_vtype = _make_vtype(VTypeID_Void, &_nil_vtype, VariableKind_Void, "void", sizeof("void")-1);
+read_only VariableType _any_vtype = _make_vtype(VTypeID_Void, &_nil_vtype, VariableKind_Void, "Any", sizeof("Any")-1);
 
 read_only Object _nil_obj = _make_object(&_nil_vtype);
 read_only Object _null_obj = _make_object(&_void_vtype);
 
 VariableType* nil_vtype = &_nil_vtype;
 VariableType* void_vtype = &_void_vtype;
+VariableType* any_vtype = &_any_vtype;
 
 Object* nil_obj = &_nil_obj;
 Object* null_obj = &_null_obj;
@@ -40,7 +44,6 @@ void types_initialize(b32 import_core)
     yov->arg_definitions = pooled_array_make<ArgDefinition>(yov->static_arena, 32);
     yov->globals = pooled_array_make<ObjectDefinition>(yov->static_arena, 32);
     
-    vtype_add_core(VariableKind_Any, "Any", sizeof(Object*), VTypeID_Any);
     vtype_add_core(VariableKind_Primitive, "Int", sizeof(i64), VTypeID_Int);
     vtype_add_core(VariableKind_Primitive, "Bool", sizeof(b32), VTypeID_Bool);
     vtype_add_core(VariableKind_Primitive, "String", sizeof(ObjectData_String), VTypeID_String);
@@ -135,7 +138,6 @@ VariableType* vtype_from_reference(VariableType* base_type)
 b32 vtype_is_enum(VariableType* vtype) { return vtype->kind == VariableKind_Enum; }
 b32 vtype_is_array(VariableType* vtype) { return vtype->kind == VariableKind_Array; }
 b32 vtype_is_struct(VariableType* vtype) { return vtype->kind == VariableKind_Struct; }
-b32 vtype_is_tuple(VariableType* vtype) { return vtype_is_struct(vtype) && vtype->_struct.is_tuple; }
 b32 vtype_is_reference(VariableType* vtype) { return vtype->kind == VariableKind_Reference; }
 
 b32 vtype_needs_internal_release(VariableType* vtype)
@@ -153,6 +155,9 @@ b32 vtype_needs_internal_release(VariableType* vtype)
 
 VariableType* vtype_from_name(String name)
 {
+    if (string_equals(name, "Any")) return any_vtype;
+    if (string_equals(name, "void")) return void_vtype;
+    
     u32 dimensions = 0;
     while (name.size > 2 && name[name.size - 1] == ']' && name[name.size - 2] == '[') {
         name = string_substring(name, 0, name.size - 2);
@@ -227,17 +232,6 @@ Array<VariableTypeChild> vtype_get_properties(VariableType* vtype)
     return {};
 }
 
-Array<VariableType*> vtype_unpack(Arena* arena, VariableType* vtype)
-{
-    if (!vtype_is_struct(vtype)) {
-        Array<VariableType*> vtypes = array_make<VariableType*>(arena, 1);
-        vtypes[0] = vtype;
-        return vtypes;
-    }
-    
-    return vtype->_struct.vtypes;
-}
-
 VariableType* vtype_from_node(OpNode_ObjectType* node)
 {
     if (node->name.size == 0) return void_vtype;
@@ -288,6 +282,10 @@ VariableType* vtype_from_binary_operation(VariableType* left, VariableType* righ
         else if (op == BinaryOperator_NotEquals) return VType_Bool;
     }
     
+    if (right->ID == VType_Type->ID) {
+        if (op == BinaryOperator_Is) return VType_Bool;
+    }
+    
     if ((left->ID == VTypeID_String && right->ID == VTypeID_Int) || (left->ID == VTypeID_Int && right->ID == VTypeID_String))
     {
         if (op == BinaryOperator_Addition) return VType_String;
@@ -329,6 +327,13 @@ VariableType* vtype_from_sign_operation(VariableType* src, BinaryOperator op)
     return nil_vtype;
 }
 
+Array<VariableType*> vtypes_from_definitions(Arena* arena, Array<ObjectDefinition> defs)
+{
+    Array<VariableType*> types = array_make<VariableType*>(arena, defs.count);
+    foreach(i, types.count) types[i] = defs[i].vtype;
+    return types;
+}
+
 VariableType* define_enum(String name, Array<String> names, Array<i64> values)
 {
     SCRATCH();
@@ -349,11 +354,10 @@ VariableType* define_enum(String name, Array<String> names, Array<i64> values)
     return t;
 }
 
-VariableType* vtype_define_struct(String name, OpNode_StructDefinition* node, b32 is_tuple)
+VariableType* vtype_define_struct(String name, OpNode_StructDefinition* node)
 {
     VariableType* t = vtype_add(VariableKind_Struct, name, 0, nil_vtype, nil_vtype);
     t->_struct.node = node;
-    t->_struct.is_tuple = is_tuple;
     return t;
 }
 
@@ -419,21 +423,6 @@ ObjectDefinition define_arg(String identifier, String name, Value value, b32 req
     return def;
 }
 
-internal_fn VariableType* calculate_return_vtype_for_fn(FunctionDefinition* fn, Array<ObjectDefinition> returns)
-{
-    SCRATCH();
-    
-    if (returns.count == 0) return void_vtype;
-    
-    if (returns.count == 1 && string_equals(returns[0].name, "return")) {
-        return returns[0].vtype;
-    }
-    
-    VariableType* vtype = vtype_define_struct(string_format(scratch.arena, "%S_return", fn->identifier), NULL, true);
-    vtype_init_struct(vtype, returns);
-    return vtype;
-}
-
 void define_function(CodeLocation code, String identifier, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns, OpNode_Block* block)
 {
     FunctionDefinition fn{};
@@ -444,7 +433,6 @@ void define_function(CodeLocation code, String identifier, Array<ObjectDefinitio
     fn.defined.block = block;
     fn.code = code;
     fn.is_intrinsic = false;
-    fn.return_vtype = calculate_return_vtype_for_fn(&fn, returns);
     
     array_add(&yov->functions, fn);
 }
@@ -459,7 +447,6 @@ void define_intrinsic_function(CodeLocation code, IntrinsicFunction* callback, S
     fn.code = code;
     fn.intrinsic.fn = callback;
     fn.is_intrinsic = true;
-    fn.return_vtype = calculate_return_vtype_for_fn(&fn, returns);
     
     array_add(&yov->functions, fn);
 }
@@ -507,21 +494,21 @@ b32 definition_exists(String identifier)
 ExpresionContext ExpresionContext_from_void() {
     ExpresionContext ctx{};
     ctx.vtype = void_vtype;
-    ctx.allow_tuple = true;
+    ctx.assignment_count = 0;
     return ctx;
 }
 
-ExpresionContext ExpresionContext_from_inference() {
+ExpresionContext ExpresionContext_from_inference(u32 assignment_count) {
     ExpresionContext ctx{};
-    ctx.vtype = VType_Any;
-    ctx.allow_tuple = true;
+    ctx.vtype = any_vtype;
+    ctx.assignment_count = assignment_count;
     return ctx;
 }
 
-ExpresionContext ExpresionContext_from_vtype(VariableType* vtype, b32 allow_tuple) {
+ExpresionContext ExpresionContext_from_vtype(VariableType* vtype, u32 assignment_count) {
     ExpresionContext ctx{};
     ctx.vtype = vtype;
-    ctx.allow_tuple = allow_tuple;
+    ctx.assignment_count = assignment_count;
     return ctx;
 }
 
@@ -558,11 +545,14 @@ Value value_none() {
     return v;
 }
 
-Value value_from_ir_object(IR_Object* object) {
+Value value_from_ir_object(IR_Object* object)
+{
+    if (object->register_index < 0) return value_none();
     return value_from_register(object->register_index, object->vtype, true);
 }
 
 Value value_from_register(i32 index, VariableType* vtype, b32 is_lvalue) {
+    assert(index >= 0);
     Value v{};
     v.vtype = vtype;
     v.reg.index = index;
@@ -657,8 +647,8 @@ Value value_from_string_array(Interpreter* inter, Arena* arena, Array<Value> val
     {
         Value v{};
         v.vtype = VType_String;
-        v.kind = ValueKind_Composition;
-        v.composition_string = array_copy(arena, values);
+        v.kind = ValueKind_StringComposition;
+        v.string_composition = array_copy(arena, values);
         return v;
     }
 }
@@ -754,6 +744,27 @@ Value value_from_string_expression(Arena* arena, String str, VariableType* vtype
     return value_none();
 }
 
+Value value_from_return(Arena* arena, Array<Value> values)
+{
+    if (values.count == 0) return value_none();
+    if (values.count == 1) return values[0];
+    
+    Value v{};
+    v.vtype = any_vtype;
+    v.kind = ValueKind_MultipleReturn;
+    v.multiple_return = array_copy(arena, values);
+    return v;
+}
+
+Array<Value> values_from_return(Arena* arena, Value value)
+{
+    if (value.kind == ValueKind_MultipleReturn) return value.multiple_return;
+    
+    Array<Value> values = array_make<Value>(arena, 1);
+    values[0] = value;
+    return values;
+}
+
 String string_from_value(Arena* arena, Value value, b32 raw)
 {
     SCRATCH(arena);
@@ -808,19 +819,31 @@ String string_from_value(Arena* arena, Value value, b32 raw)
         return string_from_builder(arena, &builder);
     }
     
-    if (value.kind == ValueKind_Composition)
+    if (value.kind == ValueKind_StringComposition)
     {
-        if (value.vtype->ID == VTypeID_String)
-        {
-            Array<Value> values = value.composition_string;
-            StringBuilder builder = string_builder_make(scratch.arena);
-            foreach(i, values.count) {
-                String src = string_from_value(scratch.arena, values[i]);
-                appendf(&builder, "%S", src);
-                if (i < values.count - 1) append(&builder, " + ");
-            }
-            return string_from_builder(arena, &builder);
+        assert(value.vtype->ID == VTypeID_String);
+        Array<Value> values = value.string_composition;
+        StringBuilder builder = string_builder_make(scratch.arena);
+        foreach(i, values.count) {
+            String src = string_from_value(scratch.arena, values[i]);
+            appendf(&builder, "%S", src);
+            if (i < values.count - 1) append(&builder, " + ");
         }
+        return string_from_builder(arena, &builder);
+    }
+    
+    if (value.kind == ValueKind_MultipleReturn)
+    {
+        Array<Value> values = value.multiple_return;
+        StringBuilder builder = string_builder_make(scratch.arena);
+        append(&builder, "(");
+        foreach(i, values.count) {
+            String src = string_from_value(scratch.arena, values[i]);
+            appendf(&builder, "%S", src);
+            if (i < values.count - 1) append(&builder, ", ");
+        }
+        append(&builder, ")");
+        return string_from_builder(arena, &builder);
     }
     
     if (value.kind == ValueKind_Constant)

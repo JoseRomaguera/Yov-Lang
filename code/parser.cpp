@@ -590,6 +590,7 @@ OpNode* extract_expresion(Parser* parser)
                     else if (op == BinaryOperator_LessEqualsThan) preference = boolean_preference;
                     else if (op == BinaryOperator_GreaterThan) preference = boolean_preference;
                     else if (op == BinaryOperator_GreaterEqualsThan) preference = boolean_preference;
+                    else if (op == BinaryOperator_Is) preference = addition_preference;
                     else {
                         assert(0);
                     }
@@ -1653,7 +1654,7 @@ Parser* parser_alloc(Array<Token> tokens)
     return parser;
 }
 
-Array<OpNode_Import*> get_imports(Arena* arena, OpNode* ast)
+Array<OpNode_Import*> imports_from_ast(Arena* arena, OpNode* ast)
 {
     SCRATCH(arena);
     

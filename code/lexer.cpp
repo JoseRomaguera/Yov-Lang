@@ -18,6 +18,7 @@ internal_fn Token lexer_extract_dynamic_token(Lexer* lexer, TokenKind kind, u64 
         else if (string_equals("else", token.value)) kind = TokenKind_ElseKeyword;
         else if (string_equals("while", token.value)) kind = TokenKind_WhileKeyword;
         else if (string_equals("for", token.value)) kind = TokenKind_ForKeyword;
+        else if (string_equals("is", token.value)) kind = TokenKind_IsKeyword;
         else if (string_equals("enum", token.value)) kind = TokenKind_EnumKeyword;
         else if (string_equals("struct", token.value)) kind = TokenKind_StructKeyword;
         else if (string_equals("arg", token.value)) kind = TokenKind_ArgKeyword;
@@ -302,6 +303,7 @@ BinaryOperator binary_operator_from_token(TokenKind token)
     if (token == TokenKind_CompLessEquals) return BinaryOperator_LessEqualsThan;
     if (token == TokenKind_CompGreater) return BinaryOperator_GreaterThan;
     if (token == TokenKind_CompGreaterEquals) return BinaryOperator_GreaterEqualsThan;
+    if (token == TokenKind_IsKeyword) return BinaryOperator_Is;
     return BinaryOperator_None;
 };
 
@@ -325,6 +327,8 @@ b32 token_is_sign_or_binary_op(TokenKind token)
         TokenKind_CompLessEquals,
         TokenKind_CompGreater,
         TokenKind_CompGreaterEquals,
+        
+        TokenKind_IsKeyword,
     };
     
     foreach(i, countof(tokens)) {

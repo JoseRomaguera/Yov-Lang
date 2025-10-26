@@ -13,6 +13,7 @@ void intrinsic__env_path(Interpreter* inter, Array<Reference> params, Array<Refe
 void intrinsic__env_path_array(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
 void intrinsic__console_write(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
 void intrinsic__console_set_cursor(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
+void intrinsic__console_get_cursor(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
 void intrinsic__console_clear(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
 void intrinsic__call(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
 void intrinsic__call_exe(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);
@@ -332,6 +333,15 @@ void define_core()
 		Array<ObjectDefinition> parameters = array_make(parameters_, countof(parameters_));
 		Array<ObjectDefinition> returns = {};
 		define_intrinsic_function(NO_CODE, intrinsic__console_set_cursor, "console_set_cursor", parameters, returns);
+	}
+	// console_get_cursor :: () -> (x: Int, y: Int);
+	{
+		Array<ObjectDefinition> parameters = {};
+		ObjectDefinition returns_[2];
+		returns_[0] = obj_def_make("x", vtype_from_name("Int"), false);
+		returns_[1] = obj_def_make("y", vtype_from_name("Int"), false);
+		Array<ObjectDefinition> returns = array_make(returns_, countof(returns_));
+		define_intrinsic_function(NO_CODE, intrinsic__console_get_cursor, "console_get_cursor", parameters, returns);
 	}
 	// console_clear :: ();
 	{

@@ -48,6 +48,7 @@ void os_setup_memory_info()
     SYSTEM_INFO system_info;
     GetSystemInfo(&system_info);
     yov->os.page_size = system_info.dwAllocationGranularity;
+    yov->os.logical_cores = MAX(system_info.dwNumberOfProcessors, 1);
 }
 
 internal_fn HANDLE get_std_handle() {
@@ -99,6 +100,21 @@ void os_console_set_cursor(i64 x, i64 y)
     SetConsoleCursorPosition(std, home);
 }
 
+void os_console_get_cursor(i64* x, i64* y)
+{
+    *x = 0;
+    *y = 0;
+    
+    HANDLE std = get_std_handle();
+    
+    CONSOLE_SCREEN_BUFFER_INFO info = { };
+    BOOL ok = GetConsoleScreenBufferInfo(std, &info);
+    if (!ok) return;
+    
+    *x = info.dwCursorPosition.X;
+    *y = info.dwCursorPosition.Y;
+}
+
 void os_console_clear()
 {
     HANDLE std = get_std_handle();
@@ -146,6 +162,36 @@ void os_protect_virtual_memory(void* address, u32 pages)
     u64 bytes = (u64)pages * yov->os.page_size;
     DWORD old_protect = PAGE_READWRITE;
     VirtualProtect(address, bytes, PAGE_NOACCESS, &old_protect);
+}
+
+DWORD WINAPI win_thread_main(LPVOID param)
+{
+    initialize_scratch_arenas();
+    DEFER(shutdown_scratch_arenas());
+    
+    DEFER(os_free_heap(param));
+    ThreadFn* fn = *(ThreadFn**)param;
+    void* data = (u8*)param + sizeof(fn);
+    return fn(data);
+}
+
+u64 os_thread_start(ThreadFn* fn, RawBuffer data)
+{
+    u32 param_size = sizeof(fn) + data.size;
+    u8* param = (u8*)os_allocate_heap(param_size);
+    memory_copy(param, &fn, sizeof(fn));
+    memory_copy(param + sizeof(fn), data.data, data.size);
+    
+    HANDLE thread = CreateThread(NULL, 0, win_thread_main, param, 0, NULL);
+    return (u64)thread;
+}
+
+void os_thread_wait(u64 thread, u32 millis)
+{
+    DWORD dw_millis = millis;
+    if (millis == u32_max) dw_millis = INFINITE;
+    
+    WaitForSingleObject((HANDLE)thread, dw_millis);
 }
 
 internal_fn String string_from_win_error(DWORD error)
