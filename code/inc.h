@@ -655,7 +655,14 @@ struct VariableType;
 struct FunctionDefinition;
 struct OpNode_StructDefinition;
 struct IR_Object;
+struct Object;
 struct OpNode_ObjectType;
+
+struct Reference {
+    Object* parent;
+    VariableType* vtype;
+    void* address;
+};
 
 enum ValueKind {
     ValueKind_None,
@@ -689,7 +696,7 @@ struct Value {
         Array<Value> string_composition;
         Array<Value> multiple_return;
         
-        String constant_identifier;
+        Reference constant;
     };
 };
 
@@ -780,6 +787,7 @@ struct Unit {
 struct IR_Register {
     VariableType* vtype;
     String global_identifier;
+    b32 is_constant;
 };
 
 struct IR {
@@ -854,12 +862,6 @@ struct ObjectData_String {
     char* chars;
     u64 capacity;
     u64 size;
-};
-
-struct Reference {
-    Object* parent;
-    VariableType* vtype;
-    void* address;
 };
 
 #define VTypeID_Unknown VTypeID{ -1 }
@@ -1012,7 +1014,7 @@ Value value_from_type(VariableType* type);
 Value value_from_array(Arena* arena, VariableType* array_vtype, Array<Value> elements);
 Value value_from_empty_array(Arena* arena, VariableType* base_vtype, Array<Value> dimensions);
 Value value_from_default(VariableType* vtype);
-Value value_from_constant(Arena* arena, VariableType* vtype, String identifier);
+Value value_from_constant(Arena* arena, Reference ref);
 Value value_from_string_expression(Arena* arena, String str, VariableType* vtype);
 Value value_from_return(Arena* arena, Array<Value> values);
 
@@ -1063,6 +1065,8 @@ struct Yov {
     
     String main_script_path;
     String caller_dir;
+    
+    Interpreter* inter;
     
     PooledArray<YovScript> scripts;
     
@@ -1589,7 +1593,6 @@ struct IR_LoopingScope {
 };
 
 struct IR_Context {
-    Interpreter* inter;
     Arena* arena;
     Arena* temp_arena;
     PooledArray<IR_Register> registers;
@@ -1603,15 +1606,15 @@ struct IR_Context {
 
 IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b32 new_scope);
 
-IR ir_generate_from_function_definition(Interpreter* inter, FunctionDefinition* fn);
-IR ir_generate_from_initializer(Interpreter* inter, OpNode* node, ExpresionContext context);
+IR ir_generate_from_function_definition(FunctionDefinition* fn);
+IR ir_generate_from_initializer(OpNode* node, ExpresionContext context);
 IR ir_generate_from_value(Value value);
 
-b32 ct_value_from_node(Interpreter* inter, OpNode* node, VariableType* expected_vtype, Value* value);
-b32 ct_string_from_node(Arena* arena, Interpreter* inter, OpNode* node, String* str);
-b32 ct_bool_from_node(Interpreter* inter, OpNode* node, b32* b);
+b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value);
+b32 ct_string_from_node(Arena* arena, OpNode* node, String* str);
+b32 ct_bool_from_node(OpNode* node, b32* b);
 
-void ir_generate(Interpreter* inter, b32 require_args, b32 require_intrinsics);
+void ir_generate(b32 require_args, b32 require_intrinsics);
 
 enum SymbolType {
     SymbolType_None,
@@ -1646,6 +1649,7 @@ void ir_scope_pop(IR_Context* ir);
 i32 ir_register_alloc_local(IR_Context* ir, VariableType* vtype);
 i32 ir_register_get_global(IR_Context* ir, String identifier);
 IR_Register* ir_register_get(IR_Context* ir, i32 index);
+IR_Register* ir_register_from_value(IR_Context* ir, Value value);
 
 String string_from_register(Arena* arena, i32 index);
 String string_from_unit_kind(Arena* arena, UnitKind unit);
@@ -1668,10 +1672,11 @@ else do{}while(0)
 #define log_mem_trace(text, ...) do{}while(0)
 #endif
 
-Interpreter* interpreter_initialize();
-b32 interpreter_run(Interpreter* inter, FunctionDefinition* fn, Array<Value> params);
-void interpreter_run_main(Interpreter* inter);
-void interpreter_shutdown(Interpreter* inter);
+void interpreter_initialize();
+void interpreter_init_globals();
+b32 interpreter_run(FunctionDefinition* fn, Array<Value> params);
+void interpreter_run_main();
+void interpreter_finish();
 
 struct Scope {
     Array<Reference> registers;
@@ -1721,7 +1726,7 @@ Reference global_get_by_index(Interpreter* inter, i32 index);
 
 // Once defined the IR, this will be the functions used to execute/analyze
 
-Reference ref_from_value(Interpreter* inter, Scope* scope, Value value);
+Reference ref_from_value(Scope* scope, Value value);
 void execute_ir(Interpreter* inter, IR ir, Array<Reference> output, Array<Value> params, CodeLocation code);
 Reference execute_ir_single_return(Interpreter* inter, IR ir, Array<Value> params, CodeLocation code);
 
@@ -1744,10 +1749,13 @@ Reference register_get(Scope* scope, i32 index);
 //- OBJECT
 
 String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 raw = true);
-String string_from_ref(Arena* arena, Interpreter* inter, Reference ref, b32 raw = true);
+String string_from_ref(Arena* arena, Reference ref, b32 raw = true);
+
+Reference ref_from_compiletime(Interpreter* inter, Value value);
 String string_from_compiletime(Arena* arena, Interpreter* inter, Value value, b32 raw = true);
 b32 bool_from_compiletime(Interpreter* inter, Value value);
 VariableType* type_from_compiletime(Interpreter* inter, Value value);
+
 Reference ref_from_object(Object* object);
 Reference ref_from_address(Object* parent, VariableType* vtype, void* address);
 
@@ -1805,7 +1813,7 @@ void ref_string_append(Interpreter* inter, Reference ref, String v);
 void set_reference(Interpreter* inter, Reference ref, Reference src);
 
 void set_int_member(Interpreter* inter, Reference ref, String member, i64 v);
-void set_bool_member(Interpreter* inter, Reference ref, String member, b32 v);
+void ref_member_set_bool(Interpreter* inter, Reference ref, String member, b32 v);
 void set_enum_index_member(Interpreter* inter, Reference ref, String member, i64 v);
 void ref_member_set_string(Interpreter* inter, Reference ref, String member, String v);
 

@@ -1535,6 +1535,7 @@ void yov_initialize(b32 import_core)
     yov->caller_dir = os_get_working_path(yov->static_arena);
     
     types_initialize(import_core);
+    interpreter_initialize();
 }
 
 void yov_shutdown()
@@ -1713,7 +1714,7 @@ void yov_set_exit_code(i64 exit_code)
     yov->exit_code = exit_code;
 }
 
-void yov_print_script_help(Interpreter* inter)
+void yov_print_script_help()
 {
     SCRATCH();
     StringBuilder builder = string_builder_make(scratch.arena);
@@ -1724,8 +1725,8 @@ void yov_print_script_help(Interpreter* inter)
         
         if (global != NULL) {
             Value value = global->ir.value;
-            Reference ref = ref_from_value(inter, inter->global_scope, value);
-            String description = string_from_ref(scratch.arena, inter, ref, true);
+            Reference ref = ref_from_value(yov->inter->global_scope, value);
+            String description = string_from_ref(scratch.arena, ref, true);
             
             append(&builder, description);
             append(&builder, "\n\n");
@@ -1812,10 +1813,7 @@ internal_fn void yov_run_wide()
         return;
     }
     
-    Interpreter* inter = interpreter_initialize();
-    DEFER(interpreter_shutdown(inter));
-    
-    ir_generate(inter, require_args, require_intrinsics);
+    ir_generate(require_args, require_intrinsics);
     
     if (yov->exit_requested) {
         yov_set_exit_code(-1);
@@ -1823,16 +1821,20 @@ internal_fn void yov_run_wide()
     }
     
     if (help_arg != NULL) {
-        yov_print_script_help(inter);
+        yov_print_script_help();
         return;
     }
     
     // Execute
     if (!yov->settings.analyze_only) {
-        interpreter_run_main(inter);
-        if (yov->exit_requested && yov->reports.count > 0) {
-            yov_set_exit_code(-1);
-        }
+        interpreter_init_globals();
+        interpreter_run_main();
+    }
+    
+    interpreter_finish();
+    
+    if (yov->exit_requested && yov->reports.count > 0) {
+        yov_set_exit_code(-1);
     }
 }
 

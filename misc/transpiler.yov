@@ -61,7 +61,7 @@ transpile_script :: (script_path: String, result_path: String, function_name: St
     {
         file += "{indent(1)}// {string_from_object_definition(def)}\n";
         file += "{indent(1)}\{\n";
-        file += "{indent(1)}ObjectDefinition def = {transpile_object_definition(def)};\n";
+        file += "{indent(1)}ObjectDefinition def = {transpile_object_definition(def, true)};\n";
         file += "{indent(2)}define_global(def);\n";
         file += "{indent(1)}\}\n";
     }
@@ -75,16 +75,23 @@ transpile_script :: (script_path: String, result_path: String, function_name: St
     return Result();
 }
 
-transpile_object_definition :: (def: ObjectDefinition) -> String
+transpile_object_definition :: (def: ObjectDefinition, init_default: Bool) -> String
 {
-    return "obj_def_make(\"{def.identifier}\", vtype_from_name(\"{def.type.name}\"), {false})";
+    vtype := "vtype_from_name(\"{def.type.name}\")";
+    ir := "\{\}";
+    
+    if (init_default) {
+        ir = "ir_generate_from_value(value_from_default({vtype}))";
+    }
+    
+    return "obj_def_make(\"{def.identifier}\", {vtype}, {def.is_constant}, {ir})";
 }
 
 transpile_object_definition_array :: (in: Int, name: String, defs: ObjectDefinition[]) -> String
 {
     values := [defs.count]->String;
     for (def, i: defs) {
-        values[i] = transpile_object_definition(def);
+        values[i] = transpile_object_definition(def, false);
     }
     return transpile_array(in, name, "ObjectDefinition", values);
 }

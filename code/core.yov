@@ -42,10 +42,11 @@ CallsContext :: struct {
     redirect_stdout: RedirectStdout;
 }
 
-yov     :: YovInfo();
-context :: Context();
-os      :: OS();
-calls   :: CallsContext();
+yov :: YovInfo();
+os  :: OS();
+
+context := Context();
+calls   := CallsContext();
 
 // Core
 
@@ -99,6 +100,7 @@ yov_require_max :: (major: Int, minor: Int) -> Result;
 ObjectDefinition :: struct {
     identifier: String;
     type: Type;
+    is_constant: Bool;
 }
 
 FunctionDefinition :: struct {

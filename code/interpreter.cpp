@@ -1,6 +1,6 @@
 #include "inc.h"
 
-internal_fn void define_globals(Interpreter* inter)
+internal_fn void define_compiletime_globals(Interpreter* inter)
 {
     SCRATCH();
     
@@ -30,6 +30,39 @@ internal_fn void define_globals(Interpreter* inter)
 #else
 #error TODO
 #endif
+    }
+}
+
+void interpreter_initialize()
+{
+    Interpreter* inter = arena_push_struct<Interpreter>(yov->static_arena);
+    yov->inter = inter;
+    
+    inter->empty_op = arena_push_struct<OpNode>(yov->static_arena);
+    
+    inter->global_scope = arena_push_struct<Scope>(yov->static_arena);
+    inter->current_scope = inter->global_scope;
+    
+    inter->globals = pooled_array_make<Reference>(yov->static_arena, 16);
+    
+    foreach(i, yov->globals.count) {
+        array_add(&inter->globals, ref_from_object(null_obj));
+    }
+    
+    define_compiletime_globals(inter);
+}
+
+void interpreter_init_globals()
+{
+    Interpreter* inter = yov->inter;
+    
+    for (auto it = pooled_array_make_iterator(&yov->globals); it.valid; ++it)
+    {
+        ObjectDefinition* def = it.value;
+        
+        if (!value_is_compiletime(def->ir.value)) {
+            global_init(inter, *def, NO_CODE);
+        }
     }
     
     // Context struct
@@ -76,42 +109,12 @@ internal_fn void define_globals(Interpreter* inter)
         inter->common_globals.calls = ref;
         global_save(inter, "calls", ref);
     }
-    
-    for (auto it = pooled_array_make_iterator(&yov->globals); it.valid; ++it)
-    {
-        ObjectDefinition* def = it.value;
-        if (!is_null(global_get_by_index(inter, it.index))) continue;
-        
-        Reference ref = execute_ir_single_return(inter, def->ir, {}, NO_CODE);
-        global_save_by_index(inter, it.index, ref);
-        
-    }
 }
 
-Interpreter* interpreter_initialize()
+b32 interpreter_run(FunctionDefinition* fn, Array<Value> params)
 {
-    YovScript* main_script = yov_get_script(0);
+    Interpreter* inter = yov->inter;
     
-    Interpreter* inter = arena_push_struct<Interpreter>(yov->static_arena);
-    
-    inter->empty_op = arena_push_struct<OpNode>(yov->static_arena);
-    
-    inter->global_scope = arena_push_struct<Scope>(yov->static_arena);
-    inter->current_scope = inter->global_scope;
-    
-    inter->globals = pooled_array_make<Reference>(yov->static_arena, 16);
-    
-    foreach(i, yov->globals.count) {
-        array_add(&inter->globals, ref_from_object(null_obj));
-    }
-    
-    define_globals(inter);
-    
-    return inter;
-}
-
-b32 interpreter_run(Interpreter* inter, FunctionDefinition* fn, Array<Value> params)
-{
     object_free_unused_memory(inter);
     
     if (fn != NULL && fn->returns.count == 0 && fn->parameters.count == params.count) {
@@ -123,17 +126,19 @@ b32 interpreter_run(Interpreter* inter, FunctionDefinition* fn, Array<Value> par
     return false;
 }
 
-void interpreter_run_main(Interpreter* inter)
+void interpreter_run_main()
 {
     FunctionDefinition* fn = find_function("main");
     
-    if (!interpreter_run(inter, fn, {})) {
+    if (!interpreter_run(fn, {})) {
         report_error(NO_CODE, "Main function not found");
     }
 }
 
-void interpreter_shutdown(Interpreter* inter)
+void interpreter_finish()
 {
+    Interpreter* inter = yov->inter;
+    yov->inter = NULL;
     if (inter == NULL) return;
     
     foreach(i, inter->globals.count) {
@@ -143,14 +148,15 @@ void interpreter_shutdown(Interpreter* inter)
     scope_clear(inter, inter->global_scope);
     object_free_unused_memory(inter);
     
+#if DEV
     if (inter->gc.object_count > 0) {
         lang_report_unfreed_objects();
     }
     else if (inter->gc.allocation_count > 0) {
         lang_report_unfreed_dynamic();
     }
-    
     assert(yov->reports.count > 0 || inter->current_scope == inter->global_scope);
+#endif
 }
 
 void interpreter_exit(Interpreter* inter, i64 exit_code)
@@ -247,9 +253,11 @@ Reference global_get_by_index(Interpreter* inter, i32 index)
     return inter->globals[index];
 }
 
-Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
+Reference ref_from_value(Scope* scope, Value value)
 {
     SCRATCH();
+    
+    Interpreter* inter = yov->inter;
     
     if (value.kind == ValueKind_None) return ref_from_object(null_obj);
     if (value.kind == ValueKind_Literal) {
@@ -278,7 +286,7 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
         {
             Array<i64> dimensions = array_make<i64>(scratch.arena, values.count);
             foreach(i, dimensions.count) {
-                dimensions[i] = get_int(ref_from_value(inter, scope, values[i]));
+                dimensions[i] = get_int(ref_from_value(scope, values[i]));
             }
             
             VariableType* base_vtype = value.vtype->child_base;
@@ -291,7 +299,7 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
             Reference array = alloc_array(inter, element_vtype, values.count, true);
             
             foreach(i, values.count) {
-                ref_set_member(inter, array, i, ref_from_value(inter, scope, values[i]));
+                ref_set_member(inter, array, i, ref_from_value(scope, values[i]));
             }
             return array;
         }
@@ -310,9 +318,9 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
             StringBuilder builder = string_builder_make(scratch.arena);
             foreach(i, sources.count)
             {
-                Reference source = ref_from_value(inter, scope, sources[i]);
+                Reference source = ref_from_value(scope, sources[i]);
                 if (is_unknown(source)) return ref_from_object(nil_obj);
-                append(&builder, string_from_ref(scratch.arena, inter, source));
+                append(&builder, string_from_ref(scratch.arena, source));
             }
             
             return alloc_string(inter, string_from_builder(scratch.arena, &builder));
@@ -320,11 +328,11 @@ Reference ref_from_value(Interpreter* inter, Scope* scope, Value value)
     }
     
     if (value.kind == ValueKind_MultipleReturn) {
-        return ref_from_value(inter, scope, value.multiple_return[0]);
+        return ref_from_value(scope, value.multiple_return[0]);
     }
     
     if (value.kind == ValueKind_Constant) {
-        return global_get(inter, value.constant_identifier);
+        return value.constant;
     }
     
     if (value.kind == ValueKind_LValue || value.kind == ValueKind_Register)
@@ -387,7 +395,7 @@ void execute_ir(Interpreter* inter, IR ir, Array<Reference> output, Array<Value>
     foreach(i, params.count) {
         i32 reg = i;
         Value param = params[i];
-        Reference ref = ref_from_value(inter, scope->prev, param);
+        Reference ref = ref_from_value(scope->prev, param);
         
         if (is_null(register_get(scope, reg)))
             register_save(inter, scope, reg, object_alloc(inter, ref.vtype));
@@ -466,7 +474,7 @@ void execute_ir(Interpreter* inter, IR ir, Array<Reference> output, Array<Value>
         assert(output.count <= returns.count);
         
         foreach(i, MIN(output.count, returns.count)) {
-            output[i] = ref_from_value(inter, scope, returns[i]);
+            output[i] = ref_from_value(scope, returns[i]);
         }
     }
     
@@ -488,13 +496,13 @@ void run_instruction(Interpreter* inter, Unit unit)
     i32 dst_index = unit.dst_index;
     
     if (unit.kind == UnitKind_Copy) {
-        Reference src = ref_from_value(inter, inter->current_scope, unit.copy.src);
+        Reference src = ref_from_value(inter->current_scope, unit.copy.src);
         run_copy(inter, dst_index, src, code);
         return;
     }
     
     if (unit.kind == UnitKind_Store) {
-        Reference src = ref_from_value(inter, inter->current_scope, unit.store.src);
+        Reference src = ref_from_value(inter->current_scope, unit.store.src);
         run_store(inter, dst_index, src, code);
         return;
     }
@@ -519,15 +527,15 @@ void run_instruction(Interpreter* inter, Unit unit)
         Reference src = ref_from_object(null_obj);
         i32 offset = unit.jump.offset;
         
-        if (condition != 0) src = ref_from_value(inter, inter->current_scope, unit.jump.src);
+        if (condition != 0) src = ref_from_value(inter->current_scope, unit.jump.src);
         run_jump(inter, src, condition, offset, code);
         return;
     }
     
     if (unit.kind == UnitKind_BinaryOperation) {
         Reference dst = register_get(inter->current_scope, dst_index);
-        Reference src0 = ref_from_value(inter, inter->current_scope, unit.binary_op.src0);
-        Reference src1 = ref_from_value(inter, inter->current_scope, unit.binary_op.src1);
+        Reference src0 = ref_from_value(inter->current_scope, unit.binary_op.src0);
+        Reference src1 = ref_from_value(inter->current_scope, unit.binary_op.src1);
         BinaryOperator op = unit.binary_op.op;
         
         Reference result = run_binary_operation(inter, dst, src0, src1, op, code);
@@ -541,7 +549,7 @@ void run_instruction(Interpreter* inter, Unit unit)
     }
     
     if (unit.kind == UnitKind_SignOperation) {
-        Reference src = ref_from_value(inter, inter->current_scope, unit.sign_op.src);
+        Reference src = ref_from_value(inter->current_scope, unit.sign_op.src);
         BinaryOperator op = unit.sign_op.op;
         
         Reference result = run_sign_operation(inter, src, op, code);
@@ -553,8 +561,8 @@ void run_instruction(Interpreter* inter, Unit unit)
     {
         SCRATCH();
         b32 child_is_member = unit.child.child_is_member;
-        Reference child_index_obj = ref_from_value(inter, inter->current_scope, unit.child.child_index);
-        Reference src = ref_from_value(inter, inter->current_scope, unit.child.src);
+        Reference child_index_obj = ref_from_value(inter->current_scope, unit.child.child_index);
+        Reference src = ref_from_value(inter->current_scope, unit.child.src);
         
         if (is_unknown(src) || is_unknown(child_index_obj)) return;
         
@@ -585,7 +593,7 @@ void run_instruction(Interpreter* inter, Unit unit)
     
     if (unit.kind == UnitKind_ResultEval)
     {
-        Reference src = ref_from_value(inter, inter->current_scope, unit.result_eval.src);
+        Reference src = ref_from_value(inter->current_scope, unit.result_eval.src);
         
         assert(src.vtype == VType_Result);
         
@@ -657,7 +665,7 @@ void run_function_call(Interpreter* inter, i32 dst_index, FunctionDefinition* fn
         
         Array<Reference> params = array_make<Reference>(scratch.arena, parameters.count);
         foreach(i, params.count) {
-            params[i] = ref_from_value(inter, inter->current_scope, parameters[i]);
+            params[i] = ref_from_value(inter->current_scope, parameters[i]);
         }
         
         fn->intrinsic.fn(inter, params, returns, code);
@@ -953,10 +961,10 @@ Reference register_get(Scope* scope, i32 index) {
 //- OBJECT 
 
 String string_from_object(Arena* arena, Interpreter* inter, Object* object, b32 raw) {
-    return string_from_ref(arena, inter, ref_from_object(object), raw);
+    return string_from_ref(arena, ref_from_object(object), raw);
 }
 
-String string_from_ref(Arena* arena, Interpreter* inter, Reference ref, b32 raw)
+String string_from_ref(Arena* arena, Reference ref, b32 raw)
 {
     SCRATCH(arena);
     
@@ -984,8 +992,8 @@ String string_from_ref(Arena* arena, Interpreter* inter, Reference ref, b32 raw)
         ObjectData_Array* array = get_array(ref);
         
         foreach(i, array->count) {
-            Reference element = ref_get_member(inter, ref, i);
-            append(&builder, string_from_ref(scratch.arena, inter, element, false));
+            Reference element = ref_get_member(yov->inter, ref, i);
+            append(&builder, string_from_ref(scratch.arena, element, false));
             if (i < array->count - 1) append(&builder, ", ");
         }
         
@@ -1013,8 +1021,8 @@ String string_from_ref(Arena* arena, Interpreter* inter, Reference ref, b32 raw)
         {
             String member_name = vtype->_struct.names[i];
             
-            Reference member = ref_get_member(inter, ref, i);
-            appendf(&builder, "%S = %S", member_name, string_from_ref(scratch.arena, inter, member, false));
+            Reference member = ref_get_member(yov->inter, ref, i);
+            appendf(&builder, "%S = %S", member_name, string_from_ref(scratch.arena, member, false));
             if (i < vtype->_struct.vtypes.count - 1) append(&builder, ", ");
         }
         
@@ -1024,11 +1032,21 @@ String string_from_ref(Arena* arena, Interpreter* inter, Reference ref, b32 raw)
     }
     
     if (vtype->kind == VariableKind_Reference) {
-        return string_from_ref(arena, inter, dereference(ref), raw);
+        return string_from_ref(arena, dereference(ref), raw);
     }
     
     invalid_codepath();
     return "?";
+}
+
+Reference ref_from_compiletime(Interpreter* inter, Value value)
+{
+    if (!value_is_compiletime(value)) {
+        invalid_codepath();
+        return ref_from_object(nil_obj);
+    }
+    Reference ref = ref_from_value(inter->global_scope, value);
+    return ref;
 }
 
 String string_from_compiletime(Arena* arena, Interpreter* inter, Value value, b32 raw)
@@ -1037,8 +1055,8 @@ String string_from_compiletime(Arena* arena, Interpreter* inter, Value value, b3
         invalid_codepath();
         return {};
     }
-    Reference ref = ref_from_value(inter, inter->global_scope, value);
-    String str = string_from_ref(arena, inter, ref, raw);
+    Reference ref = ref_from_value(inter->global_scope, value);
+    String str = string_from_ref(arena, ref, raw);
     object_free_unused_memory(inter);
     return str;
 }
@@ -1049,7 +1067,7 @@ b32 bool_from_compiletime(Interpreter* inter, Value value)
         invalid_codepath();
         return false;
     }
-    Reference ref = ref_from_value(inter, inter->global_scope, value);
+    Reference ref = ref_from_value(inter->global_scope, value);
     if (ref.vtype->ID != VTypeID_Bool) {
         invalid_codepath();
         return false;
@@ -1065,7 +1083,7 @@ VariableType* type_from_compiletime(Interpreter* inter, Value value)
         invalid_codepath();
         return nil_vtype;
     }
-    Reference ref = ref_from_value(inter, inter->global_scope, value);
+    Reference ref = ref_from_value(inter->global_scope, value);
     if (ref.vtype != VType_Type) {
         invalid_codepath();
         return nil_vtype;
@@ -1588,7 +1606,7 @@ void set_int_member(Interpreter* inter, Reference ref, String member, i64 v)
     else set_int(member_ref, v);
 }
 
-void set_bool_member(Interpreter* inter, Reference ref, String member, b32 v)
+void ref_member_set_bool(Interpreter* inter, Reference ref, String member, b32 v)
 {
     i32 index = vtype_get_member(ref.vtype, member).index;
     Reference member_ref = ref_get_member(inter, ref, index);
@@ -1623,7 +1641,7 @@ void ref_assign_Result(Interpreter* inter, Reference ref, Result res)
     assert(ref.vtype == VType_Result);
     ref_member_set_string(inter, ref, "message", res.message);
     set_int_member(inter, ref, "code", res.code);
-    set_bool_member(inter, ref, "failed", res.failed);
+    ref_member_set_bool(inter, ref, "failed", res.failed);
 }
 
 void ref_assign_CallOutput(Interpreter* inter, Reference ref, CallOutput res)
@@ -1636,7 +1654,7 @@ void ref_assign_FileInfo(Interpreter* inter, Reference ref, FileInfo info)
 {
     assert(ref.vtype == VType_FileInfo);
     ref_member_set_string(inter, ref, "path", info.path);
-    set_bool_member(inter, ref, "is_directory", info.is_directory);
+    ref_member_set_bool(inter, ref, "is_directory", info.is_directory);
 }
 
 void ref_assign_YovParseOutput(Interpreter* inter, Reference ref, Yov* temp_yov)
@@ -1778,6 +1796,7 @@ void ref_assign_EnumDefinition(Interpreter* inter, Reference ref, VariableType* 
 void ref_assign_ObjectDefinition(Interpreter* inter, Reference ref, ObjectDefinition def)
 {
     ref_member_set_string(inter, ref, "identifier", def.name);
+    ref_member_set_bool(inter, ref, "is_constant", def.is_constant);
     
     VariableTypeChild type_info = vtype_get_member(ref.vtype, "type");
     Reference type = ref_get_member(inter, ref, type_info.index);

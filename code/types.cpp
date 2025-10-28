@@ -647,8 +647,8 @@ Value value_from_string_array(Interpreter* inter, Arena* arena, Array<Value> val
     {
         StringBuilder builder = string_builder_make(scratch.arena);
         foreach(i, values.count) {
-            Reference ref = ref_from_value(inter, inter->global_scope, values[i]);
-            String str = string_from_ref(scratch.arena, inter, ref, true);
+            Reference ref = ref_from_value(inter->global_scope, values[i]);
+            String str = string_from_ref(scratch.arena, ref, true);
             append(&builder, str);
         }
         
@@ -702,12 +702,22 @@ Value value_from_default(VariableType* vtype)
     return v;
 }
 
-Value value_from_constant(Arena* arena, VariableType* vtype, String identifier)
+Value value_from_constant(Arena* arena, Reference ref)
 {
+    if (ref.vtype->ID == VTypeID_Int) return value_from_int(get_int(ref));
+    if (ref.vtype->ID == VTypeID_Bool) return value_from_bool(get_bool(ref));
+    if (ref.vtype->ID == VTypeID_String) return value_from_string(arena, get_string(ref));
+    if (ref.vtype->kind == VariableKind_Enum) return value_from_enum(ref.vtype, get_enum_index(ref));
+    if (ref.vtype == VType_Type) return value_from_type(get_Type(yov->inter, ref));
+    
+    // TODO(Jose): Do not use Garbage Collector, this memory will never be freed
+    
+    object_increment_ref(ref.parent);
+    
     Value v{};
-    v.vtype = vtype;
+    v.vtype = ref.vtype;
     v.kind = ValueKind_Constant;
-    v.constant_identifier = string_copy(arena, identifier);
+    v.constant = ref;
     return v;
 }
 
@@ -860,7 +870,7 @@ String string_from_value(Arena* arena, Value value, b32 raw)
     
     if (value.kind == ValueKind_Constant)
     {
-        return string_format(arena, "const(%S)", value.constant_identifier);
+        return string_from_ref(arena, value.constant, raw);
     }
     
     if (value.kind == ValueKind_Default) {

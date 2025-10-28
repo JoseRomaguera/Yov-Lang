@@ -22,14 +22,14 @@ void intrinsic__typeof(Interpreter* inter, Array<Reference> params, Array<Refere
 void intrinsic__print(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code)
 {
     SCRATCH();
-    String str = string_from_ref(scratch.arena, inter, params[0]);
+    String str = string_from_ref(scratch.arena, params[0]);
     print_info(str);
 }
 
 void intrinsic__println(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code)
 {
     SCRATCH();
-    String str = string_from_ref(scratch.arena, inter, params[0]);
+    String str = string_from_ref(scratch.arena, params[0]);
     print_info("%S\n", str);
 }
 
