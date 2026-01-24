@@ -1,313 +1,806 @@
 #include "inc.h"
 
-internal_fn OpKind op_kind_from_tokens(Parser* parser)
+Parser* ParserAlloc(String text, RangeU64 range, I32 script_id)
 {
-    u32 end_of_sentence_index = 0;
-    u32 assignment_count = 0;
-    u32 colon_count = 0;
+    Parser* parser = ArenaPushStruct<Parser>(context.arena);
+    parser->script_id = script_id;
+    parser->text = text;
+    parser->cursor = range.min;
+    parser->range = range;
     
-    while (true) {
-        Token t0 = peek_token(parser, end_of_sentence_index);
-        
-        if (t0.kind == TokenKind_Assignment) assignment_count++;
-        if (t0.kind == TokenKind_Colon) colon_count++;
-        
-        if (t0.kind == TokenKind_NextSentence) break;
-        if (t0.kind == TokenKind_None) break;
-        end_of_sentence_index++;
-    }
-    
-    Token t0 = peek_token(parser, 0);
-    Token t1 = peek_token(parser, 1);
-    Token t2 = peek_token(parser, 2);
-    Token t3 = peek_token(parser, 3);
-    Token t4 = peek_token(parser, 4);
-    
-    if (t0.kind == TokenKind_IfKeyword) return OpKind_IfStatement;
-    if (t0.kind == TokenKind_WhileKeyword) return OpKind_WhileStatement;
-    if (t0.kind == TokenKind_ForKeyword) return OpKind_ForStatement;
-    if (t0.kind == TokenKind_ReturnKeyword) return OpKind_Return;
-    if (t0.kind == TokenKind_ContinueKeyword) return OpKind_Continue;
-    if (t0.kind == TokenKind_BreakKeyword) return OpKind_Break;
-    if (t0.kind == TokenKind_ImportKeyword) return OpKind_Import;
-    
-    if (t0.kind == TokenKind_OpenBrace) return OpKind_Block;
-    
-    if (t0.kind == TokenKind_Identifier) {
-        if (t1.kind == TokenKind_OpenParenthesis) return OpKind_FunctionCall;
-    }
-    
-    // Object definition
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Identifier) return OpKind_ObjectDefinition;
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Assignment) return OpKind_ObjectDefinition;
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_OpenBracket) return OpKind_ObjectDefinition;
-    
-    // Array definition
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_OpenBracket && t2.kind == TokenKind_CloseBracket && t3.kind == TokenKind_Identifier) return OpKind_ObjectDefinition;
-    
-    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Colon) {
-        if (t3.kind == TokenKind_EnumKeyword) return OpKind_EnumDefinition;
-        if (t3.kind == TokenKind_StructKeyword) return OpKind_StructDefinition;
-        if (t3.kind == TokenKind_ArgKeyword) return OpKind_ArgDefinition;
-        if (t3.kind == TokenKind_OpenParenthesis) return OpKind_FunctionDefinition;
-        return OpKind_ObjectDefinition;
-    }
-    
-    if (colon_count == 1) return OpKind_ObjectDefinition;
-    if (assignment_count == 1) return OpKind_Assignment;
-    
-    return OpKind_None;
+    return parser;
 }
 
-void parser_push_state(Parser* parser, Array<Token> tokens) {
-    ParserState state{};
-    state.tokens = tokens;
-    state.token_index = 0;
-    array_add(&parser->state_stack, state);
-}
-
-void parser_pop_state(Parser* parser) {
-    array_erase(&parser->state_stack, parser->state_stack.count - 1);
-}
-
-ParserState* parser_get_state(Parser* parser) {
-    return &parser->state_stack[parser->state_stack.count - 1];
-}
-
-Array<Token> parser_get_tokens_left(Parser* parser) {
-    ParserState* state = parser_get_state(parser);
-    return array_subarray(state->tokens, state->token_index, state->tokens.count - state->token_index);
-}
-
-b32 check_tokens_are_couple(Array<Token> tokens, u32 open_index, u32 close_index, TokenKind open_token, TokenKind close_token)
+Parser* ParserFromLocation(Location location)
 {
-    assert(open_index < tokens.count && close_index < tokens.count);
-    assert(tokens[open_index].kind == open_token && tokens[close_index].kind == close_token);
+    YovScript* script = GetScript(location.script_id);
+    if (script == NULL) {
+        InvalidCodepath();
+        return ParserAlloc("", {}, -1);
+    }
     
-    if (close_index <= open_index) return false;
+    return ParserAlloc(script->text, location.range, location.script_id);
+}
+
+Location LocationFromParser(Parser* parser, U64 end) {
+    return LocationMake(parser->cursor, end, parser->script_id);
+}
+
+Token peek_token(Parser* parser, I64 cursor_offset)
+{
+    Token token = read_valid_token(parser->text, parser->cursor + cursor_offset, parser->range.max, parser->script_id);
+    return token;
+}
+
+void skip_token(Parser* parser, Token token)
+{
+    Assert(parser->cursor == token.cursor);
+    parser->cursor += token.skip_size;
+    Assert(parser->cursor <= parser->range.max);
+}
+
+void assume_token(Parser* parser, TokenKind kind)
+{
+    Token token = consume_token(parser);
+    Assert(token.kind == kind);
+}
+
+void MoveCursor(Parser* parser, U64 cursor)
+{
+    if (cursor > parser->range.max) {
+        InvalidCodepath();
+        cursor = parser->range.max;
+    }
     
-    i32 depth = 1;
-    for (u32 i = open_index + 1; i < close_index; ++i)
+    if (cursor < parser->range.min) {
+        InvalidCodepath();
+        cursor = parser->range.min;
+    }
+    
+    parser->cursor = cursor;
+}
+
+Token consume_token(Parser* parser)
+{
+    Token token = peek_token(parser);
+    skip_token(parser, token);
+    return token;
+}
+
+Array<Token> ConsumeAllTokens(Parser* parser)
+{
+    PooledArray<Token> tokens = pooled_array_make<Token>(context.arena, 16);
+    
+    while (true)
     {
-        if (tokens[i].kind == open_token) {
-            depth++;
-        }
-        else if (tokens[i].kind == close_token) {
-            depth--;
-            if (depth <= 0) return false;
-        }
+        Token token = consume_token(parser);
+        if (token.kind == TokenKind_None) break;
+        array_add(&tokens, token);
     }
     
-    return true;
+    return array_from_pooled_array(context.arena, tokens);
 }
 
-Token peek_token(Parser* parser, i32 offset)
+Location FindUntil(Parser* parser, B32 include_match, TokenKind match0, TokenKind match1)
 {
-    ParserState* state = parser_get_state(parser);
-    i32 index = (i32)state->token_index + offset;
-    if (index < 0 || index >= state->tokens.count) return {};
-    return state->tokens[index];
-}
-
-Array<Token> peek_tokens(Parser* parser, i32 offset, u32 count) {
-    ParserState* state = parser_get_state(parser);
-    i32 index = state->token_index + offset;
-    if (index < 0 || index >= state->tokens.count) return {};
-    count = MIN(count, state->tokens.count - index);
-    return array_subarray(state->tokens, index, count);
-}
-
-void skip_tokens(Parser* parser, u32 count)
-{
-    ParserState* state = parser_get_state(parser);
-    if (state->token_index + count > state->tokens.count) {
-        assert(0);
-        state->token_index = state->tokens.count;
-        return;
-    }
-    state->token_index += count;
-}
-
-void skip_tokens_before_op(Parser* parser)
-{
-    ParserState* state = parser_get_state(parser);
-    while (state->token_index < state->tokens.count) {
-        Token token = state->tokens[state->token_index];
-        if (token.kind != TokenKind_NextLine && token.kind != TokenKind_NextSentence) break;
-        state->token_index++;
-    }
-}
-
-void skip_sentence(Parser* parser)
-{
-    ParserState* state = parser_get_state(parser);
-    while (state->token_index < state->tokens.count) {
-        Token token = state->tokens[state->token_index++];
-        if (token.kind == TokenKind_NextSentence) break;
-    }
-}
-
-Token extract_token(Parser* parser)
-{
-    ParserState* state = parser_get_state(parser);
-    if (state->token_index >= state->tokens.count) {
-        return {};
-    }
-    return state->tokens[state->token_index++];
-}
-
-Array<Token> extract_tokens(Parser* parser, u32 count)
-{
-    ParserState* state = parser_get_state(parser);
-    if (state->token_index + count > state->tokens.count) {
-        assert(0);
-        return {};
-    }
-    Array<Token> tokens = array_subarray(state->tokens, state->token_index, count);
-    state->token_index += count;
-    return tokens;
-}
-
-Array<Token> extract_tokens_until(Parser* parser, b32 require_separator, TokenKind sep0, TokenKind sep1)
-{
-    ParserState* state = parser_get_state(parser);
-    u32 starting_index = state->token_index;
-    while (state->token_index < state->tokens.count) {
-        if (state->tokens[state->token_index].kind == sep0) break;
-        if (state->tokens[state->token_index].kind == sep1) break;
-        state->token_index++;
-    }
-    if (require_separator && state->token_index < state->tokens.count) {
-        state->token_index++;
-    }
-    return array_subarray(state->tokens, starting_index, state->token_index - starting_index);
-}
-
-Array<Token> extract_tokens_with_depth(Parser* parser, TokenKind open_token, TokenKind close_token, b32 require_separator)
-{
-    ParserState* state = parser_get_state(parser);
-    u32 starting_index = state->token_index;
-    i32 depth = 0;
+    U64 offset = 0;
     
-    while (state->token_index < state->tokens.count) {
-        Token token = state->tokens[state->token_index];
+    Token token;
+    while (true)
+    {
+        token = peek_token(parser, offset);
+        if (token.kind == TokenKind_None) return NO_CODE;
+        
+        if (token.kind == match0) break;
+        if (token.kind == match1) break;
+        offset += token.skip_size;
+    }
+    
+    if (include_match) {
+        offset += token.skip_size;
+    }
+    
+    return LocationMake(parser->cursor, parser->cursor + offset, parser->script_id);
+}
+
+U64 find_token_with_depth_check(Parser* parser, B32 parenthesis, B32 braces, B32 brackets, TokenKind match0, TokenKind match1)
+{
+    U64 offset = 0;
+    
+    I32 depth = 0;
+    
+    while (true)
+    {
+        Token token = peek_token(parser, offset);
+        if (token.kind == TokenKind_None) return parser->cursor;
+        
+        if (parenthesis && token.kind == TokenKind_OpenParenthesis) depth++;
+        if (parenthesis && token.kind == TokenKind_CloseParenthesis) depth--;
+        if (braces && token.kind == TokenKind_OpenBrace) depth++;
+        if (braces && token.kind == TokenKind_CloseBrace) depth--;
+        if (brackets && token.kind == TokenKind_OpenBracket) depth++;
+        if (brackets && token.kind == TokenKind_CloseBracket) depth--;
+        
+        if (depth == 0) {
+            if (token.kind == match0) break;
+            if (token.kind == match1) break;
+        }
+        offset += token.skip_size;
+    }
+    
+    return parser->cursor + offset;
+}
+
+Location FindScope(Parser* parser, TokenKind open_token, B32 include_delimiters)
+{
+    TokenKind close_token = TokenKindFromOpenScope(open_token);
+    
+    U64 offset = 0;
+    I32 depth = 0;
+    
+    Token token = peek_token(parser);
+    
+    if (token.kind != open_token) {
+        return NO_CODE;
+    }
+    
+    while (true)
+    {
+        if (token.kind == TokenKind_None) return NO_CODE;
+        
         if (token.kind == open_token) depth++;
         else if (token.kind == close_token) {
             depth--;
             if (depth == 0) break;
         }
-        state->token_index++;
+        
+        offset += token.skip_size;
+        token = peek_token(parser, offset);
     }
     
-    u32 end_index = state->token_index;
-    if (state->token_index < state->tokens.count) {
-        if (require_separator) end_index++;
-        state->token_index++;
+    U64 begin = parser->cursor;
+    if (!include_delimiters) {
+        begin += peek_token(parser).skip_size;
     }
     
-    return (depth == 0) ? array_subarray(state->tokens, starting_index, end_index - starting_index) : Array<Token>{};
+    U64 end = parser->cursor + offset;
+    if (include_delimiters) {
+        end += token.skip_size;
+    }
+    
+    return LocationMake(begin, end, parser->script_id);
 }
 
-Array<Array<Token>> split_tokens_in_parameters(Arena* arena, Array<Token> tokens)
+Location FindCode(Parser* parser)
 {
-    SCRATCH(arena);
+    Token first = peek_token(parser);
     
-    PooledArray<Array<Token>> params = pooled_array_make<Array<Token>>(scratch.arena, 8);
+    if (first.kind == TokenKind_OpenBrace) {
+        return FindScope(parser, TokenKind_OpenBrace, true);
+    }
     
-    u32 cursor = 0;
-    u32 last_cursor = 0;
-    i32 depth = 0;
-    
-    while (cursor < tokens.count) {
-        Token t = tokens[cursor];
-        if (t.kind == TokenKind_Comma && depth <= 0) {
-            Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
-            array_add(&params, param);
-            last_cursor = cursor + 1;
+    if (TokenIsFlowModifier(first.kind))
+    {
+        U64 start_cursor = parser->cursor;
+        defer(MoveCursor(parser, start_cursor));
+        
+        consume_token(parser); // Modifier keyword
+        
+        Location optional_parenthesis_location = FetchScope(parser, TokenKind_OpenParenthesis, true);
+        Location body_location = FetchCode(parser);
+        
+        if (!LocationIsValid(body_location)) {
+            return NO_CODE;
         }
-        if (t.kind == TokenKind_OpenParenthesis) depth++;
-        else if (t.kind == TokenKind_CloseParenthesis) depth--;
-        else if (t.kind == TokenKind_OpenBrace) depth++;
-        else if (t.kind == TokenKind_CloseBrace) depth--;
-        else if (t.kind == TokenKind_OpenBracket) depth++;
-        else if (t.kind == TokenKind_CloseBracket) depth--;
-        cursor++;
+        
+        if (first.kind == TokenKind_IfKeyword && peek_token(parser).kind == TokenKind_ElseKeyword) {
+            consume_token(parser);
+            body_location = FetchCode(parser);
+            
+            if (!LocationIsValid(body_location)) {
+                return NO_CODE;
+            }
+        }
+        
+        return LocationMake(start_cursor, parser->cursor, parser->script_id);
     }
     
-    Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
-    array_add(&params, param);
+    return FindUntil(parser, true, TokenKind_NextSentence);
+}
+
+Location FetchUntil(Parser* parser, B32 include_match, TokenKind match0, TokenKind match1)
+{
+    Location location = FindUntil(parser, include_match, match0, match1);
+    if (LocationIsValid(location)) {
+        MoveCursor(parser, location.range.max);
+    }
+    return location;
+}
+
+Location FetchScope(Parser* parser, TokenKind open_token, B32 include_delimiters)
+{
+    Location location = FindScope(parser, open_token, include_delimiters);
+    if (LocationIsValid(location))
+    {
+        MoveCursor(parser, location.range.max);
+        
+        if (!include_delimiters) {
+            TokenKind close_token = TokenKindFromOpenScope(open_token);
+            assume_token(parser, close_token);
+        }
+    }
     
-    return array_from_pooled_array(arena, params);
+    return location;
 }
 
-internal_fn OpNode* alloc_node(Parser* parser, OpKind kind, CodeLocation code)
+Location FetchCode(Parser* parser)
 {
-    u32 node_size = get_node_size(kind);
-    OpNode* node = (OpNode*)arena_push(yov->static_arena, node_size);
-    node->kind = kind;
-    node->code = code;
-    return node;
+    Location location = FindCode(parser);
+    if (LocationIsValid(location)) {
+        MoveCursor(parser, location.range.max);
+    }
+    return location;
 }
 
-internal_fn Array<OpNode*> process_parameters(Parser* parser, Array<Token> tokens)
+SentenceKind find_sentence_kind(Parser* parser)
 {
-    SCRATCH();
+    U64 start_cursor = parser->cursor;
+    defer(MoveCursor(parser, start_cursor));
+    
+    U32 assignment_count = 0;
+    U32 colon_count = 0;
+    
+    Token tokens[5] = {};
+    TokenKind close_token = TokenKind_None;
+    
+    U32 index = 0;
+    while (true) {
+        Token token = consume_token(parser);
+        
+        if (index < countof(tokens)) {
+            tokens[index++] = token;
+        }
+        
+        if (token.kind == TokenKind_Assignment) assignment_count++;
+        if (token.kind == TokenKind_Colon) colon_count++;
+        
+        close_token = token.kind;
+        if (token.kind == TokenKind_OpenBrace) break;
+        if (token.kind == TokenKind_NextSentence) break;
+        if (token.kind == TokenKind_None) break;
+    }
+    
+    Token t0 = tokens[0];
+    Token t1 = tokens[1];
+    Token t2 = tokens[2];
+    Token t3 = tokens[3];
+    Token t4 = tokens[4];
+    
+    if (t0.kind == TokenKind_IfKeyword) return SentenceKind_Unknown;
+    if (t0.kind == TokenKind_WhileKeyword) return SentenceKind_Unknown;
+    if (t0.kind == TokenKind_ForKeyword) return SentenceKind_Unknown;
+    if (t0.kind == TokenKind_OpenBrace) return SentenceKind_Unknown;
+    if (t0.kind == TokenKind_ImportKeyword) return SentenceKind_Unknown;
+    
+    if (t0.kind == TokenKind_ReturnKeyword) return SentenceKind_Return;
+    if (t0.kind == TokenKind_ContinueKeyword) return SentenceKind_Continue;
+    if (t0.kind == TokenKind_BreakKeyword) return SentenceKind_Break;
+    
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_OpenParenthesis) {
+        return SentenceKind_FunctionCall;
+    }
+    
+    // Object definition
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Identifier) return SentenceKind_ObjectDef;
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Assignment) return SentenceKind_ObjectDef;
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_OpenBracket) return SentenceKind_ObjectDef;
+    
+    // Array definition
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_OpenBracket && t2.kind == TokenKind_CloseBracket && t3.kind == TokenKind_Identifier)
+        return SentenceKind_ObjectDef;
+    
+    if (t0.kind == TokenKind_Identifier && t1.kind == TokenKind_Colon && t2.kind == TokenKind_Colon) {
+        if (t3.kind == TokenKind_EnumKeyword) return SentenceKind_EnumDef;
+        if (t3.kind == TokenKind_StructKeyword) return SentenceKind_StructDef;
+        if (t3.kind == TokenKind_ArgKeyword) return SentenceKind_ArgDef;
+        if (t3.kind == TokenKind_FuncKeyword) return SentenceKind_FunctionDef;
+        return SentenceKind_ObjectDef;
+    }
+    
+    if (colon_count == 1) return SentenceKind_ObjectDef;
+    if (assignment_count == 1) return SentenceKind_Assignment;
+    
+    return SentenceKind_Unknown;
+}
+
+void ReadEnumDefinition(CodeDefinition* code)
+{
+    EnumDefinition* def = EnumFromIndex(code->index);
+    if (def == NULL) {
+        InvalidCodepath();
+        return;
+    }
+    
+    Parser* parser = ParserFromLocation(code->enum_or_struct.body_location);
+    
+    Location starting_location = peek_token(parser).location;
+    
+    assume_token(parser, TokenKind_OpenBrace);
+    
+    PooledArray<String> names = pooled_array_make<String>(context.arena, 16);
+    PooledArray<Location> expression_locations = pooled_array_make<Location>(context.arena, 16);
+    
+    while (true)
+    {
+        Token name_token = consume_token(parser);
+        if (name_token.kind == TokenKind_CloseBrace) break;
+        if (name_token.kind != TokenKind_Identifier) {
+            report_enumdef_expecting_comma_separated_identifier(name_token.location);
+            return;
+        }
+        
+        Token assignment_token = peek_token(parser);
+        
+        Location expression_location = NO_CODE;
+        
+        if (assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None) {
+            skip_token(parser, assignment_token);
+            
+            expression_location = FetchUntil(parser, false, TokenKind_CloseBrace, TokenKind_Comma);
+            
+            if (!LocationIsValid(expression_location)) {
+                report_error(assignment_token.location, "Expecting expression for enum value");
+                return;
+            }
+        }
+        
+        array_add(&names, name_token.value);
+        array_add(&expression_locations, expression_location);
+        
+        Token comma_token = consume_token(parser);
+        if (comma_token.kind == TokenKind_CloseBrace) break;
+        if (comma_token.kind != TokenKind_Comma) {
+            report_enumdef_expecting_comma_separated_identifier(comma_token.location);
+            return;
+        }
+    }
+    
+    EnumDefine(def, array_from_pooled_array(context.arena, names), array_from_pooled_array(context.arena, expression_locations));
+}
+
+void ResolveEnumDefinition(EnumDefinition* def)
+{
+    if (def->stage == DefinitionStage_Ready) {
+        return;
+    }
+    
+    if (def->stage != DefinitionStage_Defined) {
+        InvalidCodepath();
+        return;
+    }
+    
+    IR_Context* ir_context = ir_context_alloc();
+    
+    Array<I64> values = array_make<I64>(context.arena, def->names.count);
+    
+    for (U32 i = 0; i < values.count; i++)
+    {
+        values[i] = i;
+        
+        if (i < def->expression_locations.count)
+        {
+            Location expression_location = def->expression_locations[i];
+            
+            if (!LocationIsValid(expression_location)) continue;
+            
+            IR ir = ir_generate_from_value(ValueFromInt(values[i]));
+            
+            ExpresionContext expr_context = ExpresionContext_from_vtype(VType_Int, 1);
+            IR_Group group = ReadExpression(ir_context, expression_location, expr_context);
+            ir = MakeIR(context.arena, array_from_pooled_array(context.arena, ir_context->local_registers), group);
+            if (!ir.success) return;
+            
+            if (ir.value.kind != ValueKind_Literal || ir.value.vtype != VType_Int) {
+                report_error(expression_location, "Enum value expects an Int literal");
+                return;
+            }
+            
+            values[i] = ir.value.literal_int;
+        }
+    }
+    
+    EnumResolve(def, values);
+}
+
+void ReadStructDefinition(CodeDefinition* code)
+{
+    StructDefinition* def = StructFromIndex(code->index);
+    if (def == NULL) {
+        InvalidCodepath();
+        return;
+    }
+    
+    Parser* parser = ParserFromLocation(code->enum_or_struct.body_location);
+    
+    Location starting_location = peek_token(parser).location;
+    assume_token(parser, TokenKind_OpenBrace);
+    
+    U32 member_index = 0;
+    
+    PooledArray<ObjectDefinition> members = pooled_array_make<ObjectDefinition>(context.arena, 16);
+    
+    while (peek_token(parser).kind != TokenKind_CloseBrace)
+    {
+        Location member_location = FetchUntil(parser, false, TokenKind_NextSentence);
+        if (!LocationIsValid(member_location)) {
+            report_expecting_semicolon(LocationFromParser(parser, parser->cursor));
+            return;
+        }
+        
+        ObjectDefinitionResult read_result = ReadObjectDefinition(context.arena, member_location, false, RegisterKind_Local, NULL);
+        if (!read_result.success) return;
+        
+        foreach(i, read_result.objects.count) {
+            ObjectDefinition member = read_result.objects[i];
+            array_add(&members, member);
+            
+            //out = ir_append(out, ir_from_child(ir_context, ret, value_from_int(member_index), true, member.vtype, member.location));
+            //Value dst = out.value;
+            //out = ir_append(out, ir_from_assignment(ir_context, true, dst, member.value, BinaryOperator_None, member.location));
+            
+            member_index++;
+        }
+        
+        assume_token(parser, TokenKind_NextSentence);
+    }
+    
+    consume_token(parser);
+    
+    VType struct_vtype = vtype_from_name(def->identifier);
+    Assert(struct_vtype.kind == VKind_Struct);
+    
+    B32 valid = true;
+    
+    for(auto it = pooled_array_make_iterator(&members); it.valid; ++it)
+    {
+        ObjectDefinition* def = it.value;
+        
+        VType vtype = def->vtype;
+        if (vtype == VType_Nil) {
+            valid = false;
+            continue;
+        }
+        
+        if (vtype.kind == VKind_Any) {
+            report_error(def->location, "Any is not a valid member for a struct");
+            valid = false;
+            continue;
+        }
+        
+        if (vtype == struct_vtype) {
+            report_struct_recursive(def->location);
+            valid = false;
+            continue;
+        }
+    }
+    
+    if (!valid) return;
+    
+    StructDefine(def, array_from_pooled_array(context.arena, members));
+}
+
+B32 ResolveStructDefinition(StructDefinition* def)
+{
+    if (def->stage == DefinitionStage_Ready) {
+        return true;
+    }
+    
+    if (def->stage != DefinitionStage_Defined) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    // Check for dependencies
+    foreach(i, def->vtypes.count)
+    {
+        VType vtype = def->vtypes[i];
+        
+        if (!VTypeIsSizeReady(vtype)) {
+            return false;
+        }
+    }
+    
+    StructResolve(def);
+    return true;
+}
+
+void ReadFunctionDefinition(CodeDefinition* code)
+{
+    FunctionDefinition* def = FunctionFromIndex(code->index);
+    if (def == NULL) {
+        InvalidCodepath();
+        return;
+    }
+    
+    Array<ObjectDefinition> parameters = {};
+    Array<ObjectDefinition> returns = {};
+    
+    if (LocationIsValid(code->function.parameters_location)) {
+        ObjectDefinitionResult res = ReadDefinitionList(context.arena, code->function.parameters_location, RegisterKind_Parameter, NULL);
+        if (!res.success) return;
+        parameters = res.objects;
+    }
+    
+    if (LocationIsValid(code->function.returns_location)) {
+        if (code->function.return_is_list) {
+            ObjectDefinitionResult res = ReadDefinitionList(context.arena, code->function.returns_location, RegisterKind_Return, NULL);
+            if (!res.success) return;
+            returns = res.objects;
+        }
+        else {
+            VType vtype = ReadObjectType(code->function.returns_location);
+            
+            if (vtype != VType_Nil) {
+                returns = array_make<ObjectDefinition>(context.arena, 1);
+                returns[0] = ObjDefMake("return", vtype, code->function.returns_location, false, ValueFromZero(vtype));
+            }
+        }
+        
+        if (returns.count == 0) return;
+    }
+    
+    FunctionDefine(def, parameters, returns);
+}
+
+void ResolveFunctionDefinition(FunctionDefinition* def, CodeDefinition* code)
+{
+    if (def->stage == DefinitionStage_Ready) {
+        return;
+    }
+    
+    if (def->stage != DefinitionStage_Defined) {
+        InvalidCodepath();
+        return;
+    }
+    
+    B32 is_intrinsic = !LocationIsValid(code->function.body_location);
+    
+    if (is_intrinsic)
+    {
+        IntrinsicFunction* fn = IntrinsicFromIdentifier(def->identifier);
+        
+        if (fn == NULL) {
+            report_intrinsic_not_resolved(code->entire_location, def->identifier);
+            return;
+        }
+        
+        FunctionResolveIntrinsic(def, fn);
+    }
+    else
+    {
+        Location block_location = code->function.body_location;
+        
+        IR_Context* ir = ir_context_alloc();
+        IR_Group out = ir_from_none();
+        
+        if (LocationIsValid(code->function.parameters_location)) {
+            ObjectDefinitionResult params = ReadDefinitionList(context.arena, code->function.parameters_location, RegisterKind_Parameter, ir);
+            if (!params.success) return;
+            
+            out = ir_append(out, params.out);
+        }
+        
+        // Define returns
+        foreach(i, def->returns.count)
+        {
+            ObjectDefinition obj = def->returns[i];
+            out = ir_append(out, IRFromDefineObject(ir, RegisterKind_Return, obj.name, obj.vtype, false, obj.location));
+            out = ir_append(out, ir_from_store(ir, out.value, ValueFromZero(obj.vtype), obj.location));
+        }
+        
+        out = ir_append(out, ReadCode(ir, block_location));
+        
+        IR res = MakeIR(yov->arena, array_from_pooled_array(context.arena, ir->local_registers), out);
+        
+        // Validation
+        if (res.success)
+        {
+            Array<Unit> units = res.instructions;
+            
+            // TODO(Jose): Check for infinite loops
+            
+            // Check all paths have a return
+            B32 expects_return = def->returns.count == 1 && StrEquals(def->returns[0].name, "return");
+            if (expects_return && !ir_validate_return_path(units)) {
+                report_function_no_return(block_location, def->identifier);
+            }
+        }
+        
+        FunctionResolve(def, res);
+    }
+}
+
+internal_fn B32 ValidateArgName(String name, Location location)
+{
+    B32 valid_chars = true;
+    
+    U64 cursor = 0;
+    while (cursor < name.size) {
+        U32 codepoint = string_get_codepoint(name, &cursor);
+        
+        B32 valid = false;
+        if (codepoint_is_text(codepoint)) valid = true;
+        if (codepoint_is_number(codepoint)) valid = true;
+        if (codepoint == '-') valid = true;
+        if (codepoint == '_') valid = true;
+        
+        if (!valid) {
+            valid_chars = false;
+            break;
+        }
+    }
+    
+    if (!valid_chars || name.size == 0) {
+        report_arg_invalid_name(location, name);
+        return false;
+    }
+    
+    return true;
+}
+
+void ReadArgDefinition(CodeDefinition* code)
+{
+    ArgDefinition* def = ArgFromIndex(code->index);
+    if (def == NULL) {
+        InvalidCodepath();
+        return;
+    }
+    
+    VType vtype = VType_Bool;
+    
+    if (LocationIsValid(code->arg.type_location))
+    {
+        vtype = ReadObjectType(code->arg.type_location);
+        
+        if (vtype == VType_Nil) return;
+        
+        if (!VTypeValid(vtype)) {
+            report_error(code->arg.type_location, "Invalid type '%S' for an argument", VTypeGetName(vtype));
+            return;
+        }
+    }
+    
+    ArgDefine(def, vtype);
+}
+
+void ResolveArgDefinition(CodeDefinition* code)
+{
+    ArgDefinition* def = ArgFromIndex(code->index);
+    
+    if (def == NULL) {
+        InvalidCodepath();
+        return;
+    }
+    
+    if (def->stage == DefinitionStage_Ready) {
+        return;
+    }
+    
+    String name = StrFormat(context.arena, "-%S", code->identifier);
+    String description = {};
+    B32 required = false;
+    Value default_value = ValueFromZero(def->vtype);
+    
+    Parser* parser = ParserFromLocation(code->arg.body_location);
+    
+    assume_token(parser, TokenKind_OpenBrace);
+    
+    while (true)
+    {
+        Token identifier_token = consume_token(parser);
+        
+        if (identifier_token.kind == TokenKind_CloseBrace) break;
+        if (identifier_token.kind == TokenKind_None) {
+            report_error(identifier_token.location, "Missing close brace for arg definition");
+            return;
+        }
+        
+        if (identifier_token.kind != TokenKind_Identifier) {
+            report_error(identifier_token.location, "Expecting property list");
+            return;
+        }
+        
+        Token assignment_token = consume_token(parser);
+        if (assignment_token.kind != TokenKind_Assignment || assignment_token.assignment_binary_operator != BinaryOperator_None)
+        {
+            report_error(assignment_token.location, "Expecting a property assignment");
+            return;
+        }
+        
+        Location expression_location = FetchUntil(parser, false, TokenKind_NextSentence);
+        if (!LocationIsValid(expression_location)) {
+            report_error(identifier_token.location, "Missing semicolon");
+            return;
+        }
+        
+        assume_token(parser, TokenKind_NextSentence);
+        
+        String identifier = identifier_token.value;
+        
+        ExpresionContext expr_context = ExpresionContext_from_inference(1);
+        
+        if (identifier == "name") expr_context = ExpresionContext_from_vtype(VType_String, 1);
+        else if (identifier == "description") expr_context = ExpresionContext_from_vtype(VType_String, 1);
+        else if (identifier == "required") expr_context = ExpresionContext_from_vtype(VType_Bool, 1);
+        else if (identifier == "default") expr_context = ExpresionContext_from_vtype(def->vtype, 1);
+        else {
+            report_error(identifier_token.location, "Unknown property '%S'", identifier);
+            return;
+        }
+        
+        IR_Context* ir_context = ir_context_alloc();
+        IR_Group group = ReadExpression(ir_context, expression_location, expr_context);
+        
+        IR ir = MakeIR(context.arena, array_from_pooled_array(context.arena, ir_context->local_registers), group);
+        if (!ir.success) {
+            return;
+        }
+        
+        Value value = ir.value;
+        
+        if (value.vtype != expr_context.vtype) {
+            report_type_missmatch_assign(expression_location, value.vtype, expr_context.vtype);
+            return;
+        }
+        
+        if (!ValueIsCompiletime(value)) {
+            report_error(expression_location, "Expecting a compile-time value");
+            return;
+        }
+        
+        if (identifier == "name") {
+            name = StringFromCompiletime(context.arena, value);
+        }
+        else if (identifier == "description") {
+            description = StringFromCompiletime(context.arena, value);
+        }
+        else if (identifier == "required") {
+            required = B32FromCompiletime(value);
+        }
+        else if (identifier == "default") {
+            default_value = value;
+        }
+    }
+    
+    if (!ValidateArgName(name, code->entire_location)) return;
+    
+    ArgResolve(def, name, description, required, default_value);
+}
+
+IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr_context)
+{
+    if (location.range.min == location.range.max) {
+        return ir_from_none();
+    }
+    
+    Parser* parser = ParserFromLocation(location);
+    
+    Array<Token> tokens = ConsumeAllTokens(parser);
+    
     if (tokens.count == 0) return {};
-    
-    Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, tokens);
-    Array<OpNode*> nodes = array_make<OpNode*>(yov->static_arena, parameters.count);
-    
-    foreach(i, parameters.count) {
-        Array<Token> parameter_tokens = parameters[i];
-        nodes[i] = extract_expresion_from_array(parser, parameter_tokens);
-    }
-    
-    return nodes;
-}
-
-OpNode* process_function_call(Parser* parser, Array<Token> tokens)
-{
-    Token starting_token = tokens[0];
-    
-    assert(tokens.count >= 3);
-    if (tokens.count < 3) return alloc_node(parser, OpKind_Error, tokens[0].code);
-    
-    Array<Token> parameters = array_subarray(tokens, 2, tokens.count - 3);
-    
-    auto node = (OpNode_FunctionCall*)alloc_node(parser, OpKind_FunctionCall, starting_token.code);
-    node->identifier = tokens[0].value;
-    node->parameters = process_parameters(parser, parameters);
-    return node;
-}
-
-OpNode* extract_expresion_from_array(Parser* parser, Array<Token> tokens)
-{
-    parser_push_state(parser, tokens);
-    OpNode* res = extract_expresion(parser);
-    parser_pop_state(parser);
-    return res;
-}
-
-OpNode* extract_expresion(Parser* parser)
-{
-    SCRATCH();
-    
-    Array<Token> tokens = parser_get_tokens_left(parser);
-    
-    if (tokens.count == 0) return alloc_node(parser, OpKind_None, {});
     
     Token starting_token = tokens[0];
     
     // Remove parentheses around
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
     {
-        b32 couple = check_tokens_are_couple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        B32 couple = check_tokens_are_couple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
         if (couple) tokens = array_subarray(tokens, 1, tokens.count - 2);
     }
     
     if (tokens.count == 0) {
-        report_expr_is_empty(starting_token.code);
-        return alloc_node(parser, OpKind_Error, {});
+        report_expr_is_empty(starting_token.location);
+        return {};
     }
     
     if (tokens.count == 1)
@@ -315,37 +808,29 @@ OpNode* extract_expresion(Parser* parser)
         Token token = tokens[0];
         
         if (token.kind == TokenKind_IntLiteral) {
-            u32 v;
+            U32 v;
             if (u32_from_string(&v, token.value)) {
-                auto node = (OpNode_NumericLiteral*)alloc_node(parser, OpKind_IntLiteral, token.code);
-                node->int_literal = v;
-                return node;
+                return ir_from_none(ValueFromInt(v));
             }
             else {
-                assert(0);
+                InvalidCodepath();
             }
         }
         else if (token.kind == TokenKind_BoolLiteral) {
-            auto node = (OpNode_NumericLiteral*)alloc_node(parser, OpKind_BoolLiteral, token.code);
-            node->bool_literal = (b8)string_equals(token.value, STR("true"));
-            return node;
+            return ir_from_none(ValueFromBool(StrEquals(token.value, "true")));
         }
         else if (token.kind == TokenKind_StringLiteral)
         {
-            PooledArray<OpNode*> expresions = pooled_array_make<OpNode*>(scratch.arena, 8);
+            IR_Group out = ir_from_none();
+            PooledArray<Value> values = pooled_array_make<Value>(context.arena, 8);
             
             String raw = token.value;
-            StringBuilder builder = string_builder_make(scratch.arena);
+            StringBuilder builder = string_builder_make(context.arena);
             
-            u64 cursor = 0;
+            U64 cursor = 0;
             while (cursor < raw.size)
             {
-                u32 codepoint = string_get_codepoint(raw, &cursor);
-                
-                if (codepoint == '%') {
-                    append(&builder, "\\%");
-                    continue;
-                }
+                U32 codepoint = string_get_codepoint(raw, &cursor);
                 
                 if (codepoint == '\\')
                 {
@@ -354,21 +839,16 @@ OpNode* extract_expresion(Parser* parser)
                         codepoint = string_get_codepoint(raw, &cursor);
                     }
                     
-                    if (codepoint == '\\') {
-                        // This is resolved on interpretation
-                        append(&builder, "\\\\");
-                        continue;
-                    }
-                    
-                    if (codepoint == 'n') append(&builder, "\n");
+                    if (codepoint == '\\') append(&builder, "\\");
+                    else if (codepoint == 'n') append(&builder, "\n");
                     else if (codepoint == 'r') append(&builder, "\r");
                     else if (codepoint == 't') append(&builder, "\t");
                     else if (codepoint == '"') append(&builder, "\"");
                     else if (codepoint == '{') append(&builder, "{");
                     else if (codepoint == '}') append(&builder, "}");
                     else {
-                        String sequence = string_from_codepoint(scratch.arena, codepoint);
-                        report_invalid_escape_sequence(token.code, sequence);
+                        String sequence = string_from_codepoint(context.arena, codepoint);
+                        report_invalid_escape_sequence(token.location, sequence);
                     }
                     
                     continue;
@@ -376,11 +856,11 @@ OpNode* extract_expresion(Parser* parser)
                 
                 if (codepoint == '{')
                 {
-                    u64 start_identifier = cursor;
-                    i32 depth = 1;
+                    U64 start_identifier = cursor;
+                    I32 depth = 1;
                     
                     while (cursor < raw.size) {
-                        u32 codepoint = string_get_codepoint(raw, &cursor);
+                        U32 codepoint = string_get_codepoint(raw, &cursor);
                         if (codepoint == '{') depth++;
                         else if (codepoint == '}') {
                             depth--;
@@ -388,87 +868,78 @@ OpNode* extract_expresion(Parser* parser)
                         }
                     }
                     
-                    String expresion_string = string_substring(raw, start_identifier, cursor - start_identifier - 1);
-                    Array<Token> tokens = lexer_generate_tokens(scratch.arena, expresion_string, true, token.code);
+                    U64 state_cursor = (raw.data + start_identifier) - parser->text.data;
+                    U64 state_count = cursor - start_identifier - 1;
                     
-                    OpNode* expresion = extract_expresion_from_array(parser, tokens);
-                    append(&builder, "%");
+                    Location subexpression_code = LocationMake(state_cursor, state_cursor + state_count, token.location.script_id);
                     
-                    array_add(&expresions, expresion);
+                    IR_Group sub = ReadExpression(ir, subexpression_code, ExpresionContext_from_vtype(VType_String, 1));
+                    if (!sub.success) return ir_failed();
+                    
+                    Value value = sub.value;
+                    
+                    if (ValueIsCompiletime(value)) {
+                        String ct_str = StringFromCompiletime(context.arena, value);
+                        append(&builder, ct_str);
+                    }
+                    else
+                    {
+                        String literal = string_from_builder(context.arena, &builder);
+                        if (literal.size > 0) {
+                            builder = string_builder_make(context.arena);
+                            array_add(&values, ValueFromString(ir->arena, literal));
+                        }
+                        
+                        out = ir_append(out, sub);
+                        array_add(&values, value);
+                    }
+                    
                     continue;
                 }
                 
                 append_codepoint(&builder, codepoint);
             }
             
-            String value = string_from_builder(yov->static_arena, &builder);
+            String literal = string_from_builder(context.arena, &builder);
+            if (literal.size > 0) {
+                array_add(&values, ValueFromString(ir->arena, literal));
+            }
             
-            auto node = (OpNode_StringLiteral*)alloc_node(parser, OpKind_StringLiteral, token.code);
-            node->raw_value = raw;
-            node->value = value;
-            node->expresions = array_from_pooled_array(yov->static_arena, expresions);
-            return node;
+            out.value = ValueFromStringArray(ir->arena, array_from_pooled_array(context.arena, values));
+            return out;
         }
         else if (token.kind == TokenKind_CodepointLiteral)
         {
             String raw = token.value;
             
             if (raw.size <= 2) {
-                report_invalid_codepoint_literal(token.code, raw);
-                return alloc_node(parser, OpKind_Error, token.code);
+                report_invalid_codepoint_literal(token.location, raw);
+                return {};
             }
             
-            raw = string_substring(raw, 1, raw.size - 2);
+            raw = StrSub(raw, 1, raw.size - 2);
             
-            u32 v = u32_max;
-            if (string_equals(raw, "\\\\")) v = '\\';
-            else if (string_equals(raw, "\\'")) v = '\'';
-            else if (string_equals(raw, "\\n")) v = '\n';
-            else if (string_equals(raw, "\\r")) v = '\r';
-            else if (string_equals(raw, "\\t")) v = '\t';
+            U32 v = U32_MAX;
+            if (StrEquals(raw, "\\\\")) v = '\\';
+            else if (StrEquals(raw, "\\'")) v = '\'';
+            else if (StrEquals(raw, "\\n")) v = '\n';
+            else if (StrEquals(raw, "\\r")) v = '\r';
+            else if (StrEquals(raw, "\\t")) v = '\t';
             else
             {
-                u64 cursor = 0;
+                U64 cursor = 0;
                 v = string_get_codepoint(raw, &cursor);
                 
                 if (v == 0xFFFD || cursor != raw.size) {
-                    report_invalid_codepoint_literal(token.code, raw);
-                    return alloc_node(parser, OpKind_Error, token.code);
+                    report_invalid_codepoint_literal(token.location, raw);
+                    return {};
                 }
             }
             
-            auto node = (OpNode_NumericLiteral*)alloc_node(parser, OpKind_CodepointLiteral, token.code);
-            node->codepoint_literal = v;
-            return node;
+            return ir_from_none(ValueFromInt(v));
         }
-        else if (token.kind == TokenKind_NullKeyword)
-        {
-            auto node = (OpNode*)alloc_node(parser, OpKind_Null, token.code);
-            return node;
-        }
-    }
-    
-    // Parameter List
-    if (tokens.count > 2)
-    {
-        Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, tokens);
-        
-        if (parameters.count >= 2)
-        {
-            Array<OpNode*> nodes = array_make<OpNode*>(yov->static_arena, parameters.count);
-            
-            b32 valid = true;
-            
-            foreach(i, nodes.count) {
-                nodes[i] = extract_expresion_from_array(parser, parameters[i]);
-                if (nodes[i]->kind == OpKind_Error) valid = false;
-            }
-            
-            if (!valid) return alloc_node(parser, OpKind_Error, tokens[0].code);
-            
-            OpNode_ParameterList* node = (OpNode_ParameterList*)alloc_node(parser, OpKind_ParameterList, tokens[0].code);
-            node->nodes = nodes;
-            return node;
+        else if (token.kind == TokenKind_NullKeyword) {
+            return ir_from_none(ValueNull());
         }
     }
     
@@ -477,9 +948,9 @@ OpNode* extract_expresion(Parser* parser)
     {
         Token token = tokens[0];
         
-        b32 valid = true;
-        for (u32 i = 1; i < tokens.count; ++i) {
-            b32 expect_open = i % 2 == 1;
+        B32 valid = true;
+        for (U32 i = 1; i < tokens.count; ++i) {
+            B32 expect_open = i % 2 == 1;
             TokenKind expected = expect_open ? TokenKind_OpenBracket : TokenKind_CloseBracket;
             if (tokens[i].kind != expected) {
                 valid = false;
@@ -489,16 +960,21 @@ OpNode* extract_expresion(Parser* parser)
         
         if (valid)
         {
-            auto node = (OpNode_Symbol*)alloc_node(parser, OpKind_Symbol, token.code);
-            node->identifier = string_from_tokens(yov->static_arena, tokens);
-            return node;
+            return ir_from_symbol(ir, string_from_tokens(context.arena, tokens), location);
         }
     }
     
+    
     // Function call
-    if (tokens.count >= 2 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis) {
-        b32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
-        if (couple) return process_function_call(parser, tokens);
+    if (tokens.count >= 3 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
+    {
+        B32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        
+        if (couple)
+        {
+            Location call_code = LocationFromTokens(tokens);
+            return ReadFunctionCall(ir, expr_context, call_code);
+        }
     }
     
     // Binary operations & Signs
@@ -506,24 +982,24 @@ OpNode* extract_expresion(Parser* parser)
     {
         // NOTE(Jose): This might seem counterintuitive, but we need to create nodes for lower priority operations first, since expresions at the bottom of the tree are resolved first
         
-        i32 min_preference = i32_max;
-        i32 preferent_operator_index = -1;
+        I32 min_preference = I32_MAX;
+        I32 preferent_operator_index = -1;
         
-        const i32 logical_preference = 1;
-        const i32 boolean_preference = 2;
-        const i32 addition_preference = 3;
-        const i32 multiplication_preference = 4;
-        const i32 function_call_preference = 5;
-        const i32 sign_preference = 6;
-        const i32 member_preference = 7;
-        const i32 depth_mult = 8;
+        const I32 logical_preference = 1;
+        const I32 boolean_preference = 2;
+        const I32 addition_preference = 3;
+        const I32 multiplication_preference = 4;
+        const I32 function_call_preference = 5;
+        const I32 sign_preference = 6;
+        const I32 member_preference = 7;
+        const I32 depth_mult = 8;
         
-        i32 parenthesis_depth = 0;
-        i32 braces_depth = 0;
-        i32 brackets_depth = 0;
-        b32 preference_is_sign = false;
+        I32 parenthesis_depth = 0;
+        I32 braces_depth = 0;
+        I32 brackets_depth = 0;
+        B32 preference_is_sign = false;
         
-        for (i32 i = tokens.count - 1; i >= 0; --i)
+        for (I32 i = tokens.count - 1; i >= 0; --i)
         {
             Token token = tokens[i];
             Token left_token = (i == 0) ? Token{} : tokens[i - 1];
@@ -535,8 +1011,8 @@ OpNode* extract_expresion(Parser* parser)
             if (token.kind == TokenKind_OpenParenthesis) {
                 parenthesis_depth--;
                 if (parenthesis_depth < 0) {
-                    report_common_missing_closing_parenthesis(token.code);
-                    return alloc_node(parser, OpKind_Error, token.code);
+                    report_common_missing_closing_parenthesis(token.location);
+                    return ir_failed();
                 }
                 continue;
             }
@@ -548,8 +1024,8 @@ OpNode* extract_expresion(Parser* parser)
             if (token.kind == TokenKind_OpenBrace) {
                 braces_depth--;
                 if (braces_depth < 0) {
-                    report_common_missing_closing_brace(token.code);
-                    return alloc_node(parser, OpKind_Error, token.code);
+                    report_common_missing_closing_brace(token.location);
+                    return ir_failed();
                 }
                 continue;
             }
@@ -561,15 +1037,15 @@ OpNode* extract_expresion(Parser* parser)
             if (token.kind == TokenKind_OpenBracket) {
                 brackets_depth--;
                 if (brackets_depth < 0) {
-                    report_common_missing_closing_bracket(token.code);
-                    return alloc_node(parser, OpKind_Error, token.code);
+                    report_common_missing_closing_bracket(token.location);
+                    return ir_failed();
                 }
                 continue;
             }
             
-            b32 is_sign = false;
+            B32 is_sign = false;
             
-            i32 preference = i32_max;
+            I32 preference = I32_MAX;
             if (token_is_sign_or_binary_op(token.kind))
             {
                 if (token_is_sign_or_binary_op(left_token.kind)) is_sign = true;
@@ -597,7 +1073,7 @@ OpNode* extract_expresion(Parser* parser)
                     else if (op == BinaryOperator_GreaterEqualsThan) preference = boolean_preference;
                     else if (op == BinaryOperator_Is) preference = addition_preference;
                     else {
-                        assert(0);
+                        Assert(0);
                     }
                 }
             }
@@ -605,7 +1081,7 @@ OpNode* extract_expresion(Parser* parser)
                 preference = member_preference;
             }
             
-            if (preference == i32_max || braces_depth != 0 || brackets_depth != 0) continue;
+            if (preference == I32_MAX || braces_depth != 0 || brackets_depth != 0) continue;
             
             preference += parenthesis_depth * depth_mult;
             
@@ -617,84 +1093,91 @@ OpNode* extract_expresion(Parser* parser)
         }
         
         if (parenthesis_depth > 0) {
-            report_common_missing_opening_parenthesis(tokens[0].code);
-            return alloc_node(parser, OpKind_Error, tokens[0].code);
+            report_common_missing_opening_parenthesis(tokens[0].location);
+            return ir_failed();
         }
         if (braces_depth > 0) {
-            report_common_missing_opening_brace(tokens[0].code);
-            return alloc_node(parser, OpKind_Error, tokens[0].code);
+            report_common_missing_opening_brace(tokens[0].location);
+            return ir_failed();
         }
         
-        if (min_preference != i32_max)
+        if (min_preference != I32_MAX)
         {
             Token op_token = tokens[preferent_operator_index];
             
             if (token_is_sign_or_binary_op(op_token.kind))
             {
+                BinaryOperator op = binary_operator_from_token(op_token.kind);
+                expr_context.assignment_count = Min(expr_context.assignment_count, 1);
+                
                 if (preference_is_sign)
                 {
-                    assert(preferent_operator_index == 0);
+                    Assert(preferent_operator_index == 0);
                     
-                    Token sign_token = tokens[preferent_operator_index];
-                    OpNode* expresion = extract_expresion_from_array(parser, array_subarray(tokens, 1, tokens.count - 1));
+                    Array<Token> subexpr_tokens = array_subarray(tokens, 1, tokens.count - 1);
                     
-                    if (sign_token.kind == TokenKind_Ampersand)
+                    IR_Group out = ReadExpression(ir, LocationFromTokens(subexpr_tokens), expr_context);
+                    if (!out.success) return ir_failed();
+                    
+                    Value src = out.value;
+                    
+                    if (op_token.kind == TokenKind_Ampersand)
                     {
-                        auto node = (OpNode_Reference*)alloc_node(parser, OpKind_Reference, sign_token.code);
-                        node->expresion = expresion;
-                        return node;
+                        out = ir_append(out, ir_from_reference(ir, true, src, location));
                     }
                     else
                     {
-                        BinaryOperator op = binary_operator_from_token(sign_token.kind);
-                        
-                        assert(op != BinaryOperator_None);
-                        
-                        auto node = (OpNode_Sign*)alloc_node(parser, OpKind_Sign, sign_token.code);
-                        node->op = op;
-                        node->expresion = expresion;
-                        return node;
+                        out = ir_append(out, ir_from_sign_operator(ir, src, op, location));
                     }
+                    
+                    return out;
                 }
                 else
                 {
                     if (preferent_operator_index <= 0 || preferent_operator_index >= tokens.count - 1) {
-                        String op_string = string_from_tokens(scratch.arena, tokens);
-                        report_expr_invalid_binary_operation(op_token.code, op_string);
-                        return alloc_node(parser, OpKind_Error, tokens[0].code);
+                        String op_string = string_from_tokens(context.arena, tokens);
+                        report_expr_invalid_binary_operation(op_token.location, op_string);
+                        return ir_failed();
                     }
                     else
                     {
-                        OpNode* left_expresion = extract_expresion_from_array(parser, array_subarray(tokens, 0, preferent_operator_index));
-                        OpNode* right_expresion = extract_expresion_from_array(parser, array_subarray(tokens, preferent_operator_index + 1, tokens.count - (preferent_operator_index + 1)));
+                        Array<Token> left_expr_tokens = array_subarray(tokens, 0, preferent_operator_index);
+                        Array<Token> right_expr_tokens = array_subarray(tokens, preferent_operator_index + 1, tokens.count - (preferent_operator_index + 1));
                         
-                        auto node = (OpNode_Binary*)alloc_node(parser, OpKind_Binary, tokens[0].code);
-                        node->left = left_expresion;
-                        node->right = right_expresion;
-                        node->op = binary_operator_from_token(op_token.kind);
-                        return node;
+                        ExpresionContext left_context = expr_context;
+                        IR_Group left = ReadExpression(ir, LocationFromTokens(left_expr_tokens), left_context);
+                        
+                        ExpresionContext right_context = VTypeValid(left.value.vtype) ? ExpresionContext_from_vtype(left.value.vtype, 1) : expr_context;
+                        IR_Group right = ReadExpression(ir, LocationFromTokens(right_expr_tokens), right_context);
+                        
+                        IR_Group out = ir_append(left, right);
+                        if (!out.success) return ir_failed();
+                        
+                        out = ir_append(out, ir_from_binary_operator(ir, left.value, right.value, op, false, location));
+                        return out;
                     }
                 }
             }
             // Member access
             else if (op_token.kind == TokenKind_Dot)
             {
-                assert(preferent_operator_index == tokens.count - 2);
+                Assert(preferent_operator_index == tokens.count - 2);
                 
                 String member_value = tokens[tokens.count - 1].value;
                 
                 if (member_value.size == 0) {
-                    report_expr_empty_member(tokens[0].code);
-                    return alloc_node(parser, OpKind_Error, tokens[0].code);
+                    report_expr_empty_member(tokens[0].location);
+                    return ir_failed();
                 }
                 
-                Array<Token> expresion_tokens = array_subarray(tokens, 0, tokens.count - 2);
-                OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
+                Array<Token> expr_tokens = array_subarray(tokens, 0, tokens.count - 2);
                 
-                auto node = (OpNode_MemberValue*)alloc_node(parser, OpKind_MemberValue, tokens[0].code);
-                node->expresion = expresion;
-                node->member = member_value;
-                return node;
+                IR_Group out = ReadExpression(ir, LocationFromTokens(expr_tokens), ExpresionContext_from_inference(1));
+                if (!out.success) return ir_failed();
+                
+                Value src = out.value;
+                out = ir_append(out, ir_from_child_access(ir, src, member_value, expr_context, location));
+                return out;
             }
         }
     }
@@ -702,1064 +1185,1289 @@ OpNode* extract_expresion(Parser* parser)
     // Array Expresions
     if (tokens.count >= 2 && (tokens[0].kind == TokenKind_OpenBrace || tokens[0].kind == TokenKind_OpenBracket))
     {
-        b32 is_empty = tokens[0].kind == TokenKind_OpenBracket;
+        B32 is_empty = tokens[0].kind == TokenKind_OpenBracket;
         
-        TokenKind open_token = is_empty ? TokenKind_OpenBracket : TokenKind_OpenBrace;
-        TokenKind close_token = is_empty ? TokenKind_CloseBracket : TokenKind_CloseBrace;
+        TokenKind open_token_kind = is_empty ? TokenKind_OpenBracket : TokenKind_OpenBrace;
+        TokenKind close_token_kind = is_empty ? TokenKind_CloseBracket : TokenKind_CloseBrace;
         
-        Array<Token> expresions_tokens = extract_tokens_with_depth(parser, open_token, close_token, true);
+        I32 arrow_index = -1;
+        foreach(i, tokens.count) {
+            if (tokens[i].kind == TokenKind_Arrow) {
+                arrow_index = i;
+                break;
+            }
+        }
         
-        if (expresions_tokens.count >= 2)
+        U32 close_index = tokens.count - 1;
+        if (arrow_index > 0) {
+            close_index = arrow_index - 1;
+        }
+        
+        if (check_tokens_are_couple(tokens, 0, close_index, open_token_kind, close_token_kind))
         {
-            OpNode* type_node = NULL;
-            Token arrow = extract_token(parser);
-            
-            if (arrow.kind == TokenKind_Arrow) {
-                type_node = extract_object_type(parser);
-            }
-            else if (arrow.kind != TokenKind_None && arrow.kind != TokenKind_NextSentence) {
-                report_array_expr_expects_an_arrow(starting_token.code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
+            VType element_vtype = VType_Any;
+            if (expr_context.vtype != VType_Void) {
+                element_vtype = expr_context.vtype;
+                if (vtype_is_array(element_vtype)) {
+                    element_vtype = VTypeNext(element_vtype);
+                }
             }
             
-            if (type_node == NULL) {
-                type_node = alloc_node(parser, OpKind_None, starting_token.code);
+            if (arrow_index > 0)
+            {
+                Array<Token> type_tokens = array_subarray(tokens, arrow_index + 1, tokens.count - (arrow_index + 1));
+                Location type_code = LocationFromTokens(type_tokens);
+                element_vtype = ReadObjectType(type_code);
+                if (element_vtype == VType_Nil) return ir_failed();
+                
+                if (element_vtype == VType_Void || element_vtype == VType_Any) {
+                    report_error(type_code, "Invalid type for array expression");
+                    return ir_failed();
+                }
             }
             
-            Array<OpNode*> expresions = process_parameters(parser, array_subarray(expresions_tokens, 1, expresions_tokens.count - 2));
+            VType expr_vtype = is_empty ? VType_Int : element_vtype;
             
-            auto node = (OpNode_ArrayExpresion*)alloc_node(parser, OpKind_ArrayExpresion, starting_token.code);
-            node->nodes = expresions;
-            node->type = type_node;
-            node->is_empty = (b8)is_empty;
-            return node;
+            Array<Token> expr_tokens = array_subarray(tokens, 1, close_index - 1);
+            IR_Group out = ReadExpressionList(context.arena, ir, expr_vtype, {}, LocationFromTokens(expr_tokens));
+            Array<Value> values = ValuesFromReturn(context.arena, out.value, true);
+            
+            if (!is_empty && values.count > 0 && element_vtype == VType_Any) {
+                element_vtype = values[0].vtype;
+                expr_vtype = element_vtype;
+            }
+            
+            if (element_vtype == VType_Any || element_vtype == VType_Void) {
+                report_error(location, "Unknown array type");
+                return ir_failed();
+            }
+            
+            foreach(i, values.count) {
+                if (values[i].vtype != expr_vtype) {
+                    if (is_empty) {
+                        report_error(location, "Expecting an integer for empty array expression but found a '%S'", VTypeGetName(values[i].vtype));
+                        return ir_failed();
+                    }
+                    else {
+                        report_error(location, "Expecting an array of '%S' but found an '%S'", VTypeGetName(expr_vtype), VTypeGetName(values[i].vtype));
+                        return ir_failed();
+                    }
+                }
+            }
+            
+            if (is_empty)
+            {
+                VType array_vtype = vtype_from_dimension(element_vtype, values.count);
+                Array<Value> dimensions = array_make<Value>(context.arena, array_vtype.array_dimensions);
+                
+                foreach(i, dimensions.count) {
+                    if (i < values.count) dimensions[i] = values[i];
+                    else dimensions[i] = ValueFromInt(0);
+                }
+                
+                out.value = ValueFromEmptyArray(ir->arena, vtype_from_index(array_vtype.base_index), dimensions);
+            }
+            else {
+                VType array_vtype = vtype_from_dimension(element_vtype, 1);
+                out.value = ValueFromArray(ir->arena, array_vtype, values);
+            }
+            
+            return out;
         }
     }
     
     // Indexing
     if (tokens.count >= 2 && tokens[tokens.count-1].kind == TokenKind_CloseBracket)
     {
-        i32 starting_token = 0;
+        I32 starting_token = 0;
         while (starting_token < tokens.count && tokens[starting_token].kind != TokenKind_OpenBracket)
             starting_token++;
         
         if (starting_token < tokens.count)
         {
-            b32 couple = check_tokens_are_couple(tokens, starting_token, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
+            B32 couple = check_tokens_are_couple(tokens, starting_token, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
             
             if (couple)
             {
-                Array<Token> value_tokens = array_subarray(tokens, 0, starting_token);
-                Array<Token> indexing_tokens = array_subarray(tokens, starting_token + 1, tokens.count - starting_token - 2);
+                Array<Token> src_tokens = array_subarray(tokens, 0, starting_token);
+                Array<Token> index_tokens = array_subarray(tokens, starting_token + 1, tokens.count - starting_token - 2);
                 
-                if (value_tokens.count > 0 && indexing_tokens.count > 0)
+                if (src_tokens.count > 0 && index_tokens.count > 0)
                 {
-                    OpNode* value_node = extract_expresion_from_array(parser, value_tokens);
-                    OpNode* index_node = extract_expresion_from_array(parser, indexing_tokens);
+                    Location src_location = LocationFromTokens(src_tokens);
+                    Location index_location = LocationFromTokens(index_tokens);
                     
-                    if (index_node->kind == OpKind_None) {
-                        report_array_indexing_expects_expresion(tokens[0].code);
-                        return alloc_node(parser, OpKind_Error, tokens[0].code);
+                    IR_Group src = ReadExpression(ir, src_location, ExpresionContext_from_void());
+                    IR_Group index = ReadExpression(ir, index_location, ExpresionContext_from_vtype(VType_Int, 1));
+                    
+                    if (!src.success || !index.success) {
+                        return ir_failed();
                     }
                     
-                    if (value_node->kind == OpKind_Error) return value_node;
-                    if (index_node->kind == OpKind_Error) return index_node;
+                    if (src.value.kind == ValueKind_None) {
+                        report_array_indexing_expects_expresion(tokens[0].location);
+                        return ir_failed();
+                    }
                     
-                    auto node = (OpNode_Indexing*)alloc_node(parser, OpKind_Indexing, tokens[0].code);
-                    node->value = value_node;
-                    node->index = index_node;
-                    return node;
+                    if (index.value.vtype != VType_Int) {
+                        report_indexing_expects_an_int(location);
+                        return ir_failed();
+                    }
+                    
+                    VType vtype = src.value.vtype;
+                    
+                    IR_Group out = ir_append(src, index);
+                    
+                    if (vtype_is_array(vtype))
+                    {
+                        VType element_vtype = VTypeNext(vtype);
+                        out = ir_append(out, ir_from_child(ir, src.value, index.value, true, element_vtype, location));
+                    }
+                    else
+                    {
+                        report_indexing_not_allowed(location, VTypeGetName(vtype));
+                        return ir_failed();
+                    }
+                    
+                    return out;
                 }
             }
         }
     }
     
-    String expresion_string = string_from_tokens(scratch.arena, tokens);
-    report_expr_syntactic_unknown(tokens[0].code, expresion_string);
-    return alloc_node(parser, OpKind_Error, tokens[0].code);
+    String expresion_string = string_from_tokens(context.arena, tokens);
+    report_expr_syntactic_unknown(tokens[0].location, expresion_string);
+    return {};
 }
 
-OpNode* extract_if_statement(Parser* parser)
+void CheckForAnyAssumptions(IR_Context* ir, IR_Unit* unit, Value value)
 {
-    Token starting_token = peek_token(parser);
+    I32 reg_index = ValueGetRegister(value);
     
-    Array<Token> sentence = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
-    
-    assert(sentence.count >= 4);
-    if (sentence.count < 4) return alloc_node(parser, OpKind_Error, starting_token.code);
-    
-    if (sentence[1].kind != TokenKind_OpenParenthesis) {
-        report_common_expecting_parenthesis(starting_token.code, "if-statement");
-        return alloc_node(parser, OpKind_Error, starting_token.code);
+    if (reg_index < 0 || unit == NULL || unit->dst_index != reg_index) {
+        return;
     }
     
-    if (sentence[sentence.count - 1].kind != TokenKind_CloseParenthesis) {
-        report_common_missing_closing_parenthesis(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 3);
-    OpNode* expresion_node = extract_expresion_from_array(parser, expresion);
-    
-    auto node = (OpNode_IfStatement*)alloc_node(parser, OpKind_IfStatement, starting_token.code);
-    node->expresion = expresion_node;
-    node->success = extract_op(parser);
-    
-    skip_tokens_before_op(parser);
-    
-    Token else_token = peek_token(parser);
-    if (else_token.kind == TokenKind_ElseKeyword) {
-        extract_token(parser); // Skip else
-        node->failure = extract_op(parser);
-    }
-    
-    if (node->failure == NULL) 
-        node->failure = alloc_node(parser, OpKind_None, starting_token.code);
-    
-    return node;
-}
-
-OpNode* extract_while_statement(Parser* parser)
-{
-    Token starting_token = peek_token(parser);
-    
-    Array<Token> sentence = extract_tokens_until(parser, true, TokenKind_CloseParenthesis);
-    
-    assert(sentence.count >= 4);
-    if (sentence.count < 4) return alloc_node(parser, OpKind_Error, starting_token.code);
-    
-    if (sentence[1].kind != TokenKind_OpenParenthesis) {
-        report_common_expecting_parenthesis(starting_token.code, "while-statement");
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    if (sentence[sentence.count - 1].kind != TokenKind_CloseParenthesis) {
-        report_common_missing_closing_parenthesis(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    Array<Token> expresion = array_subarray(sentence, 2, sentence.count - 3);
-    OpNode* expresion_node = extract_expresion_from_array(parser, expresion);
-    
-    auto node = (OpNode_WhileStatement*)alloc_node(parser, OpKind_WhileStatement, starting_token.code);
-    node->expresion = expresion_node;
-    node->content = extract_op(parser);
-    
-    return node;
-}
-
-OpNode* extract_for_statement(Parser* parser)
-{
-    Token starting_token = peek_token(parser);
-    
-    Array<Token> sentence = extract_tokens_until(parser, true, TokenKind_CloseParenthesis);
-    
-    assert(sentence.count >= 5);
-    if (sentence.count < 5) return alloc_node(parser, OpKind_Error, starting_token.code);
-    
-    if (sentence[1].kind != TokenKind_OpenParenthesis) {
-        report_common_expecting_parenthesis(starting_token.code, "for-statement");
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    if (sentence[sentence.count - 1].kind != TokenKind_CloseParenthesis) {
-        report_common_missing_closing_parenthesis(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    Array<Token> expresions = array_subarray(sentence, 2, sentence.count - 3);
-    i32 separator_indices[2];
-    i32 separator_count = 0;
-    
-    foreach(i, expresions.count) {
-        if (expresions[i].kind == TokenKind_NextSentence)
+    if (unit->kind == UnitKind_BinaryOperation && unit->binary_op.op == BinaryOperator_Is) {
+        if (unit->src.vtype == VType_Any)
         {
-            if (separator_count >= countof(separator_indices)) {
-                separator_count++;
-                break;
+            IR_Object* obj = ir_find_object_from_value(ir, unit->src);
+            VType vtype = TypeFromCompiletime(unit->binary_op.src1);
+            
+            if (obj != NULL && vtype != VType_Nil) {
+                ir_assume_object(ir, obj, vtype);
+            }
+        }
+    }
+}
+
+IR_Group ReadCode(IR_Context* ir, Location location)
+{
+    Parser* parser = ParserFromLocation(location);
+    
+    ir_scope_push(ir);
+    defer(ir_scope_pop(ir));
+    
+    if (peek_token(parser).kind == TokenKind_OpenBrace) {
+        assume_token(parser, TokenKind_OpenBrace);
+    }
+    
+    IR_Group out = ir_from_none();
+    
+    while (true)
+    {
+        Token first_token = peek_token(parser);
+        
+        if (first_token.kind == TokenKind_None) {
+            break;
+        }
+        
+        if (first_token.kind == TokenKind_CloseBrace)
+        {
+            assume_token(parser, TokenKind_CloseBrace);
+            if (peek_token(parser).kind != TokenKind_None) {
+                report_error(first_token.location, "Invalid closing brace");
+                return ir_failed();
+            }
+            break;
+        }
+        
+        // Control flow
+        if (first_token.kind == TokenKind_IfKeyword)
+        {
+            assume_token(parser, TokenKind_IfKeyword);
+            
+            ir_scope_push(ir);
+            defer(ir_scope_pop(ir));
+            
+            // Read expression
+            Location expression_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+            
+            if (!LocationIsValid(expression_location)) {
+                report_error(first_token.location, "Expecting parenthesis for if statement");
+                return ir_failed();
             }
             
-            separator_indices[separator_count++] = i;
+            IR_Group expression = ReadExpression(ir, expression_location, ExpresionContext_from_vtype(VType_Bool, 1));
+            if (!expression.success) return ir_failed();
+            
+            CheckForAnyAssumptions(ir, expression.last, expression.value);
+            
+            out = ir_append(out, expression);
+            
+            // Read success code
+            Location success_location = FetchCode(parser);
+            
+            if (!LocationIsValid(success_location)) {
+                report_error(first_token.location, "Expecting code for if statement");
+                return ir_failed();
+            }
+            
+            IR_Group success = ReadCode(ir, success_location);
+            if (!success.success) return ir_failed();
+            
+            IR_Group failure = ir_from_none();
+            
+            // Failure code
+            if (peek_token(parser).kind == TokenKind_ElseKeyword)
+            {
+                Token else_token = consume_token(parser);
+                
+                Location failure_location = FetchCode(parser);
+                
+                if (!LocationIsValid(failure_location)) {
+                    report_error(else_token.location, "Expecting code for else statement");
+                    return ir_failed();
+                }
+                
+                failure = ReadCode(ir, failure_location);
+                if (!failure.success) return ir_failed();
+            }
+            
+            out = ir_append(out, IRFromIfStatement(ir, expression.value, success, failure, first_token.location));
+        }
+        else if (first_token.kind == TokenKind_ElseKeyword) {
+            report_error(first_token.location, "No if statement found");
+            return ir_failed();
+        }
+        else if (first_token.kind == TokenKind_WhileKeyword)
+        {
+            assume_token(parser, TokenKind_WhileKeyword);
+            
+            ir_looping_scope_push(ir, first_token.location);
+            defer(ir_looping_scope_pop(ir));
+            
+            // Read expression
+            Location expression_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+            
+            if (!LocationIsValid(expression_location)) {
+                report_error(first_token.location, "Expecting parenthesis for while statement");
+                return ir_failed();
+            }
+            
+            IR_Group condition = ReadExpression(ir, expression_location, ExpresionContext_from_vtype(VType_Bool, 1));
+            if (!condition.success) return ir_failed();
+            
+            // Read code
+            Location code_location = FetchCode(parser);
+            
+            if (!LocationIsValid(code_location)) {
+                report_error(first_token.location, "Expecting code for while statement");
+                return ir_failed();
+            }
+            
+            IR_Group code = ReadCode(ir, code_location);
+            if (!code.success) return ir_failed();
+            
+            out = ir_append(out, IRFromLoop(ir, ir_from_none(), condition, code, ir_from_none(), first_token.location));
+        }
+        else if (first_token.kind == TokenKind_ForKeyword)
+        {
+            assume_token(parser, TokenKind_ForKeyword);
+            
+            ir_looping_scope_push(ir, first_token.location);
+            defer(ir_looping_scope_pop(ir));
+            
+            Location parenthesis_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+            if (!LocationIsValid(parenthesis_location)) {
+                report_error(first_token.location, "Expecting parenthesis for for");
+                return ir_failed();
+            }
+            
+            Location content_location = FetchCode(parser);
+            if (!LocationIsValid(content_location)) {
+                report_error(first_token.location, "Expecting code for for statement");
+                return ir_failed();
+            }
+            
+            Array<Location> splits = array_make<Location>(context.arena, 8);
+            
+            // Split location by ';'
+            {
+                U32 split_count = 0;
+                
+                Parser* parser = ParserFromLocation(parenthesis_location);
+                
+                while (1)
+                {
+                    Location split = FetchUntil(parser, false, TokenKind_NextSentence);
+                    
+                    B32 last_split = !LocationIsValid(split);
+                    
+                    if (last_split) {
+                        split = LocationFromParser(parser, parser->range.max);
+                    }
+                    
+                    if (split_count >= splits.count) {
+                        break;
+                    }
+                    
+                    splits[split_count++] = split;
+                    
+                    if (last_split) break;
+                    
+                    assume_token(parser, TokenKind_NextSentence);
+                }
+                
+                splits.count = split_count;
+            }
+            
+            // For each
+            if (splits.count == 1)
+            {
+                Location location = splits[0];
+                Parser* parser = ParserFromLocation(location);
+                
+                Token element_token = consume_token(parser);
+                if (element_token.kind != TokenKind_Identifier) {
+                    report_error(location, "Expecting element identifier of the for each statement");
+                    return ir_failed();
+                }
+                
+                String element_identifier = element_token.value;
+                String index_identifier = {};
+                
+                if (peek_token(parser).kind == TokenKind_Comma)
+                {
+                    assume_token(parser, TokenKind_Comma);
+                    Token index_token = consume_token(parser);
+                    
+                    if (index_token.kind != TokenKind_Identifier) {
+                        report_error(location, "Expecting index identifier for the for each statement");
+                        return ir_failed();
+                    }
+                    
+                    index_identifier = index_token.value;
+                }
+                
+                if (peek_token(parser).kind != TokenKind_Colon) {
+                    report_error(location, "Expecting colon after for each identifiers");
+                    return ir_failed();
+                }
+                assume_token(parser, TokenKind_Colon);
+                
+                Location iterator_location = LocationFromParser(parser, parser->range.max);
+                
+                IR_Group iterator = ReadExpression(ir, iterator_location, ExpresionContext_from_inference(1));
+                
+                if (!vtype_is_array(iterator.value.vtype)) {
+                    report_error(location, "Invalid iterator for a for each statement");
+                    return ir_failed();
+                }
+                
+                VType element_vtype = VTypeNext(iterator.value.vtype);
+                
+                // Init code
+                IR_Group init = IRFromDefineObject(ir, RegisterKind_Local, element_identifier, element_vtype, false, location);
+                Value element_value = init.value;
+                
+                if (index_identifier.size > 0) {
+                    init = ir_append(init, IRFromDefineObject(ir, RegisterKind_Local, index_identifier, VType_Int, false, location));
+                }
+                else {
+                    init = ir_append(init, IRFromDefineTemporal(ir, VType_Int, location));
+                }
+                Value index_value = init.value;
+                init = ir_append(init, ir_from_store(ir, index_value, ValueFromInt(0), location));
+                
+                // Condition code
+                VariableTypeChild count_info = VTypeGetProperty(iterator.value.vtype, "count");
+                IR_Group condition = ir_from_child(ir, iterator.value, ValueFromInt(count_info.index), count_info.is_member, count_info.vtype, location);
+                Value count_value = condition.value;
+                condition = ir_append(condition, ir_from_binary_operator(ir, index_value, count_value, BinaryOperator_LessThan, false, location));
+                
+                // Content code
+                IR_Group content = ir_from_child(ir, iterator.value, index_value, true, element_vtype, location);
+                content = ir_append(content, ir_from_store(ir, element_value, content.value, location));
+                content = ir_append(content, ReadCode(ir, content_location));
+                
+                // Update code
+                IR_Group update = ir_from_assignment(ir, false, index_value, ValueFromInt(1), BinaryOperator_Addition, location);
+                
+                out = ir_append(out, IRFromLoop(ir, init, condition, content, update, first_token.location));
+            }
+            // Traditional C for
+            else if (splits.count == 3)
+            {
+                IR_Group init = ReadSentence(ir, splits[0]);
+                IR_Group condition = ReadExpression(ir, splits[1], ExpresionContext_from_vtype(VType_Bool, 1));
+                IR_Group update = ReadSentence(ir, splits[2]);
+                IR_Group content = ReadCode(ir, content_location);
+                
+                out = ir_append(out, IRFromLoop(ir, init, condition, content, update, first_token.location));
+            }
+            else
+            {
+                report_error(first_token.location, "Unknown for format");
+                return ir_failed();
+            }
+        }
+        else if (first_token.kind == TokenKind_OpenBrace)
+        {
+            Location block_location = FetchCode(parser);
+            
+            if (!LocationIsValid(block_location)) {
+                report_common_missing_closing_brace(first_token.location);
+                return ir_failed();
+            }
+            
+            IR_Group block = ReadCode(ir, block_location);
+            if (!block.success) return ir_failed();
+            
+            out = ir_append(out, block);
+        }
+        
+        // Sentence
+        else
+        {
+            Location sentence_location = FetchUntil(parser, false, TokenKind_NextSentence);
+            
+            if (!LocationIsValid(sentence_location)) {
+                report_expecting_semicolon(first_token.location);
+                return ir_failed();
+            }
+            
+            out = ir_append(out, ReadSentence(ir, sentence_location));
+            
+            assume_token(parser, TokenKind_NextSentence);
         }
     }
     
-    // Foreach Array Statement
-    if (separator_count == 0 && expresions.count >= 3)
+    return out;
+}
+
+IR_Group ReadSentence(IR_Context* ir, Location location)
+{
+    Parser* parser = ParserFromLocation(location);
+    
+    SentenceKind kind = find_sentence_kind(parser);
+    
+    if (kind == SentenceKind_ObjectDef)
     {
-        Token element_token = expresions[0];
-        
-        if (element_token.kind != TokenKind_Identifier) {
-            report_foreach_expecting_identifier(starting_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-        
-        i32 colon_index = -1;
-        foreach(i, expresions.count) {
-            if (expresions[i].kind == TokenKind_Colon) {
-                colon_index = i;
-                break;
-            }
-        }
-        
-        if (colon_index < 0) {
-            report_foreach_expecting_colon(starting_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-        
-        String index_name = {};
-        
-        if (colon_index > 1)
-        {
-            if (colon_index == 3 && expresions[1].kind == TokenKind_Comma && expresions[2].kind == TokenKind_Identifier) {
-                index_name = expresions[2].value;
-            }
-            else {
-                report_foreach_expecting_comma_separated_identifiers(starting_token.code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
-            }
-        }
-        
-        Array<Token> expresion_tokens = array_subarray(expresions, colon_index + 1, expresions.count - (colon_index + 1));
-        
-        auto node = (OpNode_ForeachArrayStatement*)alloc_node(parser, OpKind_ForeachArrayStatement, starting_token.code);
-        node->element_name = element_token.value;
-        node->index_name = index_name;
-        node->expresion = extract_expresion_from_array(parser, expresion_tokens);
-        node->content = extract_op(parser);
-        return node;
+        ObjectDefinitionResult res = ReadObjectDefinition(context.arena, location, false, RegisterKind_Local, ir);
+        if (!res.success) return ir_failed();
+        return res.out;
     }
-    // For Statement
-    else if (separator_count == 2)
+    
+    if (kind == SentenceKind_FunctionCall)
     {
-        Array<Token> initialize_sentence_tokens = array_subarray(expresions, 0, separator_indices[0]);
-        Array<Token> condition_expresion_tokens = array_subarray(expresions, separator_indices[0] + 1, separator_indices[1] - (separator_indices[0] + 1));
-        Array<Token> update_sentence_tokens = array_subarray(expresions, separator_indices[1] + 1, expresions.count - (separator_indices[1] + 1));
+        return ReadFunctionCall(ir, ExpresionContext_from_void(), location);
+    }
+    
+    if (kind == SentenceKind_Assignment)
+    {
+        PooledArray<String> identifiers = pooled_array_make<String>(context.arena, 4);
+        IR_Group out = ir_from_none();
         
-        auto node = (OpNode_ForStatement*)alloc_node(parser, OpKind_ForStatement, starting_token.code);
+        U64 dst_end_cursor = find_token_with_depth_check(parser, true, true, true, TokenKind_Assignment);
         
-        parser_push_state(parser, initialize_sentence_tokens);
-        node->initialize_sentence = extract_op(parser);
-        parser_pop_state(parser);
+        if (dst_end_cursor == parser->cursor) {
+            InvalidCodepath();
+            return ir_failed();
+        }
         
-        node->condition_expresion = extract_expresion_from_array(parser, condition_expresion_tokens);
+        Location dst_code = LocationMake(parser->cursor, dst_end_cursor, parser->script_id);
+        out = ir_append(out, ReadExpressionList(context.arena, ir, VType_Any, {}, dst_code));
         
-        parser_push_state(parser, update_sentence_tokens);
-        node->update_sentence = extract_op(parser);
-        parser_pop_state(parser);
+        MoveCursor(parser, dst_end_cursor);
+        Token assignment_token = consume_token(parser);
+        Assert(assignment_token.kind == TokenKind_Assignment);
         
-        node->content = extract_op(parser);
-        return node;
+        Array<Value> values = ValuesFromReturn(context.arena, out.value, true);
+        
+        if (values.count == 0) {
+            report_error(location, "Empty assignment");
+            return ir_failed();
+        }
+        
+        foreach(i, values.count)
+        {
+            Register reg = IRRegisterGet(ir, ValueGetRegister(values[i]));
+            if (RegisterIsValid(reg) && reg.is_constant) {
+                report_error(location, "Can't modify a constant: {line}");
+            }
+        }
+        
+        Location src_code = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+        
+        IR_Group src = ReadExpression(ir, src_code, ExpresionContext_from_vtype(values[0].vtype, values.count));
+        out = ir_append(out, src);
+        
+        if (!out.success) return ir_failed();
+        
+        BinaryOperator op = assignment_token.assignment_binary_operator;
+        IR_Group assignment = ir_from_multiple_assignment(ir, true, values, src.value, op, location);
+        return ir_append(out, assignment);
+    }
+    else if (kind == SentenceKind_Continue || kind == SentenceKind_Break)
+    {
+        return IRFromFlowModifier(ir, kind == SentenceKind_Break, location);
+    }
+    else if (kind == SentenceKind_Return)
+    {
+        assume_token(parser, TokenKind_ReturnKeyword);
+        
+        Array<VType> returns = ReturnsFromRegisters(context.arena, array_from_pooled_array(context.arena, ir->local_registers));
+        
+        VType expected_vtype = VType_Void;
+        if (returns.count == 1) expected_vtype = returns[0];
+        
+        ExpresionContext context = (expected_vtype == VType_Void) ? ExpresionContext_from_void() : ExpresionContext_from_vtype(expected_vtype, 1);
+        
+        Location expression_location = LocationFromParser(parser, parser->range.max);
+        IR_Group expression = ReadExpression(ir, expression_location, context);
+        if (!expression.success) return ir_failed();
+        return IRFromReturn(ir, expression, location);
+    }
+    
+    if (kind == SentenceKind_Unknown) {
+        report_error(location, "Unknown sentence: {line}");
+        return ir_failed();
+    }
+    else {
+        report_error(location, "Invalid sentence: {line}");
+        return ir_failed();
+    }
+}
+
+IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Location location)
+{
+    Parser* parser = ParserFromLocation(location);
+    
+    Token identifier_token = consume_token(parser);
+    Assert(identifier_token.kind == TokenKind_Identifier);
+    String identifier = identifier_token.value;
+    
+    Location expressions_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+    
+    if (!LocationIsValid(expressions_location)) {
+        report_common_missing_closing_parenthesis(location);
+        return ir_failed();
+    }
+    
+    Array<VType> expected_vtypes = {};
+    
+    {
+        FunctionDefinition* fn = FunctionFromIdentifier(identifier);
+        if (fn != NULL)
+        {
+            expected_vtypes = array_make<VType>(context.arena, fn->parameters.count);
+            foreach(i, fn->parameters.count) {
+                expected_vtypes[i] = fn->parameters[i].vtype;
+            }
+        }
+    }
+    
+    IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, expected_vtypes, expressions_location);
+    Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
+    
+    IR_Group call = ir_from_function_call(ir, identifier, params, expr_context, location);
+    return ir_append(out, call);
+}
+
+ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Location location, B32 require_single, RegisterKind register_kind, IR_Context* ir)
+{
+    Parser* parser = ParserFromLocation(location);
+    
+    ObjectDefinitionResult res = {};
+    res.out = ir_from_none();
+    res.success = false;
+    
+    Token starting_token = peek_token(parser);
+    
+    PooledArray<String> identifiers = pooled_array_make<String>(context.arena, 4);
+    
+    // Extract identifiers
+    while (true)
+    {
+        Token token = consume_token(parser);
+        
+        if (token.kind != TokenKind_Identifier) {
+            report_error(token.location, "Expecting an identifier\n");
+            return res;
+        }
+        
+        array_add(&identifiers, token.value);
+        
+        token = consume_token(parser);
+        
+        if (token.kind == TokenKind_Colon) {
+            break;
+        }
+        
+        if (require_single || token.kind != TokenKind_Comma) {
+            report_objdef_expecting_colon(starting_token.location);
+            return res;
+        }
+    }
+    
+    // Validation for duplicated symbols
+    if (ir != NULL)
+    {
+        foreach(i, identifiers.count) {
+            String identifier = identifiers[i];
+            if (ir_find_object(ir, identifier, false) != NULL) {
+                report_symbol_duplicated(location, identifier);
+                return res;
+            }
+        }
+    }
+    
+    // Explicit type
+    VType definition_vtype = VType_Void;
+    
+    {
+        Token type_or_assignment_token = peek_token(parser);
+        
+        if (type_or_assignment_token.kind == TokenKind_Assignment) {}
+        else if (type_or_assignment_token.kind == TokenKind_Colon) {}
+        else if (type_or_assignment_token.kind == TokenKind_Identifier)
+        {
+            Location type_location = FetchUntil(parser, false, TokenKind_Assignment, TokenKind_Colon);
+            
+            if (!LocationIsValid(type_location)) {
+                type_location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+                MoveCursor(parser, type_location.range.max);
+            }
+            
+            definition_vtype = ReadObjectType(type_location);
+            if (definition_vtype == VType_Nil) {
+                return res;
+            }
+            
+            if (definition_vtype == VType_Void) {
+                report_error(starting_token.location, "Void is not a valid object: {line}");
+                return res;
+            }
+        }
+        else {
+            report_objdef_expecting_type_identifier(starting_token.location);
+            return res;
+        }
+    }
+    
+    res.objects = array_make<ObjectDefinition>(arena, identifiers.count);
+    
+    B32 is_constant = false;
+    B32 inference_type = definition_vtype == VType_Void;
+    
+    if (ir == NULL)
+    {
+        if (inference_type) {
+            report_error(starting_token.location, "Unsupported inference type");
+            return res;
+        }
+        
+        Token assignment_token = peek_token(parser);
+        is_constant = assignment_token.kind == TokenKind_Colon;
+        
+        for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
+        {
+            String identifier = StrCopy(yov->arena, *it.value);
+            Value value = ValueFromZero(definition_vtype);
+            
+            res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+        }
     }
     else
     {
-        report_for_unknown(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-}
-
-OpNode* extract_enum_definition(Parser* parser)
-{
-    SCRATCH();
-    
-    Token starting_token = peek_token(parser);
-    
-    Token identifier_token = extract_token(parser);
-    assert(identifier_token.kind == TokenKind_Identifier);
-    
-    Token colon0_token = extract_token(parser);
-    assert(colon0_token.kind == TokenKind_Colon);
-    Token colon1_token = extract_token(parser);
-    assert(colon1_token.kind == TokenKind_Colon);
-    
-    Token enum_keyword_token = extract_token(parser);
-    assert(enum_keyword_token.kind == TokenKind_EnumKeyword);
-    
-    Token open_brace_token = extract_token(parser);
-    if (open_brace_token.kind != TokenKind_OpenBrace) {
-        report_common_missing_opening_bracket(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    PooledArray<String> names = pooled_array_make<String>(scratch.arena, 16);
-    PooledArray<OpNode*> values = pooled_array_make<OpNode*>(scratch.arena, 16);
-    
-    do {
-        Token name_token = extract_token(parser);
-        if (name_token.kind == TokenKind_CloseBrace) break;
-        if (name_token.kind != TokenKind_Identifier) {
-            report_enumdef_expecting_comma_separated_identifier(name_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
+        Token assignment_token = consume_token(parser);
         
-        OpNode* value{};
-        Token assignment_token = peek_token(parser);
-        
-        if (assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None) {
-            extract_token(parser);
-            // TODO(Jose): // TODO(Jose): Unitl: CloseBrace or Comma
-            Array<Token> expresion_tokens = extract_tokens_until(parser, false, TokenKind_CloseBrace, TokenKind_Comma);
+        if (assignment_token.kind != TokenKind_None)
+        {
+            B32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None;
+            B32 constant_assignment = assignment_token.kind == TokenKind_Colon;
             
-            OpNode* node = extract_expresion_from_array(parser, expresion_tokens);
-            
-            if (node->kind == OpKind_Error) return alloc_node(parser, OpKind_Error, starting_token.code);
-            if (node->kind == OpKind_None) {
-                report_common_expecting_valid_expresion(name_token.code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
+            if (!variable_assignment && !constant_assignment) {
+                report_objdef_expecting_assignment(starting_token.location);
+                return res;
             }
             
-            value = node;
-        }
-        
-        array_add(&names, name_token.value);
-        array_add(&values, value);
-        
-        Token comma_token = extract_token(parser);
-        if (comma_token.kind == TokenKind_CloseBrace) break;
-        if (comma_token.kind != TokenKind_Comma) {
-            report_enumdef_expecting_comma_separated_identifier(comma_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-    }
-    while (true);
-    
-    OpNode_EnumDefinition* node = (OpNode_EnumDefinition*)alloc_node(parser, OpKind_EnumDefinition, starting_token.code);
-    node->identifier = identifier_token.value;
-    node->names = array_from_pooled_array(yov->static_arena, names);
-    node->values = array_from_pooled_array(yov->static_arena, values);
-    return node;
-}
-
-OpNode* extract_struct_definition(Parser* parser)
-{
-    SCRATCH();
-    
-    Token starting_token = peek_token(parser);
-    
-    Token identifier_token = extract_token(parser);
-    assert(identifier_token.kind == TokenKind_Identifier);
-    
-    Token colon0_token = extract_token(parser);
-    assert(colon0_token.kind == TokenKind_Colon);
-    Token colon1_token = extract_token(parser);
-    assert(colon1_token.kind == TokenKind_Colon);
-    
-    Token struct_keyword_token = extract_token(parser);
-    assert(struct_keyword_token.kind == TokenKind_StructKeyword);
-    
-    Token open_brace_token = extract_token(parser);
-    if (open_brace_token.kind != TokenKind_OpenBrace) {
-        report_common_missing_opening_bracket(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    PooledArray<OpNode_ObjectDefinition*> members = pooled_array_make<OpNode_ObjectDefinition*>(scratch.arena, 16);
-    
-    while (peek_token(parser).kind != TokenKind_CloseBrace) {
-        
-        OpNode* member = extract_object_definition(parser);
-        
-        if (member->kind == OpKind_Error) return member;
-        
-        if (member->kind != OpKind_ObjectDefinition) {
-            report_expecting_object_definition(member->code);
-            return alloc_node(parser, OpKind_Error, member->code);
-        }
-        
-        array_add(&members, (OpNode_ObjectDefinition*)member);
-    }
-    
-    skip_tokens(parser, 1);
-    
-    OpNode_StructDefinition* node = (OpNode_StructDefinition*)alloc_node(parser, OpKind_StructDefinition, starting_token.code);
-    node->identifier = identifier_token.value;
-    node->members = array_from_pooled_array(yov->static_arena, members);
-    return node;
-}
-
-OpNode* extract_arg_definition(Parser* parser)
-{
-    Token starting_token = peek_token(parser);
-    
-    Token identifier_token = extract_token(parser);
-    assert(identifier_token.kind == TokenKind_Identifier);
-    
-    Token colon0_token = extract_token(parser);
-    assert(colon0_token.kind == TokenKind_Colon);
-    Token colon1_token = extract_token(parser);
-    assert(colon1_token.kind == TokenKind_Colon);
-    
-    Token arg_keyword_token = extract_token(parser);
-    assert(arg_keyword_token.kind == TokenKind_ArgKeyword);
-    
-    OpNode* none_node = alloc_node(parser, OpKind_None, starting_token.code);
-    OpNode* type = (OpNode_ObjectType*)none_node;
-    OpNode* name = (OpNode_Assignment*)none_node;
-    OpNode* description = (OpNode_Assignment*)none_node;
-    OpNode* required = (OpNode_Assignment*)none_node;
-    OpNode* default_value = (OpNode_Assignment*)none_node;
-    
-    if (peek_token(parser).kind == TokenKind_Arrow)
-    {
-        extract_token(parser);
-        type = extract_object_type(parser);
-    }
-    
-    Token open_brace_token = extract_token(parser);
-    if (open_brace_token.kind != TokenKind_OpenBrace) {
-        report_common_missing_opening_bracket(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    while (peek_token(parser).kind != TokenKind_CloseBrace) {
-        
-        OpNode_Assignment* assignment = (OpNode_Assignment*)extract_assignment(parser);
-        
-        if (assignment->kind == OpKind_Error) {
-            extract_tokens_until(parser, false, TokenKind_CloseBrace);
-            return assignment;
-        }
-        assert(assignment->kind == OpKind_Assignment);
-        
-        if (assignment->binary_operator != BinaryOperator_None || assignment->destination->kind != OpKind_Symbol) {
-            report_expecting_assignment(assignment->code);// TODO(Jose): 
-            return alloc_node(parser, OpKind_Error, assignment->code);
-        }
-        
-        String identifier = ((OpNode_Symbol*)assignment->destination)->identifier;
-        
-        if (string_equals(identifier, "name")) name = assignment;
-        else if (string_equals(identifier, "description")) description = assignment;
-        else if (string_equals(identifier, "required")) required = assignment;
-        else if (string_equals(identifier, "default")) default_value = assignment;
-        else {
-            report_unknown_parameter(assignment->code, identifier);
-            return alloc_node(parser, OpKind_Error, assignment->code);
-        }
-    }
-    
-    skip_tokens(parser, 1);
-    
-    OpNode_ArgDefinition* node = (OpNode_ArgDefinition*)alloc_node(parser, OpKind_ArgDefinition, starting_token.code);
-    node->identifier = identifier_token.value;
-    node->type = type;
-    node->name = name;
-    node->description = description;
-    node->required = required;
-    node->default_value = default_value;
-    return node;
-}
-
-OpNode* extract_function_definition(Parser* parser)
-{
-    SCRATCH();
-    
-    Token starting_token = peek_token(parser);
-    
-    Token identifier_token = extract_token(parser);
-    assert(identifier_token.kind == TokenKind_Identifier);
-    
-    Token colon0_token = extract_token(parser);
-    assert(colon0_token.kind == TokenKind_Colon);
-    Token colon1_token = extract_token(parser);
-    assert(colon1_token.kind == TokenKind_Colon);
-    
-    assert(peek_token(parser).kind == TokenKind_OpenParenthesis);
-    Array<Token> parameter_tokens = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
-    
-    if (parameter_tokens.count < 2) {
-        report_common_missing_closing_parenthesis(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    Array<OpNode_ObjectDefinition*> params{};
-    Array<OpNode*> returns{};
-    
-    // Parameters
-    if (parameter_tokens.count > 2)
-    {
-        parameter_tokens = array_subarray(parameter_tokens, 1, parameter_tokens.count - 2);
-        
-        Array<Array<Token>> parameters = split_tokens_in_parameters(scratch.arena, parameter_tokens);
-        params = array_make<OpNode_ObjectDefinition*>(yov->static_arena, parameters.count);
-        
-        b32 valid = true;
-        
-        foreach (i, parameters.count)
-        {
-            Array<Token> tokens = parameters[i];
+            is_constant = constant_assignment;
             
-            parser_push_state(parser, tokens);
-            OpNode* node = extract_object_definition(parser);
-            parser_pop_state(parser);
+            U64 assignment_end_cursor = parser->range.max;
             
-            if (node->kind != OpKind_ObjectDefinition)
-            {
-                valid = false;
+            Location expression_code = LocationFromParser(parser, assignment_end_cursor);
+            ExpresionContext expression_context = inference_type ? ExpresionContext_from_inference(identifiers.count) : ExpresionContext_from_vtype(definition_vtype, identifiers.count);
+            IR_Group src = ReadExpression(ir, expression_code, expression_context);
+            if (!src.success) return res;
+            
+            Array<VType> vtypes = {};
+            
+            // Inference
+            if (inference_type) {
+                Array<Value> returns = ValuesFromReturn(context.arena, src.value, true);
                 
-                if (node->kind != OpKind_Error) {
-                    report_expecting_object_definition(node->code);
-                    node = alloc_node(parser, OpKind_Error, node->code);
+                if (returns.count == 1) {
+                    vtypes = array_make<VType>(context.arena, identifiers.count);
+                    foreach(i, vtypes.count) vtypes[i] = returns[0].vtype;
                 }
+                else if (returns.count > 1) {
+                    vtypes = array_make<VType>(context.arena, returns.count);
+                    foreach(i, vtypes.count) vtypes[i] = returns[i].vtype;
+                }
+                definition_vtype = src.value.vtype;
+            }
+            else {
+                vtypes = array_make<VType>(context.arena, identifiers.count);
+                foreach(i, vtypes.count) vtypes[i] = definition_vtype;
             }
             
-            params[i] = (OpNode_ObjectDefinition*)node;
-        }
-        
-        if (!valid) {
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-    }
-    
-    // Return definition
-    if (peek_token(parser).kind == TokenKind_Arrow) {
-        extract_token(parser);
-        
-        Token return_start_node = peek_token(parser);
-        
-        if (return_start_node.kind == TokenKind_OpenParenthesis)
-        {
-            Array<Token> return_tokens = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
+            B32 is_any = definition_vtype == VType_Any;
             
-            if (return_tokens.count < 2) {
-                report_common_missing_closing_parenthesis(return_start_node.code);
-                return alloc_node(parser, OpKind_Error, return_start_node.code);
+            if (!is_any && vtypes.count < identifiers.count) {
+                report_error(location, "Unresolved object type for definition");
+                return res;
             }
             
-            return_tokens = array_subarray(return_tokens, 1, return_tokens.count - 2);
-            
-            Array<Array<Token>> return_tokens_array = split_tokens_in_parameters(scratch.arena, return_tokens);
-            returns = array_make<OpNode*>(yov->static_arena, return_tokens_array.count);
-            
-            b32 valid = true;
-            
-            foreach (i, returns.count)
-            {
-                Array<Token> tokens = return_tokens_array[i];
+            Array<Value> values = array_make<Value>(context.arena, identifiers.count);
+            foreach(i, values.count) {
+                VType vtype = vtypes[i];
                 
-                parser_push_state(parser, tokens);
-                OpNode* node = extract_object_definition(parser);
-                parser_pop_state(parser);
-                
-                if (node->kind != OpKind_ObjectDefinition)
+                if (register_kind == RegisterKind_Global)
                 {
-                    valid = false;
-                    
-                    if (node->kind != OpKind_Error) {
-                        report_expecting_object_definition(node->code);
-                        node = alloc_node(parser, OpKind_Error, node->code);
+                    I32 global_index = GlobalIndexFromIdentifier(identifiers[i]);
+                    if (global_index < 0) {
+                        report_error(location, "Global '%S' not found", identifiers[i]);
+                        continue;
                     }
+                    
+                    res.out = ir_append(res.out, ir_from_store(ir, ValueFromGlobal(global_index), ValueFromZero(vtype), location));
                 }
-                
-                returns[i] = (OpNode_ObjectDefinition*)node;
+                else
+                {
+                    res.out = ir_append(res.out, IRFromDefineObject(ir, register_kind, identifiers[i], vtype, is_constant, location));
+                    res.out = ir_append(res.out, ir_from_store(ir, res.out.value, ValueFromZero(vtype), location));
+                }
+                values[i] = res.out.value;
             }
             
-            if (!valid) {
-                return alloc_node(parser, OpKind_Error, starting_token.code);
+            // Default src
+            if (src.value.kind == ValueKind_None && !is_any) {
+                src = ir_from_default_initializer(ir, definition_vtype, location);
+            }
+            
+            res.out = ir_append(res.out, src);
+            
+            if (src.value.kind != ValueKind_None) {
+                IR_Group assignment = ir_from_multiple_assignment(ir, true, values, src.value, BinaryOperator_None, location);
+                res.out = ir_append(res.out, assignment);
+            }
+            
+            for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it) {
+                res.objects[it.index] = ObjDefMake(StrCopy(yov->arena, *it.value), vtypes[it.index], location, is_constant, values[it.index]);
             }
         }
         else
         {
-            returns = array_make<OpNode*>(yov->static_arena, 1);
-            returns[0] = extract_object_type(parser);
-            if (returns[0]->kind != OpKind_ObjectType) {
-                return alloc_node(parser, OpKind_Error, return_start_node.code);
+            if (inference_type) {
+                report_error(location, "Unspecified type");
+                return res;
+            }
+            
+            res.out = ir_from_none(ValueFromZero(definition_vtype));
+            
+            for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
+            {
+                String identifier = StrCopy(yov->arena, *it.value);
+                
+                if (register_kind == RegisterKind_Global)
+                {
+                    I32 global_index = GlobalIndexFromIdentifier(identifier);
+                    if (global_index < 0) {
+                        report_error(location, "Global '%S' not found", identifier);
+                        continue;
+                    }
+                    
+                    res.out = ir_append(res.out, ir_from_store(ir, ValueFromGlobal(global_index), ValueFromZero(definition_vtype), location));
+                    Value value = res.out.value;
+                    res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+                }
+                else
+                {
+                    res.out = ir_append(res.out, IRFromDefineObject(ir, register_kind, identifier, definition_vtype, is_constant, location));
+                    Value value = res.out.value;
+                    if (register_kind != RegisterKind_Parameter) {
+                        res.out = ir_append(res.out, ir_from_store(ir, value, ValueFromZero(definition_vtype), location));
+                    }
+                    res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+                }
             }
         }
     }
     
-    Token start_block_token = peek_token(parser);
+    res.success = true;
+    return res;
+}
+
+ObjectDefinitionResult ReadDefinitionList(Arena* arena, Location location, RegisterKind register_kind, IR_Context* ir)
+{
+    Parser* parser = ParserFromLocation(location);
     
-    OpNode* block = NULL;
+    ObjectDefinitionResult res = {};
+    res.out = ir_from_none();
     
-    if (start_block_token.kind == TokenKind_NextSentence) {
-        block = alloc_node(parser, OpKind_None, start_block_token.code);
-    }
-    else if (start_block_token.kind == TokenKind_OpenBrace)
+    // Empty list
+    if (peek_token(parser).kind == TokenKind_None)
     {
-        Array<Token> block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
-        
-        if (block_tokens.count < 2) {
-            report_common_missing_closing_brace(starting_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-        
-        if (block_tokens.count == 2) {
-            block = alloc_node(parser, OpKind_Block, block_tokens[0].code);
-        }
-        else {
-            block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
-            
-            parser_push_state(parser, block_tokens);
-            block = extract_block(parser, true);
-            parser_pop_state(parser);
-            
-            if (block->kind != OpKind_Block) {
-                report_common_missing_block(block_tokens[0].code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
-            }
-        }
-    }
-    else {
-        report_common_missing_opening_brace(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
+        res.success = true;
+        return res;
     }
     
+    PooledArray<ObjectDefinition> list = pooled_array_make<ObjectDefinition>(context.arena, 8);
     
+    while (parser->cursor < parser->range.max)
+    {
+        Location parameter_location = FetchUntil(parser, false, TokenKind_Comma);
+        
+        if (!LocationIsValid(parameter_location)) {
+            parameter_location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+            MoveCursor(parser, parameter_location.range.max);
+        }
+        
+        ObjectDefinitionResult res0 = ReadObjectDefinition(context.arena, parameter_location, false, register_kind, ir);
+        if (!res0.success) return {};
+        
+        foreach(i, res0.objects.count) {
+            array_add(&list, res0.objects[i]);
+        }
+        
+        res.out = ir_append(res.out, res0.out);
+        
+        consume_token(parser);
+    }
     
-    OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)alloc_node(parser, OpKind_FunctionDefinition, starting_token.code);
-    node->identifier = identifier_token.value;
-    node->block = block;
-    node->parameters = params;
-    node->returns = returns;
-    return node;
+    res.objects = array_from_pooled_array(arena, list);
+    res.success = true;
+    return res;
 }
 
-OpNode* extract_assignment(Parser* parser)
+IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VType> expected_vtypes, Location location)
 {
-    Token starting_token = peek_token(parser);
+    Parser* parser = ParserFromLocation(location);
     
-    if (op_kind_from_tokens(parser) != OpKind_Assignment) {
-        report_expecting_assignment(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
+    IR_Group out = ir_from_none();
+    PooledArray<Value> list = pooled_array_make<Value>(context.arena, 8);
+    
+    while (parser->cursor < parser->range.max)
+    {
+        U64 expression_end_cursor = find_token_with_depth_check(parser, true, true, true, TokenKind_Comma);
+        
+        if (parser->cursor == expression_end_cursor) {
+            expression_end_cursor = parser->range.max;
+        }
+        
+        U32 index = list.count;
+        VType expected_vtype = vtype;
+        if (index < expected_vtypes.count) expected_vtype = expected_vtypes[index];
+        
+        Location expression_code = LocationMake(parser->cursor, expression_end_cursor, parser->script_id);
+        
+        out = ir_append(out, ReadExpression(ir, expression_code, ExpresionContext_from_vtype(expected_vtype, 1)));
+        if (!out.success) return ir_failed();
+        
+        array_add(&list, out.value);
+        
+        MoveCursor(parser, expression_end_cursor);
+        consume_token(parser);
     }
     
-    Array<Token> destination_tokens = extract_tokens_until(parser, false, TokenKind_Assignment);
+    out.value = value_from_return(arena, array_from_pooled_array(context.arena, list));
     
-    Token assignment_token = extract_token(parser);
-    if (assignment_token.kind != TokenKind_Assignment) {
-        assert(0);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    Array<Token> source_tokens = extract_tokens_until(parser, false, TokenKind_NextSentence, TokenKind_None);
-    extract_token(parser);
-    
-    OpNode* destination = extract_expresion_from_array(parser, destination_tokens);
-    OpNode* source = extract_expresion_from_array(parser, source_tokens);
-    
-    if (destination->kind == OpKind_Error) return destination;
-    if (source->kind == OpKind_Error) return source;
-    
-    auto node = (OpNode_Assignment*)alloc_node(parser, OpKind_Assignment, starting_token.code);
-    node->destination = destination;
-    node->source = source;
-    node->binary_operator = assignment_token.assignment_binary_operator;
-    return node;
+    return out;
 }
 
-OpNode* extract_object_type(Parser* parser)
+VType ReadObjectType(Location location)
 {
-    String name{};
-    u32 array_dimensions = 0;
+    Parser* parser = ParserFromLocation(location);
+    Array<Token> tokens = ConsumeAllTokens(parser);
     
-    Token starting_token = peek_token(parser);
+    if (tokens.count == 0)
+    {
+        report_error(location, "Expecting a type");
+        return VType_Nil;
+    }
     
-    Token identifier_token = extract_token(parser);
+    Token identifier_token = tokens[0];
     if (identifier_token.kind != TokenKind_Identifier) {
-        report_objdef_expecting_type_identifier(identifier_token.code);
-        return alloc_node(parser, OpKind_Error, identifier_token.code);
+        report_objdef_expecting_type_identifier(identifier_token.location);
+        return VType_Nil;
     }
-    name = identifier_token.value;
     
-    Token open_bracket = peek_token(parser, 0);
+    tokens = array_subarray(tokens, 1, tokens.count - 1);
     
-    if (open_bracket.kind == TokenKind_OpenBracket)
+    B32 is_reference = false;
+    if (tokens.count > 0 && tokens[tokens.count - 1].kind == TokenKind_Ampersand)
     {
-        i32 starting_cursor = parser_get_state(parser)->token_index;
-        
-        while (peek_token(parser).kind == TokenKind_OpenBracket) {
-            Array<Token> tokens = extract_tokens_with_depth(parser, TokenKind_OpenBracket, TokenKind_CloseBracket, true);
-            if (tokens.count != 2) {
-                report_common_missing_closing_bracket(starting_token.code);
-                return alloc_node(parser, OpKind_Error, starting_token.code);
-            }
-            array_dimensions++;
-        }
-    }
-    
-    b32 is_reference = false;
-    Token ref_token = peek_token(parser, 0);
-    if (ref_token.kind == TokenKind_Ampersand) {
-        skip_tokens(parser, 1);
         is_reference = true;
+        tokens = array_subarray(tokens, 0, tokens.count - 1);
     }
     
-    OpNode_ObjectType* node = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
-    node->name = name;
-    node->array_dimensions = array_dimensions;
-    node->is_reference = is_reference;
-    return node;
-}
-
-OpNode* extract_object_definition(Parser* parser)
-{
-    Token starting_token = peek_token(parser);
-    
-    Array<Token> destination_tokens = extract_tokens_until(parser, false, TokenKind_Colon);
-    
-    Token colon_token = extract_token(parser);
-    if (colon_token.kind != TokenKind_Colon) {
-        report_objdef_expecting_colon(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
-    }
-    
-    OpNode* destination_node = extract_expresion_from_array(parser, destination_tokens);
-    
-    Array<String> names = {};
-    if (destination_node->kind == OpKind_Symbol) {
-        names = array_make<String>(yov->static_arena, 1);
-        names[0] = ((OpNode_Symbol*)destination_node)->identifier;
-    }
-    else if (destination_node->kind == OpKind_ParameterList)
+    U32 array_dimensions = 0;
+    if (tokens.count > 0)
     {
-        OpNode_ParameterList* params = (OpNode_ParameterList*)destination_node;
+        if (tokens.count % 2 != 0) {
+            report_error(location, "Invalid type format");
+            return VType_Nil;
+        }
         
-        foreach(i, params->nodes.count) {
-            if (params->nodes[i]->kind == OpKind_Error) return params->nodes[i];
-            if (params->nodes[i]->kind != OpKind_Symbol) {
-                invalid_codepath();// TODO(Jose): 
-                report_error(params->code, "Expecing a symbol");
-                return alloc_node(parser, OpKind_Error, params->code);
+        foreach(i, tokens.count)
+        {
+            TokenKind kind = (i % 2 == 0) ? TokenKind_OpenBracket : TokenKind_CloseBracket;
+            if (tokens[i].kind != kind) {
+                report_error(location, "Invalid type format");
+                return VType_Nil;
             }
         }
         
-        names = array_make<String>(yov->static_arena, params->nodes.count);
-        foreach(i, names.count) {
-            names[i] = ((OpNode_Symbol*)params->nodes[i])->identifier;
-        }
-    }
-    else if (destination_node->kind == OpKind_Error) return destination_node;
-    else {
-        invalid_codepath();
+        array_dimensions = tokens.count / 2;
     }
     
-    OpNode_ObjectType* node_type = NULL;
+    VType vtype = vtype_from_name(identifier_token.value);
+    if (vtype == VType_Nil) {
+        report_error(location, "Unknown type");
+        return VType_Nil;
+    }
     
-    Token type_or_assignment_token = peek_token(parser);
+    vtype = vtype_from_dimension(vtype, array_dimensions);
+    if (is_reference) vtype = vtype_from_reference(vtype);
+    return vtype;
+}
+
+internal_fn Token token_make_dynamic(String text, U64 cursor, TokenKind kind, U64 size, I32 script_id)
+{
+    Assert(size > 0);
     
-    if (type_or_assignment_token.kind == TokenKind_Assignment) {}
-    else if (type_or_assignment_token.kind == TokenKind_Colon) {}
-    else if (type_or_assignment_token.kind == TokenKind_Identifier)
+    if (cursor + size > text.size) {
+        Assert(0);
+        return {};
+    }
+    
+    Token token{};
+    token.value = StrSub(text, cursor, size);
+    token.skip_size = (U32)token.value.size;
+    token.cursor = cursor;
+    token.location = LocationMake(cursor, cursor + token.value.size, script_id);
+    
+    if (kind == TokenKind_Identifier) {
+        if (StrEquals("null", token.value)) kind = TokenKind_NullKeyword;
+        else if (StrEquals("if", token.value)) kind = TokenKind_IfKeyword;
+        else if (StrEquals("else", token.value)) kind = TokenKind_ElseKeyword;
+        else if (StrEquals("while", token.value)) kind = TokenKind_WhileKeyword;
+        else if (StrEquals("for", token.value)) kind = TokenKind_ForKeyword;
+        else if (StrEquals("is", token.value)) kind = TokenKind_IsKeyword;
+        else if (StrEquals("func", token.value)) kind = TokenKind_FuncKeyword;
+        else if (StrEquals("enum", token.value)) kind = TokenKind_EnumKeyword;
+        else if (StrEquals("struct", token.value)) kind = TokenKind_StructKeyword;
+        else if (StrEquals("arg", token.value)) kind = TokenKind_ArgKeyword;
+        else if (StrEquals("return", token.value)) kind = TokenKind_ReturnKeyword;
+        else if (StrEquals("break", token.value)) kind = TokenKind_BreakKeyword;
+        else if (StrEquals("continue", token.value)) kind = TokenKind_ContinueKeyword;
+        else if (StrEquals("import", token.value)) kind = TokenKind_ImportKeyword;
+        else if (StrEquals("true", token.value)) kind = TokenKind_BoolLiteral;
+        else if (StrEquals("false", token.value)) kind = TokenKind_BoolLiteral;
+    }
+    
+    token.kind = kind;
+    
+    // Discard double quotes
+    if (token.kind == TokenKind_StringLiteral) {
+        Assert(token.value.size >= 2);
+        token.value = StrSub(token.value, 1, token.value.size - 2);
+    }
+    
+    return token;
+}
+
+internal_fn Token token_make_fixed(String text, U64 cursor, TokenKind kind, U32 codepoint_length, I32 script_id)
+{
+    U64 start_cursor = cursor;
+    
+    U32 index = 0;
+    while (index < codepoint_length && cursor < text.size) {
+        index++;
+        string_get_codepoint(text, &cursor);
+    }
+    
+    return token_make_dynamic(text, start_cursor, kind, cursor - start_cursor, script_id);
+}
+
+internal_fn Token token_from_assignment(String text, U64 cursor, BinaryOperator binary_op, U32 codepoint_length, I32 script_id)
+{
+    Token token = token_make_fixed(text, cursor, TokenKind_Assignment, codepoint_length, script_id);
+    token.assignment_binary_operator = binary_op;
+    return token;
+}
+
+Token read_token(String text, U64 start_cursor, I32 script_id)
+{
+    U32 c0, c1;
+    
     {
-        node_type = (OpNode_ObjectType*)extract_object_type(parser);
-        if (node_type->kind != OpKind_ObjectType) {
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-    }
-    else {
-        report_objdef_expecting_type_identifier(starting_token.code);
-        return alloc_node(parser, OpKind_Error, starting_token.code);
+        U64 cursor = start_cursor;
+        c0 = (cursor < text.size) ? string_get_codepoint(text, &cursor) : 0;
+        c1 = (cursor < text.size) ? string_get_codepoint(text, &cursor) : 0;
     }
     
-    Token assignment_token = extract_token(parser);
+    if (c0 == 0) {
+        return token_make_fixed(text, start_cursor, TokenKind_NextLine, 1, script_id);
+    }
     
-    OpNode* assignment_node = NULL;
-    b32 is_constant = false;
-    
-    if (assignment_token.kind != TokenKind_NextSentence && assignment_token.kind != TokenKind_None)
+    if (codepoint_is_separator(c0))
     {
-        b32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None;
-        b32 constant_assignment = assignment_token.kind == TokenKind_Colon;
-        
-        if (!variable_assignment && !constant_assignment) {
-            report_objdef_expecting_assignment(starting_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
+        U64 cursor = start_cursor;
+        while (cursor < text.size) {
+            U64 next_cursor = cursor;
+            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            if (!codepoint_is_separator(codepoint)) {
+                break;
+            }
+            cursor = next_cursor;
         }
-        
-        is_constant = constant_assignment;
-        
-        Array<Token> assignment_tokens = extract_tokens_until(parser, false, TokenKind_NextSentence);
-        assignment_node = extract_expresion_from_array(parser, assignment_tokens);
-        
-        if (assignment_node->kind == OpKind_None) {
-            report_common_expecting_valid_expresion(starting_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
-        }
-    }
-    else {
-        assignment_node = alloc_node(parser, OpKind_None, starting_token.code);
+        return token_make_dynamic(text, start_cursor, TokenKind_Separator, cursor - start_cursor, script_id);
     }
     
-    if (node_type == NULL) node_type = (OpNode_ObjectType*)alloc_node(parser, OpKind_ObjectType, starting_token.code);
-    
-    skip_tokens_before_op(parser);
-    
-    auto node = (OpNode_ObjectDefinition*)alloc_node(parser, OpKind_ObjectDefinition, starting_token.code);
-    node->assignment = assignment_node;
-    node->type = node_type;
-    node->names = names;
-    node->is_constant = (b8)is_constant;
-    
-    return node;
-}
-
-OpNode* extract_function_call(Parser* parser)
-{
-    Token starting_token = peek_token(parser);
-    Array<Token> sentence = extract_tokens_with_depth(parser, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis, true);
-    return process_function_call(parser, sentence);
-}
-
-OpNode* extract_return(Parser* parser)
-{
-    Token return_token = extract_token(parser);
-    assert(return_token.kind == TokenKind_ReturnKeyword);
-    
-    Array<Token> expresion_tokens = extract_tokens_until(parser, false, TokenKind_NextSentence);
-    OpNode* expresion = extract_expresion_from_array(parser, expresion_tokens);
-    
-    OpNode_Return* node = (OpNode_Return*)alloc_node(parser, OpKind_Return, return_token.code);
-    node->expresion = expresion;
-    return node;
-}
-
-OpNode* extract_continue(Parser* parser)
-{
-    Token continue_token = extract_token(parser);
-    assert(continue_token.kind == TokenKind_ContinueKeyword);
-    
-    OpNode* node = alloc_node(parser, OpKind_Continue, continue_token.code);
-    return node;
-}
-
-OpNode* extract_break(Parser* parser)
-{
-    Token break_token = extract_token(parser);
-    assert(break_token.kind == TokenKind_BreakKeyword);
-    
-    OpNode* node = alloc_node(parser, OpKind_Break, break_token.code);
-    return node;
-}
-
-OpNode* extract_import(Parser* parser)
-{
-    Token import_token = extract_token(parser);
-    assert(import_token.kind == TokenKind_ImportKeyword);
-    
-    Token literal_token = extract_token(parser);
-    
-    if (literal_token.kind != TokenKind_StringLiteral) {
-        report_expecting_string_literal(import_token.code);
-        return alloc_node(parser, OpKind_Error, import_token.code);
-    }
-    
-    Token semicolon_token = peek_token(parser);
-    
-    if (semicolon_token.kind != TokenKind_NextSentence) {
-        report_expecting_semicolon(import_token.code);
-        return alloc_node(parser, OpKind_Error, import_token.code);
-    }
-    skip_tokens(parser, 1);
-    
-    OpNode_Import* node = (OpNode_Import*)alloc_node(parser, OpKind_Import, import_token.code);
-    node->path = literal_token.value;
-    return node;
-}
-
-OpNode* extract_block(Parser* parser, b32 between_braces)
-{
-    SCRATCH();
-    
-    Token starting_token = peek_token(parser);
-    Array<Token> block_tokens = parser_get_state(parser)->tokens;
-    
-    if (between_braces && starting_token.kind == TokenKind_OpenBrace)
+    if (c0 == '/' && c1 == '/')
     {
-        block_tokens = extract_tokens_with_depth(parser, TokenKind_OpenBrace, TokenKind_CloseBrace, true);
-        b32 close_bracket_found = block_tokens.count >= 2;
-        
-        if (!close_bracket_found) {
-            report_common_missing_closing_bracket(starting_token.code);
-            return alloc_node(parser, OpKind_Error, starting_token.code);
+        U64 cursor = start_cursor;
+        while (cursor < text.size) {
+            U64 next_cursor = cursor;
+            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            if (codepoint == '\n') break;
+            cursor = next_cursor;
         }
-        
-        block_tokens = array_subarray(block_tokens, 1, block_tokens.count - 2);
+        return token_make_dynamic(text, start_cursor, TokenKind_Comment, cursor - start_cursor, script_id);
     }
     
-    parser_push_state(parser, block_tokens);
-    
-    PooledArray<OpNode*> ops = pooled_array_make<OpNode*>(scratch.arena, 64);
-    auto block_node = (OpNode_Block*)alloc_node(parser, OpKind_Block, starting_token.code);
-    
-    while (true)
+    if (c0 == '/' && c1 == '*')
     {
-        OpNode* node = extract_op(parser);
-        if (node == NULL) break;
-        array_add(&ops, node);
-    }
-    
-    block_node->ops = array_from_pooled_array(yov->static_arena, ops);
-    
-    parser_pop_state(parser);
-    
-    return block_node;
-}
-
-OpNode* extract_op(Parser* parser)
-{
-    skip_tokens_before_op(parser);
-    
-    ParserState* state = parser_get_state(parser);
-    if (state->token_index >= state->tokens.count) return NULL;
-    
-    if (peek_token(parser).kind == TokenKind_ElseKeyword) {
-        Token token = extract_token(parser);
-        report_else_not_found_if(token.code);
-        return alloc_node(parser, OpKind_Error, token.code);
-    }
-    
-    OpKind kind = op_kind_from_tokens(parser);
-    
-    if (kind == OpKind_None || kind == OpKind_Error) {
-        Token token = peek_token(parser);
-        report_syntactic_unknown_op(token.code);
-        skip_sentence(parser);
-        return alloc_node(parser, OpKind_Error, token.code);
-    }
-    else {
-        OpNode* node = NULL;
-        if (kind == OpKind_Assignment) node = extract_assignment(parser);
-        if (kind == OpKind_IfStatement) node = extract_if_statement(parser);
-        if (kind == OpKind_WhileStatement) node = extract_while_statement(parser);
-        if (kind == OpKind_ForStatement) node = extract_for_statement(parser);
-        if (kind == OpKind_EnumDefinition) node = extract_enum_definition(parser);
-        if (kind == OpKind_StructDefinition) node = extract_struct_definition(parser);
-        if (kind == OpKind_ArgDefinition) node = extract_arg_definition(parser);
-        if (kind == OpKind_FunctionDefinition) node = extract_function_definition(parser);
-        if (kind == OpKind_FunctionCall) node = extract_function_call(parser);
-        if (kind == OpKind_ObjectDefinition) node = extract_object_definition(parser);
-        if (kind == OpKind_Return) node = extract_return(parser);
-        if (kind == OpKind_Continue) node = extract_continue(parser);
-        if (kind == OpKind_Break) node = extract_break(parser);
-        if (kind == OpKind_Import) node = extract_import(parser);
-        if (kind == OpKind_Block) node = extract_block(parser, true);
-        assert(node != NULL);
-        if (node == NULL) return NULL;
-        
-        if (node->kind == OpKind_Error) {
-            skip_sentence(parser);
+        U64 cursor = start_cursor;
+        U64 last_codepoint = 0;
+        I32 depth = 0;
+        while (cursor < text.size) 
+        {
+            U32 codepoint = string_get_codepoint(text, &cursor);
+            if (last_codepoint == '*' && codepoint == '/') {
+                depth--;
+                if (depth == 0) {
+                    break;
+                }
+            }
+            if (last_codepoint == '/' && codepoint == '*') {
+                depth++;
+            }
+            last_codepoint = codepoint;
         }
+        return token_make_dynamic(text, start_cursor, TokenKind_Comment, cursor - start_cursor, script_id);
+    }
+    
+    if (c0 == '"') {
+        B32 ignore_next = false;
+        U64 cursor = start_cursor + 1;
+        while (cursor < text.size) {
+            U32 codepoint = string_get_codepoint(text, &cursor);
+            
+            if (ignore_next) {
+                ignore_next = false;
+                continue;
+            }
+            
+            if (codepoint == '\\') ignore_next = true;
+            if (codepoint == '"') break;
+        }
+        return token_make_dynamic(text, start_cursor, TokenKind_StringLiteral, cursor - start_cursor, script_id);
+    }
+    
+    if (c0 == '\'') {
+        B32 ignore_next = false;
+        U64 cursor = start_cursor + 1;
+        while (cursor < text.size) {
+            U32 codepoint = string_get_codepoint(text, &cursor);
+            
+            if (ignore_next) {
+                ignore_next = false;
+                continue;
+            }
+            
+            if (codepoint == '\\') ignore_next = true;
+            if (codepoint == '\'') break;
+        }
+        return token_make_dynamic(text, start_cursor, TokenKind_CodepointLiteral, cursor - start_cursor, script_id);
+    }
+    
+    if (c0 == '-' && c1 == '>') return token_make_fixed(text, start_cursor, TokenKind_Arrow, 2, script_id);
+    
+    if (c0 == ',') return token_make_fixed(text, start_cursor, TokenKind_Comma, 1, script_id);
+    if (c0 == '.') return token_make_fixed(text, start_cursor, TokenKind_Dot, 1, script_id);
+    if (c0 == '{') return token_make_fixed(text, start_cursor, TokenKind_OpenBrace, 1, script_id);
+    if (c0 == '}') return token_make_fixed(text, start_cursor, TokenKind_CloseBrace, 1, script_id);
+    if (c0 == '[') return token_make_fixed(text, start_cursor, TokenKind_OpenBracket, 1, script_id);
+    if (c0 == ']') return token_make_fixed(text, start_cursor, TokenKind_CloseBracket, 1, script_id);
+    if (c0 == '"') return token_make_fixed(text, start_cursor, TokenKind_OpenString, 1, script_id);
+    if (c0 == '(') return token_make_fixed(text, start_cursor, TokenKind_OpenParenthesis, 1, script_id);
+    if (c0 == ')') return token_make_fixed(text, start_cursor, TokenKind_CloseParenthesis, 1, script_id);
+    if (c0 == ':') return token_make_fixed(text, start_cursor, TokenKind_Colon, 1, script_id);
+    if (c0 == ';') return token_make_fixed(text, start_cursor, TokenKind_NextSentence, 1, script_id);
+    if (c0 == '\n') return token_make_fixed(text, start_cursor, TokenKind_NextLine, 1, script_id);
+    if (c0 == '_') return token_make_fixed(text, start_cursor, TokenKind_Identifier, 1, script_id);
+    
+    if (c0 == '+' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Addition, 2, script_id);
+    if (c0 == '-' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Substraction, 2, script_id);
+    if (c0 == '*' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Multiplication, 2, script_id);
+    if (c0 == '/' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Division, 2, script_id);
+    if (c0 == '%' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Modulo, 2, script_id);
+    
+    if (c0 == '=' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompEquals, 2, script_id);
+    if (c0 == '!' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompNotEquals, 2, script_id);
+    if (c0 == '<' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompLessEquals, 2, script_id);
+    if (c0 == '>' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompGreaterEquals, 2, script_id);
+    
+    if (c0 == '|' && c1 == '|') return token_make_fixed(text, start_cursor, TokenKind_LogicalOr, 2, script_id);
+    if (c0 == '&' && c1 == '&') return token_make_fixed(text, start_cursor, TokenKind_LogicalAnd, 2, script_id);
+    
+    if (c0 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_None, 1, script_id);
+    
+    if (c0 == '<') return token_make_fixed(text, start_cursor, TokenKind_CompLess, 1, script_id);
+    if (c0 == '>') return token_make_fixed(text, start_cursor, TokenKind_CompGreater, 1, script_id);
+    
+    if (c0 == '+') return token_make_fixed(text, start_cursor, TokenKind_PlusSign, 1, script_id);
+    if (c0 == '-') return token_make_fixed(text, start_cursor, TokenKind_MinusSign, 1, script_id);
+    if (c0 == '*') return token_make_fixed(text, start_cursor, TokenKind_Asterisk, 1, script_id);
+    if (c0 == '/') return token_make_fixed(text, start_cursor, TokenKind_Slash, 1, script_id);
+    if (c0 == '%') return token_make_fixed(text, start_cursor, TokenKind_Modulo, 1, script_id);
+    
+    if (c0 == '&') return token_make_fixed(text, start_cursor, TokenKind_Ampersand, 1, script_id);
+    if (c0 == '!') return token_make_fixed(text, start_cursor, TokenKind_Exclamation, 1, script_id);
+    
+    if (codepoint_is_number(c0))
+    {
+        U64 cursor = start_cursor;
+        while (cursor < text.size) {
+            U64 next_cursor = cursor;
+            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            if (!codepoint_is_number(codepoint)) {
+                break;
+            }
+            cursor = next_cursor;
+        }
+        return token_make_dynamic(text, start_cursor, TokenKind_IntLiteral, cursor - start_cursor, script_id);
+    }
+    
+    if (codepoint_is_text(c0))
+    {
+        U64 cursor = start_cursor;
+        while (cursor < text.size) {
+            U64 next_cursor = cursor;
+            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            if (!codepoint_is_text(codepoint) && !codepoint_is_number(codepoint) && codepoint != '_') {
+                break;
+            }
+            cursor = next_cursor;
+        }
+        return token_make_dynamic(text, start_cursor, TokenKind_Identifier, cursor - start_cursor, script_id);
+    }
+    
+    return token_make_fixed(text, start_cursor, TokenKind_Error, 1, script_id);
+}
+
+Token read_valid_token(String text, U64 start_cursor, U64 end_cursor, I32 script_id)
+{
+    Assert(end_cursor <= text.size);
+    
+    U32 total_skip_size = 0;
+    Token token;
+    
+    while (true) {
+        token = {};
+        I64 cursor = (I64)start_cursor + total_skip_size;
+        if (cursor < 0 || cursor >= end_cursor) break;
         
-        return node;
+        token = read_token(text, cursor, script_id);
+        
+        B32 discard = false;
+        if (token.kind == TokenKind_Separator) discard = true;
+        if (token.kind == TokenKind_Comment) discard = true;
+        if (token.kind == TokenKind_NextLine) discard = true;
+        
+        total_skip_size += token.skip_size;
+        
+        if (!discard) break;
     }
     
-    return NULL;
+    token.cursor = start_cursor;
+    token.skip_size = total_skip_size;
+    
+    return token;
 }
 
-OpNode_Block* generate_ast(Array<Token> tokens) {
-    Parser* parser = parser_alloc(tokens);
-    return (OpNode_Block*)extract_block(parser, false);
-}
-
-Parser* parser_alloc(Array<Token> tokens)
+B32 check_tokens_are_couple(Array<Token> tokens, U32 open_index, U32 close_index, TokenKind open_token, TokenKind close_token)
 {
-    Parser* parser = arena_push_struct<Parser>(yov->temp_arena);
-    parser->state_stack = pooled_array_make<ParserState>(yov->temp_arena, 8);
-    parser_push_state(parser, tokens);
-    return parser;
-}
-
-Array<OpNode_Import*> imports_from_ast(Arena* arena, OpNode* ast)
-{
-    SCRATCH(arena);
+    Assert(open_index < tokens.count && close_index < tokens.count);
+    Assert(tokens[open_index].kind == open_token && tokens[close_index].kind == close_token);
     
-    if (ast->kind != OpKind_Block) return {};
-    OpNode_Block* node = (OpNode_Block*)ast;
+    if (close_index <= open_index) return false;
     
-    PooledArray<OpNode_Import*> to_resolve = pooled_array_make<OpNode_Import*>(scratch.arena, 8);
-    
-    foreach(i, node->ops.count) {
-        OpNode* import0 = node->ops[i];
-        if (import0->kind != OpKind_Import) continue;
-        OpNode_Import* import = (OpNode_Import*)import0;
-        array_add(&to_resolve, import);
-    }
-    
-    return array_from_pooled_array(arena, to_resolve);
-}
-
-void log_ast(OpNode* node, i32 depth)
-{
-    SCRATCH();
-    
-    if (node == NULL) return;
-    
-    foreach(i, depth) print_info("  ");
-    
-    if (node->kind == OpKind_Block) print_info("block");
-    else if (node->kind == OpKind_Error) print_error("error");
-    else if (node->kind == OpKind_None) print_info("none");
-    else if (node->kind == OpKind_IfStatement) print_info("if-statement");
-    else if (node->kind == OpKind_WhileStatement) print_info("while-statement");
-    else if (node->kind == OpKind_ForStatement) print_info("for-statement");
-    else if (node->kind == OpKind_ForeachArrayStatement) print_info("foreach-statement");
-    else if (node->kind == OpKind_Assignment) print_info("assignment");
-    else if (node->kind == OpKind_FunctionCall) print_info("function call");
-    else if (node->kind == OpKind_ObjectDefinition) {
-        auto node0 = (OpNode_ObjectDefinition*)node;
-        print_info("objdef: ");
-        foreach(i, node0->names.count) {
-            print_info("'%S'", node0->names[i]);
-            if (i + 1 < node0->names.count) print_info(", ");
+    I32 depth = 1;
+    for (U32 i = open_index + 1; i < close_index; ++i)
+    {
+        if (tokens[i].kind == open_token) {
+            depth++;
+        }
+        else if (tokens[i].kind == close_token) {
+            depth--;
+            if (depth <= 0) return false;
         }
     }
-    else if (node->kind == OpKind_ObjectType) {
-        auto node0 = (OpNode_ObjectType*)node;
-        print_info("type: '%S%s", node0->name, node0->is_reference ? "&" : "");
-        foreach(i, node0->array_dimensions) print_info("[]");
-        print_info("'");
-    }
-    else if (node->kind == OpKind_Binary) {
-        auto node0 = (OpNode_Binary*)node;
-        print_info("binary %S", string_from_binary_operator(node0->op));
-    }
-    else if (node->kind == OpKind_Sign) {
-        auto node0 = (OpNode_Sign*)node;
-        print_info("sign %S", string_from_binary_operator(node0->op));
-    }
-    else if (node->kind == OpKind_IntLiteral) {
-        auto node0 = (OpNode_NumericLiteral*)node;
-        print_info("int literal: %u", node0->int_literal);
-    }
-    else if (node->kind == OpKind_StringLiteral) {
-        auto node0 = (OpNode_StringLiteral*)node;
-        print_info("str literal: %S", node0->raw_value);
-    }
-    else if (node->kind == OpKind_BoolLiteral) {
-        auto node0 = (OpNode_NumericLiteral*)node;
-        print_info("bool literal: %s", node0->bool_literal ? "true" : "false");
-    }
-    else if (node->kind == OpKind_Symbol) {
-        auto node0 = (OpNode_Symbol*)node;
-        print_info("Symbol: %S", node0->identifier);
-    }
-    else if (node->kind == OpKind_MemberValue) {
-        auto node0 = (OpNode_MemberValue*)node;
-        print_info("member_value: %S", node0->member);
-    }
-    else if (node->kind == OpKind_ArrayExpresion) { print_info("array expresion"); }
-    else if (node->kind == OpKind_Indexing) print_info("indexing");
-    else if (node->kind == OpKind_StructDefinition) {
-        auto node0 = (OpNode_StructDefinition*)node;
-        print_info("struct def: %S", node0->identifier);
-    }
-    else if (node->kind == OpKind_ArgDefinition) {
-        auto node0 = (OpNode_ArgDefinition*)node;
-        print_info("arg def: %S", node0->identifier);
-    }
-    else if (node->kind == OpKind_EnumDefinition) {
-        auto node0 = (OpNode_EnumDefinition*)node;
-        print_info("enum def: %S", node0->identifier);
-    }
-    else {
-        assert(0);
+    
+    return true;
+}
+
+Array<Array<Token>> split_tokens_in_parameters(Arena* arena, Array<Token> tokens)
+{
+    PooledArray<Array<Token>> params = pooled_array_make<Array<Token>>(context.arena, 8);
+    
+    U32 cursor = 0;
+    U32 last_cursor = 0;
+    I32 depth = 0;
+    
+    while (cursor < tokens.count) {
+        Token t = tokens[cursor];
+        if (t.kind == TokenKind_Comma && depth <= 0) {
+            Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
+            array_add(&params, param);
+            last_cursor = cursor + 1;
+        }
+        if (t.kind == TokenKind_OpenParenthesis) depth++;
+        else if (t.kind == TokenKind_CloseParenthesis) depth--;
+        else if (t.kind == TokenKind_OpenBrace) depth++;
+        else if (t.kind == TokenKind_CloseBrace) depth--;
+        else if (t.kind == TokenKind_OpenBracket) depth++;
+        else if (t.kind == TokenKind_CloseBracket) depth--;
+        cursor++;
     }
     
-    print_info("\n");
+    Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
+    array_add(&params, param);
     
-    Array<OpNode*> childs = get_node_childs(scratch.arena, node);
-    
-    foreach(i, childs.count) {
-        log_ast(childs[i], depth + 1);
-    }
+    return array_from_pooled_array(arena, params);
 }

@@ -1,6 +1,5 @@
 
-// Yov Info
-main :: ()
+main :: func
 {
     println("Yov Info = {yov}");
     

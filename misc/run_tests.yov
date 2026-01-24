@@ -1,7 +1,16 @@
 
-failed_count := 0;
+failed_count : Int = 0;
 
-main :: ()
+main :: func
+{
+    for (it := 0; it < 1; it += 1) {
+        run_all_tests();
+    }
+    
+    exit(failed_count);
+}
+
+run_all_tests :: func
 {
     println("Running tests...");
     
@@ -34,19 +43,22 @@ main :: ()
     }
     
     println("Failed: {failed_count}");
-    exit(failed_count);
 }
 
-run_test :: (name: String, args: String, expected_code: Int)
+run_test :: func (name: String, args: String, expected_code: Int)
 {
     calls.redirect_stdout = RedirectStdout.Script;
-    out, res := call_script(name, args, "-no_user");
-    if (res.code != expected_code) {
-        failed_count += 1;
-        println("-> Test failed: {name}");
-        println(out.stdout);
+    
+    for (it := 0; it < 1; it += 1) {
+        out, res := call_script(name, args, "-no_user");
+        
+        if (res.code != expected_code) {
+            failed_count += 1;
+            println("-> Test failed: {name}");
+            println(out.stdout);
+            return;
+        }
     }
-    else {
-        println("Test succeded: {name}");
-    }
+    
+    println("Test succeded: {name}");
 }

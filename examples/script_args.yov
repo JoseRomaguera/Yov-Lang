@@ -8,7 +8,7 @@ yov.exe script_args.yov -foo=B -print_all
 yov.exe script_args.yov -foo=B -opt_foo=B
 */
 
-script_description :: "This is an example of how to define and use script arguments.\nTo document a script, define the constant 'script_description' within the script itself.";
+script_description : String : "This is an example of how to define and use script arguments.\nTo document a script, define the constant 'script_description' within the script itself.";
 
 foo :: arg -> Foo {
     required = true;
@@ -26,11 +26,16 @@ print_all :: arg {
 
 Foo :: enum { A, B, C }
 
-main :: ()
+main :: func
 {
     println("foo = {foo}");
     println("opt_foo = {opt_foo}");
     println("print_all = {print_all}");
     
     if (print_all) println("All the defined args: {context.args}");
+    
+    if (foo == .B)
+    {
+        
+    }
 }

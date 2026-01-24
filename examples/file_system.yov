@@ -7,7 +7,7 @@
 // See the function definitions here:
 // https://github.com/JoseRomaguera/Yov-Lang/blob/main/code/core.yov
 
-main :: ()
+main :: func
 {
     if (exists("_copied.yov")) println("Currently exists");
     else println("Not exists");

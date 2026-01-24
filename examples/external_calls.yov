@@ -8,7 +8,7 @@ output :: arg -> Int {
     default = 0;
 }
 
-main :: ()
+main :: func
 {
     if (callee) {
         print("Output from external script");

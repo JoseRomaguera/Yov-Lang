@@ -14,7 +14,6 @@ YovInfo :: struct {
 }
 
 Type :: struct {
-    ID: Int;
     name: String;
 }
 
@@ -42,34 +41,26 @@ CallsContext :: struct {
     redirect_stdout: RedirectStdout;
 }
 
-yov :: YovInfo();
-os  :: OS();
-
-context := Context();
-calls   := CallsContext();
-
 // Core
 
-typeof  :: (object: Any) -> Type;
-print   :: (object: Any);
-println :: (object: Any);
-exit    :: (exit_code: Int);
-set_cd  :: (cd: String) -> Result;
-assert  :: (result: Bool) -> Result;
-failed :: (message: String, exit_code: Int) -> Result;
+typeof  :: func(object: Any) -> Type;
+print   :: func(object: Any);
+println :: func(object: Any);
+exit    :: func(exit_code: Int);
+set_cd  :: func(cd: String) -> Result;
+assert  :: func(result: Bool) -> Result;
+failed :: func(message: String, exit_code: Int) -> Result;
 
-thread_sleep :: (millis: Int);
+sleep :: func(millis: Int);
 
-env            :: (name: String) -> (value: String, result: Result);
-env_path       :: (name: String) -> (value: String, result: Result);
-env_path_array :: (name: String) -> (value: String[], result: Result);
+env            :: func(name: String) -> (value: String, result: Result);
+env_path       :: func(name: String) -> (value: String, result: Result);
+env_path_array :: func(name: String) -> (value: String[], result: Result);
 
 // Console
 
-console_write :: (value: String);
-console_set_cursor :: (x: Int, y: Int);
-console_get_cursor :: () -> (x: Int, y: Int);
-console_clear :: ();
+console_write :: func(value: String);
+console_clear :: func;
 
 // External Calls
 
@@ -77,25 +68,25 @@ CallOutput :: struct {
     stdout: String;
 }
 
-call        :: (command: String) -> (out: CallOutput, result: Result);
-call_exe    :: (path: String, arguments: String) -> (out: CallOutput, result: Result);
-call_script :: (path: String, arguments: String, yov_arguments: String) -> (out: CallOutput, result: Result);
+call        :: func(command: String) -> (out: CallOutput, result: Result);
+call_exe    :: func(path: String, arguments: String) -> (out: CallOutput, result: Result);
+call_script :: func(path: String, arguments: String, yov_arguments: String) -> (out: CallOutput, result: Result);
 
 // String Utils
 
-path_resolve :: (path: String) -> String;
-str_get_codepoint :: (str: String, cursor: Int) -> (codepoint: Int, next_cursor: Int);
-str_split :: (str: String, separator: String) -> String[];
+path_resolve :: func(path: String) -> String;
+str_get_codepoint :: func(str: String, cursor: Int) -> (codepoint: Int, next_cursor: Int);
+str_split :: func(str: String, separator: String) -> String[];
 
 // JSON
 
-json_route :: (json: String, route: String) -> (out: String, res: Result);
+json_route :: func(json: String, route: String) -> (out: String, res: Result);
 
 // Yov
 
-yov_require     :: (major: Int, minor: Int) -> Result;
-yov_require_min :: (major: Int, minor: Int) -> Result;
-yov_require_max :: (major: Int, minor: Int) -> Result;
+yov_require     :: func(major: Int, minor: Int) -> Result;
+yov_require_min :: func(major: Int, minor: Int) -> Result;
+yov_require_max :: func(major: Int, minor: Int) -> Result;
 
 ObjectDefinition :: struct {
     identifier: String;
@@ -129,10 +120,10 @@ YovParseOutput :: struct {
     reports: String[];
 }
 
-yov_parse :: (path: String) -> YovParseOutput;
+yov_parse :: func(path: String) -> YovParseOutput;
 
 // User
-ask_yesno :: (text: String) -> Bool;
+ask_yesno :: func(text: String) -> Bool;
 
 // File System
 
@@ -146,20 +137,20 @@ FileInfo :: struct {
     is_directory: Bool;
 }
 
-exists             :: (path: String) -> Bool;
-create_directory   :: (path: String, recursive: Bool) -> Result;
-delete_directory   :: (path: String) -> Result;
-copy_directory     :: (dst: String, src: String) -> Result;
-move_directory     :: (dst: String, src: String) -> Result;
-copy_file          :: (dst: String, src: String, mode: CopyMode) -> Result;
-move_file          :: (dst: String, src: String) -> Result;
-delete_file        :: (path: String) -> Result;
-read_entire_file   :: (path: String) -> (content: String, result: Result);
-write_entire_file  :: (path: String, content: String) -> Result;
-file_get_info      :: (path: String) -> (info: FileInfo, result: Result);
-dir_get_files_info :: (path: String) -> (infos: FileInfo[], result: Result);
+exists             :: func(path: String) -> Bool;
+create_directory   :: func(path: String, recursive: Bool) -> Result;
+delete_directory   :: func(path: String) -> Result;
+copy_directory     :: func(dst: String, src: String) -> Result;
+move_directory     :: func(dst: String, src: String) -> Result;
+copy_file          :: func(dst: String, src: String, mode: CopyMode) -> Result;
+move_file          :: func(dst: String, src: String) -> Result;
+delete_file        :: func(path: String) -> Result;
+read_entire_file   :: func(path: String) -> (content: String, result: Result);
+write_entire_file  :: func(path: String, content: String) -> Result;
+file_get_info      :: func(path: String) -> (info: FileInfo, result: Result);
+dir_get_files_info :: func(path: String) -> (infos: FileInfo[], result: Result);
 
 // MSVC
 
-msvc_import_env_x64 :: () -> Result;
-msvc_import_env_x86 :: () -> Result;
+msvc_import_env_x64 :: func() -> Result;
+msvc_import_env_x86 :: func() -> Result;

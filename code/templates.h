@@ -2,7 +2,7 @@
 //- ARRAY 
 
 template<typename T>
-inline_fn Array<T> array_make(T* data, u32 count)
+inline_fn Array<T> array_make(T* data, U32 count)
 {
     Array<T> array;
     array.data = data;
@@ -11,18 +11,18 @@ inline_fn Array<T> array_make(T* data, u32 count)
 }
 
 template<typename T>
-inline_fn Array<T> array_make(Arena* arena, u32 count)
+inline_fn Array<T> array_make(Arena* arena, U32 count)
 {
     Array<T> array;
-    array.data = arena_push_struct<T>(arena, count);
+    array.data = ArenaPushStruct<T>(arena, count);
     array.count = count;
     return array;
 }
 
 template<typename T>
-inline_fn Array<T> array_subarray(Array<T> src, u32 offset, u32 count)
+inline_fn Array<T> array_subarray(Array<T> src, U32 offset, U32 count)
 {
-    assert(offset + count <= src.count);
+    Assert(offset + count <= src.count);
     Array<T> dst;
     dst.data = src.data + offset;
     dst.count = count;
@@ -38,12 +38,12 @@ inline_fn Array<T> array_copy(Arena* arena, Array<T> src)
 }
 
 template<typename T>
-inline_fn void array_erase(Array<T>* array, u32 index)
+inline_fn void array_erase(Array<T>* array, U32 index)
 {
-	assert(index < array->count);
+	Assert(index < array->count);
 	--array->count;
     
-	for (u32 i = index; i < array->count; ++i) 
+	for (U32 i = index; i < array->count; ++i) 
         array->data[i] = array->data[i + 1];
 }
 
@@ -51,9 +51,9 @@ inline_fn void array_erase(Array<T>* array, u32 index)
 
 template<typename T>
 struct PooledArray : PooledArrayR {
-    inline T& operator[](u32 index)
+    inline T& operator[](U32 index)
     {
-        assert(index < count);
+        Assert(index < count);
         
         PooledArrayBlock* block = root;
         
@@ -61,7 +61,7 @@ struct PooledArray : PooledArrayR {
         {
             index -= block->capacity;
             block = block->next;
-            assert(block != NULL);
+            Assert(block != NULL);
         }
         
         T* data = (T*)(block + 1);
@@ -71,7 +71,7 @@ struct PooledArray : PooledArrayR {
 };
 
 template<typename T>
-inline_fn PooledArray<T> pooled_array_make(Arena* arena, u32 block_capacity) {
+inline_fn PooledArray<T> pooled_array_make(Arena* arena, U32 block_capacity) {
     return *(PooledArray<T>*)&pooled_array_make(arena, sizeof(T), block_capacity); 
 }
 
@@ -100,13 +100,13 @@ template<typename T>
 struct PooledArrayIterator
 {
     PooledArray<T>* array;
-    u32 index;
+    U32 index;
     T* value;
     
     PooledArrayBlock* block;
-    u32 block_index;
+    U32 block_index;
     
-    b8 valid;
+    B8 valid;
 };
 
 template<typename T>
@@ -175,20 +175,20 @@ inline_fn void operator--(PooledArrayIterator<T>& it)
     else
     {
         PooledArrayBlock* block = it.array->root;
-        u32 index = it.index;
+        U32 index = it.index;
         
         while (index >= block->capacity)
         {
             index -= block->capacity;
             block = block->next;
-            assert(block != NULL);
+            Assert(block != NULL);
         }
         
         it.block = block;
         it.block_index = index;
     }
     
-    assert(it.block_index < it.block->count);
+    Assert(it.block_index < it.block->count);
     
     T* data = (T*)(it.block + 1);
     it.valid = true;
@@ -207,11 +207,11 @@ inline_fn LinkedList<T> ll_make(Arena* arena) {
 template<typename T>
 inline_fn T* ll_push(LinkedList<T>* ll)
 {
-    LLNode* node = (LLNode*)arena_push(ll->arena, sizeof(LLNode) + sizeof(T));
+    LLNode* node = (LLNode*)ArenaPush(ll->arena, sizeof(LLNode) + sizeof(T));
     ll->count++;
     
     if (ll->root == NULL) {
-        assert(ll->tail == NULL);
+        Assert(ll->tail == NULL);
         ll->root = node;
     }
     
@@ -233,12 +233,12 @@ inline_fn T* ll_push(LinkedList<T>* ll, const T& data)
 template<typename T>
 inline_fn void* ll_push_back(LinkedList<T>* ll)
 {
-    assert(ll->stride > 0);
-    LLNode* node = (LLNode*)arena_push(ll->arena, sizeof(LLNode) + sizeof(T));
+    Assert(ll->stride > 0);
+    LLNode* node = (LLNode*)ArenaPush(ll->arena, sizeof(LLNode) + sizeof(T));
     ll->count++;
     
     if (ll->tail == NULL) {
-        assert(ll->root == NULL);
+        Assert(ll->root == NULL);
         ll->tail = node;
     }
     
@@ -252,7 +252,7 @@ inline_fn void* ll_push_back(LinkedList<T>* ll)
 template<typename T>
 inline_fn Array<T> array_from_ll(Arena* arena, LinkedList<T> src) {
     Array<T> dst = array_make<T>(arena, src.count);
-    u32 i = 0;
+    U32 i = 0;
     for (LLNode* node = src.root; node != NULL; node = node->next) {
         dst[i++] = *(T*)(node + 1);
     }
@@ -261,14 +261,14 @@ inline_fn Array<T> array_from_ll(Arena* arena, LinkedList<T> src) {
 
 //- SORTING 
 
-typedef i32 SortCompareFn(const void*, const void*);
+typedef I32 SortCompareFn(const void*, const void*);
 
 template<typename T>
-internal_fn void _insertion_sort(Array<T> array, SortCompareFn* compare_fn, u32 begin, u32 end)
+internal_fn void _insertion_sort(Array<T> array, SortCompareFn* compare_fn, U32 begin, U32 end)
 {
-	for (u32 i = begin + 1; i < end; ++i) {
+	for (U32 i = begin + 1; i < end; ++i) {
         
-		i32 j = i - 1;
+		I32 j = i - 1;
         
 		while (1) {
             
@@ -286,20 +286,20 @@ internal_fn void _insertion_sort(Array<T> array, SortCompareFn* compare_fn, u32 
 		}
         
 		if (j != i) {
-			for (u32 w = j; w < i; ++w) {
-                SWAP(array[i], array[w]);
+			for (U32 w = j; w < i; ++w) {
+                Swap(array[i], array[w]);
 			}
 		}
 	}
 }
 
 template<typename T>
-internal_fn void _quick_sort(Array<T> array, SortCompareFn* compare_fn, u32 left_limit, u32 right_limit)
+internal_fn void _quick_sort(Array<T> array, SortCompareFn* compare_fn, U32 left_limit, U32 right_limit)
 {
-	i32 left = left_limit;
+	I32 left = left_limit;
     
-	i32 right = right_limit;
-	u32 pivote = right;
+	I32 right = right_limit;
+	U32 pivote = right;
 	--right;
     
 	while (1) {
@@ -307,7 +307,7 @@ internal_fn void _quick_sort(Array<T> array, SortCompareFn* compare_fn, u32 left
 		while (compare_fn(&array[pivote], &array[right]) < 0 && right > left) --right;
         
 		if (left < right) {
-            SWAP(array[left], array[right]);
+            Swap(array[left], array[right]);
 			++left;
 			--right;
 		}
@@ -317,7 +317,7 @@ internal_fn void _quick_sort(Array<T> array, SortCompareFn* compare_fn, u32 left
 	if (left < right) ++left;
     
 	if (compare_fn(&array[left], &array[pivote]) > 0) {
-        SWAP(array[left], array[right_limit]);
+        Swap(array[left], array[right_limit]);
 	}
     
 	if (left_limit != left) {

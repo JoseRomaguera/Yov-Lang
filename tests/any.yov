@@ -1,5 +1,5 @@
 
-main :: ()
+main :: func
 {
     a: Any;
     
@@ -44,9 +44,9 @@ main :: ()
     else assert(false);
 }
 
-custom_string :: (v: Any) -> String
+custom_string :: func (v: Any) -> String
 {
-    if (v is Int) {
+    if (v is I64) {
         r := v + 0;
         return "Int: {r}";
     }
@@ -59,7 +59,7 @@ custom_string :: (v: Any) -> String
     }
 }
 
-return_any :: (i: Int) -> Any
+return_any :: func (i: Int) -> Any
 {
     if (i == 0) return 1;
     if (i == 1) return "A";
@@ -67,7 +67,7 @@ return_any :: (i: Int) -> Any
     return -1;
 }
 
-return_tuple :: (i: Int) -> (a: Any, b: Int)
+return_tuple :: func (i: Int) -> (a: Any, b: Int)
 {
     b = i;
     a = return_any(b);

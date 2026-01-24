@@ -1,38 +1,58 @@
 
-main :: ()
+En0 :: enum {
+    A, B = 2, C
+}
+
+main :: func
 {
     // Definitions
-    
-    int0 : Int;
-    int1 : Int = 10;
-    int2 : Int = int0 + int1;
-    int3 := 13;
-    int4 := int2;
-    int0 += int1;
-    int0 -= int3;
-    int0 *= 2;
-    int0 /= 1;
-    int1 = int2 % 2;
-    int3 %= 2;
-    int3 = -int3 - 1;
-    
-    println("{int0}, {int1}, {int2}, {int3}, {int4}");
-    assert(int0 == -6 && int1 == 0 && int2 == 10 && int3 == -2 && int4 == 10);
+    {
+        int0 : Int;
+        int1 : Int = 10;
+        int2 : Int = int0 + int1;
+        int3 := 13;
+        int4 := int2;
+        int0 += int1;
+        int0 -= int3;
+        int0 *= 2;
+        int0 /= 1;
+        int1 = int2 % 2;
+        int3 %= 2;
+        int3 = -int3 - 1;
+        
+        println("{int0}, {int1}, {int2}, {int3}, {int4}");
+        assert(int0 == -6 && int1 == 0 && int2 == 10 && int3 == -2 && int4 == 10);
+    }
     
     // Strings
+    {
+        str0: String;
+        str0 += "Hello";
+        str0 += " " + "World";
+        assert(str0 == "Hello World");
+        
+        path0 := "foo0/foo1/foo2" / "../foo.txt";
+        assert(path0 == "foo0/foo1/foo.txt");
+        
+        inter0 := "str0.size = {str0.size}";
+        inter1 := "str0 is empty = {str0.size == 0}";
+        assert(inter0 == "str0.size = 11");
+        assert(inter1 == "str0 is empty = false");
+    }
     
-    str0: String;
-    str0 += "Hello";
-    str0 += " " + "World";
-    assert(str0 == "Hello World");
-    
-    path0 := "foo0/foo1/foo2" / "../foo.txt";
-    assert(path0 == "foo0/foo1/foo.txt");
-    
-    inter0 := "str0.size = {str0.size}";
-    inter1 := "str0 is empty = {str0.size == 0}";
-    assert(inter0 == "str0.size = 11");
-    assert(inter1 == "str0 is empty = false");
+    // Enums
+    {
+        v0 := En0.B;
+        v1 := En0.A;
+        v2 := En0.C;
+        
+        assert(v0.value == 2 && v0.name == "B");
+        assert(v1.value == 0 && v1.name == "A");
+        assert(v2.value == 2 && v2.name == "C");
+        assert(v1 != v2);
+        assert(En0.B != En0.C);
+        assert(En0.B.value == En0.C.value);
+    }
     
     // Intrinsics
     

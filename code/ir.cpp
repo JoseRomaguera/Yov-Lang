@@ -1,42 +1,53 @@
 #include "inc.h"
 
-inline_fn IR_Unit* ir_unit_alloc(IR_Context* ir, UnitKind kind, CodeLocation code)
+inline_fn IR_Unit* ir_unit_alloc(IR_Context* ir, UnitKind kind, Location location)
 {
-    IR_Unit* unit = arena_push_struct<IR_Unit>(ir->arena);
+    IR_Unit* unit = ArenaPushStruct<IR_Unit>(ir->arena);
     unit->kind = kind;
-    unit->code = code;
+    unit->location = location;
     unit->dst_index = -1;
     return unit;
 }
 
-internal_fn IR_Unit* ir_alloc_empty(IR_Context* ir, CodeLocation code) {
-    return ir_unit_alloc(ir, UnitKind_Empty, code);
+internal_fn IR_Unit* ir_alloc_empty(IR_Context* ir, Location location) {
+    return ir_unit_alloc(ir, UnitKind_Empty, location);
 }
 
-internal_fn IR_Unit* ir_alloc_jump(IR_Context* ir, i32 condition, Value src, IR_Unit* jump_to_unit, CodeLocation code)
+internal_fn IR_Unit* ir_alloc_jump(IR_Context* ir, I32 condition, Value src, IR_Unit* jump_to_unit, Location location)
 {
-    assert(jump_to_unit != NULL);
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Jump, code);
+    Assert(jump_to_unit != NULL);
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Jump, location);
+    unit->src = src;
     unit->jump.condition = condition;
-    unit->jump.src = src;
     unit->jump.unit = jump_to_unit;
     return unit;
 }
 
-inline_fn IR_Group ir_failed()
+IR_Group ir_failed()
 {
     IR_Group out{};
     out.success = false;
     out.unit_count = 0;
     out.first = NULL;
     out.last = NULL;
-    out.value = value_none();
+    out.value = ValueNone();
     return out;
 }
 
-inline_fn IR_Group ir_from_single(IR_Unit* unit, Value value = value_none())
+IR_Group ir_from_none(Value value)
 {
-    assert(unit->next == NULL && unit->prev == NULL);
+    IR_Group out{};
+    out.success = true;
+    out.unit_count = 0;
+    out.first = NULL;
+    out.last = NULL;
+    out.value = value;
+    return out;
+}
+
+IR_Group ir_from_single(IR_Unit* unit, Value value)
+{
+    Assert(unit->next == NULL && unit->prev == NULL);
     IR_Group out{};
     out.success = true;
     out.value = value;
@@ -45,32 +56,21 @@ inline_fn IR_Group ir_from_single(IR_Unit* unit, Value value = value_none())
     out.last = unit;
     return out;
 }
-inline_fn IR_Group ir_from_none(Value value = value_none())
-{
-    IR_Group out{};
-    out.success = true;
-    out.unit_count = 0;
-    out.first = NULL;
-    out.last = NULL;
-    out.value = value;
-    return out;
-}
-
 #if DEV
 internal_fn void DEV_validate_IR_Group(IR_Group out)
 {
-    u32 count = 0;
+    U32 count = 0;
     IR_Unit* unit = out.first;
     while (unit != NULL) {
-        assert(unit->next != NULL || unit == out.last);
+        Assert(unit->next != NULL || unit == out.last);
         unit = unit->next;
         count++;
     }
-    assert(out.unit_count == count);
+    Assert(out.unit_count == count);
 }
 #endif
 
-internal_fn IR_Group IR_append(IR_Group o0, IR_Group o1)
+IR_Group ir_append(IR_Group o0, IR_Group o1)
 {
     IR_Group out = {};
     out.success = o0.success && o1.success;
@@ -109,210 +109,210 @@ internal_fn IR_Group IR_append(IR_Group o0, IR_Group o1)
     return out;
 }
 
-inline_fn IR_Group IR_append_3(IR_Group o0, IR_Group o1, IR_Group o2) {
-    IR_Group out = IR_append(o0, o1);
-    return IR_append(out, o2);
+inline_fn IR_Group ir_append_3(IR_Group o0, IR_Group o1, IR_Group o2) {
+    IR_Group out = ir_append(o0, o1);
+    return ir_append(out, o2);
 }
-inline_fn IR_Group IR_append_4(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3) {
-    IR_Group out = IR_append(o0, o1);
-    out = IR_append(out, o2);
-    return IR_append(out, o3);
+inline_fn IR_Group ir_append_4(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3) {
+    IR_Group out = ir_append(o0, o1);
+    out = ir_append(out, o2);
+    return ir_append(out, o3);
 }
-inline_fn IR_Group IR_append_5(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3, IR_Group o4) {
-    IR_Group out = IR_append(o0, o1);
-    out = IR_append(out, o2);
-    out = IR_append(out, o3);
-    return IR_append(out, o4);
+inline_fn IR_Group ir_append_5(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3, IR_Group o4) {
+    IR_Group out = ir_append(o0, o1);
+    out = ir_append(out, o2);
+    out = ir_append(out, o3);
+    return ir_append(out, o4);
 }
 
-internal_fn IR_Group ir_from_result_eval(IR_Context* ir, Value src, CodeLocation code)
+internal_fn IR_Group ir_from_result_eval(IR_Context* ir, Value src, Location location)
 {
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_ResultEval, code);
-    unit->result_eval.src = src;
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_ResultEval, location);
+    unit->src = src;
     return ir_from_single(unit);
 }
-internal_fn IR_Group ir_from_define_temporal(IR_Context* ir, VariableType* vtype, CodeLocation code)
+
+IR_Group IRFromDefineObject(IR_Context* ir, RegisterKind register_kind, String identifier, VType vtype, B32 constant, Location location)
 {
-    assert(vtype->ID > VTypeID_Void);
+    Assert(vtype == VType_Any || VTypeValid(vtype));
     
-    i32 register_index = ir_register_alloc_local(ir, vtype);
-    return ir_from_none(value_from_register(register_index, vtype, false));
-}
-internal_fn IR_Group ir_from_define_local(IR_Context* ir, String identifier, VariableType* vtype, CodeLocation code)
-{
-    assert(vtype != void_vtype && vtype->ID >= 0);
+    I32 register_index = IRRegisterAlloc(ir, vtype, register_kind, constant);
     
-    i32 register_index = ir_register_alloc_local(ir, vtype);
     IR_Object* object = ir_define_object(ir, identifier, vtype, ir->scope, register_index);
-    Value value = value_from_ir_object(object);
+    Value value = ValueFromIrObject(object);
     return ir_from_none(value);
 }
 
-internal_fn IR_Group ir_from_reference(IR_Context* ir, b32 expects_lvalue, Value value, CodeLocation code)
+IR_Group IRFromDefineTemporal(IR_Context* ir, VType vtype, Location location)
 {
-    IR_Register* reg = ir_register_from_value(ir, value);
+    Assert(VTypeValid(vtype));
     
-    b32 is_constant = reg != NULL && reg->is_constant;
+    I32 register_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
+    return ir_from_none(ValueFromRegister(register_index, vtype, false));
+}
+
+
+IR_Group ir_from_reference(IR_Context* ir, B32 expects_lvalue, Value value, Location location)
+{
+    Register reg = IRRegisterFromValue(ir, value);
+    
+    B32 is_constant = reg.is_constant;
     
     if (is_constant) {
-        report_error(code, "Can't reference a constant: {line}");
+        report_error(location, "Can't reference a constant: {line}");
         return ir_failed();
     }
     
     if (expects_lvalue && value.kind != ValueKind_LValue) {
-        report_ref_expects_lvalue(code);
+        report_ref_expects_lvalue(location);
         return ir_failed();
     }
     
-    return ir_from_none(value_from_reference(value));
+    return ir_from_none(ValueFromReference(value));
 }
 
-internal_fn IR_Group ir_from_dereference(IR_Context* ir, Value value, CodeLocation code)
+IR_Group ir_from_dereference(IR_Context* ir, Value value, Location location)
 {
-    if (value.vtype->kind != VariableKind_Reference) {
-        invalid_codepath();
+    if (value.vtype.kind != VKind_Reference) {
+        InvalidCodepath();
         return ir_failed();
     }
     
-    return ir_from_none(value_from_dereference(value));
+    return ir_from_none(ValueFromDereference(value));
 }
 
-internal_fn IR_Group ir_from_symbol(IR_Context* ir, String identifier, CodeLocation code)
+IR_Group ir_from_symbol(IR_Context* ir, String identifier, Location location)
 {
     Symbol symbol = ir_find_symbol(ir, identifier);
     
     // Define globals
     if (symbol.type == SymbolType_None)
     {
-        ObjectDefinition* def = find_global(identifier);
+        I32 global_index = GlobalIndexFromIdentifier(identifier);
         
-        if (def != NULL)
+        if (global_index >= 0)
         {
-            if (def->is_constant && value_is_compiletime(def->ir.value)) {
-                Reference ref = global_get(yov->inter, identifier);
-                return ir_from_none(value_from_constant(ir->arena, ref));
-            }
-            else {
-                i32 register_index = ir_register_get_global(ir, def->name);
-                IR_Object* object = ir_define_object(ir, def->name, def->vtype, ir->scope, register_index);
-                return ir_from_none(value_from_ir_object(object));
-            }
+            Assert(VTypeValid(GlobalFromIndex(global_index)->vtype));
+            
+            Value value = ValueFromGlobal(global_index);
+            return ir_from_none(value);
         }
     }
     
     if (symbol.type == SymbolType_Object)
     {
         IR_Object* object = symbol.object;
-        return ir_from_none(value_from_ir_object(object));
+        return ir_from_none(ValueFromIrObject(object));
     }
     else if (symbol.type == SymbolType_Type) {
-        return ir_from_none(value_from_type(symbol.vtype));
+        return ir_from_none(ValueFromType(symbol.vtype));
     }
     
-    report_symbol_not_found(code, identifier);
+    report_symbol_not_found(location, identifier);
     return ir_failed();
 }
 
-internal_fn IR_Group ir_from_binary_operator(IR_Context* ir, Value left, Value right, BinaryOperator op, b32 reuse_left, CodeLocation code)
+IR_Group ir_from_function_call(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext expr_context, Location location)
 {
-    IR_Group out = ir_from_none();
+    FunctionDefinition* fn = FunctionFromIdentifier(identifier);
     
-    VariableType* vtype = vtype_from_binary_operation(left.vtype, right.vtype, op);
-    
-    if (vtype == nil_vtype)
+    if (fn != NULL)
     {
-        b32 deref = false;
-        deref |= left.vtype->kind == VariableKind_Reference && right.vtype->kind != VariableKind_Reference;
-        deref |= right.vtype->kind == VariableKind_Reference && left.vtype->kind != VariableKind_Reference;
+        IR_Group out = ir_from_none();
         
-        if (deref)
+        Array<Value> params = array_make<Value>(context.arena, parameters.count);
+        
+        foreach(i, parameters.count)
         {
-            reuse_left = false;
+            VType expected_vtype = VType_Nil;
+            if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
             
-            if (left.vtype->kind == VariableKind_Reference) {
-                out = IR_append(out, ir_from_dereference(ir, left, code));
-                left = out.value;
-            }
-            else {
-                out = IR_append(out, ir_from_dereference(ir, right, code));
-                right = out.value;
+            Value param = parameters[i];
+            
+            if (param.kind == ValueKind_LValue && param.vtype.kind == VKind_Reference && VTypeNext(param.vtype) == expected_vtype) {
+                param = ValueFromDereference(param);
             }
             
-            vtype = vtype_from_binary_operation(left.vtype, right.vtype, op);
+            params[i] = param;
         }
+        
+        if (params.count != fn->parameters.count) {
+            report_function_expecting_parameters(location, fn->identifier, fn->parameters.count);
+            return ir_failed();
+        }
+        
+        // Check parameters
+        foreach(i, params.count) {
+            if (fn->parameters[i].vtype != VType_Any && fn->parameters[i].vtype != params[i].vtype) {
+                report_function_wrong_parameter_type(location, fn->identifier, VTypeGetName(fn->parameters[i].vtype), i + 1);
+                return ir_failed();
+            }
+        }
+        
+        //out = ir_append(out, ir_from_function_call(ir, fn, params, node->location));
+        {
+            I32 first_register_index = -1;
+            
+            Array<Value> values = array_make<Value>(context.arena, fn->returns.count);
+            foreach(i, values.count) {
+                VType vtype = fn->returns[i].vtype;
+                I32 register_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
+                if (i == 0) first_register_index = register_index;
+                values[i] = ValueFromRegister(register_index, vtype, false);
+            }
+            
+            IR_Unit* unit = ir_unit_alloc(ir, UnitKind_FunctionCall, location);
+            unit->dst_index = first_register_index;
+            unit->function_call.fn = fn;
+            unit->function_call.parameters = array_copy(ir->arena, params);
+            
+            out = ir_append(out, ir_from_single(unit, value_from_return(ir->arena, values)));
+        }
+        
+        Array<Value> returns = ValuesFromReturn(context.arena, out.value, false);
+        
+        for (U32 i = expr_context.assignment_count; i < returns.count; ++i) {
+            if (returns[i].vtype == VType_Result)
+                out = ir_append(out, ir_from_result_eval(ir, returns[i], location));
+        }
+        
+        returns.count = Min(returns.count, expr_context.assignment_count);
+        Value return_value = value_from_return(ir->arena, returns);
+        
+        out.value = return_value;
+        
+        return out;
     }
     
-    if (vtype == nil_vtype) {
-        report_invalid_binary_op(code, left.vtype->name, string_from_binary_operator(op), right.vtype->name);
-        return ir_failed();
+    VType call_vtype = vtype_from_name(identifier);
+    if (call_vtype != VType_Nil) {
+        return ir_from_default_initializer(ir, call_vtype, location);
     }
     
-    // Compiletime operation!
-    if (value_is_compiletime(left) && value_is_compiletime(right)) {
-        Reference left_ref = ref_from_compiletime(yov->inter, left);
-        Reference right_ref = ref_from_compiletime(yov->inter, right);
-        Reference ref = object_alloc(yov->inter, vtype);
-        ref = run_binary_operation(yov->inter, ref, left_ref, right_ref, op, code);
-        Value value = value_from_constant(ir->arena, ref);
-        object_free_unused_memory(yov->inter);
-        return ir_from_none(value);
-    }
+    report_symbol_not_found(location, identifier);
+    return ir_failed();
+}
+
+IR_Group ir_from_default_initializer(IR_Context* ir, VType vtype, Location location) {
+    Assert(VTypeValid(vtype));
+    return ir_from_none(ValueFromZero(vtype));
+}
+
+IR_Group ir_from_store(IR_Context* ir, Value dst, Value src, Location location)
+{
+    Assert(dst.kind == ValueKind_LValue || dst.kind == ValueKind_Register);
     
-    reuse_left = reuse_left && vtype->ID == left.vtype->ID && (left.kind == ValueKind_LValue || left.kind == ValueKind_Register);
-    
-    Value dst = reuse_left ? left : value_from_register(ir_register_alloc_local(ir, vtype), vtype, false);
-    
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_BinaryOperation, code);
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Store, location);
     unit->dst_index = dst.reg.index;
-    unit->binary_op.src0 = left;
-    unit->binary_op.src1 = right;
-    unit->binary_op.op = op;
+    unit->src = src;
     
-    return IR_append(out, ir_from_single(unit, dst));
+    return ir_from_single(unit, dst);
 }
 
-internal_fn IR_Group ir_from_sign_operator(IR_Context* ir, Value src, BinaryOperator op, CodeLocation code)
+IR_Group ir_from_assignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, BinaryOperator op, Location location)
 {
-    VariableType* vtype = vtype_from_sign_operation(src.vtype, op);
-    
-    if (vtype->ID <= VTypeID_Void) {
-        report_invalid_signed_op(code, string_from_binary_operator(op), src.vtype->name);
-        return ir_failed();
-    }
-    
-    // Compiletime operation!
-    if (value_is_compiletime(src)) {
-        Reference ref = ref_from_compiletime(yov->inter, src);
-        ref = run_sign_operation(yov->inter, ref, op, code);
-        Value value = value_from_constant(ir->arena, ref);
-        object_free_unused_memory(yov->inter);
-        return ir_from_none(value);
-    }
-    
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_SignOperation, code);
-    unit->dst_index = ir_register_alloc_local(ir, vtype);
-    unit->sign_op.src = src;
-    unit->sign_op.op = op;
-    
-    return ir_from_single(unit, value_from_register(unit->dst_index, vtype, false));
-}
-
-internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Value dst, Value src, BinaryOperator op, CodeLocation code)
-{
-    IR_Register* dst_reg = ir_register_from_value(ir, dst);
-    
-    b32 is_constant = false;
-    
-    is_constant |= dst.kind == ValueKind_Constant;
-    is_constant |= dst_reg != NULL && dst_reg->is_constant;
-    
-    if (is_constant) {
-        report_error(code, "Can't modify a constant: {line}");
-        return ir_failed();
-    }
-    
     if (expects_lvalue && dst.kind != ValueKind_LValue) {
-        report_expr_expects_lvalue(code);
+        report_expr_expects_lvalue(location);
         return ir_failed();
     }
     
@@ -320,31 +320,31 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
     
     if (op != BinaryOperator_None)
     {
-        out = IR_append(out, ir_from_binary_operator(ir, dst, src, op, true, code));
+        out = ir_append(out, ir_from_binary_operator(ir, dst, src, op, true, location));
         if (!out.success) return ir_failed();
         src = out.value;
         
-        if (value_equals(dst, src)) {
+        if (ValueEquals(dst, src)) {
             return out;
         }
     }
     
-    i32 mode = 0; // 0 -> Invalid; 1 -> Copy; 2 -> Store
+    I32 mode = 0; // 0 -> Invalid; 1 -> Copy; 2 -> Store
     
     if (dst.vtype == src.vtype) {
         mode = 1;
     }
-    else if (dst.vtype->kind == VariableKind_Reference && dst.vtype->child_next == src.vtype) {
-        out = IR_append(out, ir_from_dereference(ir, dst, code));
+    else if (dst.vtype.kind == VKind_Reference && VTypeNext(dst.vtype) == src.vtype) {
+        out = ir_append(out, ir_from_dereference(ir, dst, location));
         dst = out.value;
         mode = 1;
     }
-    else if (src.vtype->kind == VariableKind_Reference && src.vtype->child_next == dst.vtype) {
-        out = IR_append(out, ir_from_dereference(ir, src, code));
+    else if (src.vtype.kind == VKind_Reference && VTypeNext(src.vtype) == dst.vtype) {
+        out = ir_append(out, ir_from_dereference(ir, src, location));
         src = out.value;
         mode = 1;
     }
-    else if (dst.vtype->kind == VariableKind_Reference && value_is_null(src)) {
+    else if (dst.vtype.kind == VKind_Reference && ValueIsNull(src)) {
         mode = 2;
     }
     else
@@ -353,11 +353,11 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
         
         if (dst_object != NULL)
         {
-            IR_Register* reg = ir_register_get(ir, dst_object->register_index);
+            Register reg = IRRegisterGet(ir, dst_object->register_index);
             
-            if (reg != NULL && reg->vtype == any_vtype) {
+            if (RegisterIsValid(reg) && reg.vtype == VType_Any) {
                 dst_object->vtype = src.vtype;
-                dst = value_from_ir_object(dst_object);
+                dst = ValueFromIrObject(dst_object);
                 mode = 2;
             }
         }
@@ -365,76 +365,63 @@ internal_fn IR_Group ir_from_assignment(IR_Context* ir, b32 expects_lvalue, Valu
     
     if (mode == 0)
     {
-        report_type_missmatch_assign(code, src.vtype->name, dst.vtype->name);
+        report_type_missmatch_assign(location, VTypeGetName(src.vtype), VTypeGetName(dst.vtype));
         return ir_failed();
     }
     
     IR_Object* obj = ir_find_object_from_value(ir, dst);
     if (obj != NULL) obj->assignment_count++;
     
-    if (dst.vtype == any_vtype) {
+    if (dst.vtype == VType_Any) {
         mode = 2;
     }
     
     IR_Unit* unit;
     if (mode == 1)
     {
-        unit = ir_unit_alloc(ir, UnitKind_Copy, code);
+        unit = ir_unit_alloc(ir, UnitKind_Copy, location);
         unit->dst_index = dst.reg.index;
-        unit->copy.src = src;
+        unit->src = src;
     }
     else
     {
-        unit = ir_unit_alloc(ir, UnitKind_Store, code);
+        unit = ir_unit_alloc(ir, UnitKind_Store, location);
         unit->dst_index = dst.reg.index;
-        unit->store.src = src;
+        unit->src = src;
     }
     
-    return IR_append(out, ir_from_single(unit));
+    return ir_append(out, ir_from_single(unit));
 }
 
-internal_fn IR_Group ir_from_child(IR_Context* ir, Value src, Value index, b32 is_member, VariableType* vtype, CodeLocation code)
+IR_Group ir_from_multiple_assignment(IR_Context* ir, B32 expects_lvalue, Array<Value> destinations, Value src, BinaryOperator op, Location location)
 {
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Child, code);
-    unit->dst_index = ir_register_alloc_local(ir, vtype);
-    unit->child.src = src;
-    unit->child.child_index = index;
-    unit->child.child_is_member = is_member;
-    
-    Value child = value_from_register(unit->dst_index, vtype, src.kind == ValueKind_LValue);
-    return ir_from_single(unit, child);
-}
-
-internal_fn IR_Group ir_from_multiple_assignment(IR_Context* ir, b32 expects_lvalue, Array<Value> destinations, Value src, BinaryOperator op, CodeLocation code)
-{
-    SCRATCH();
     if (destinations.count == 0) return ir_failed();
     if (src.kind == ValueKind_None) return ir_failed();
     
     IR_Group out = ir_from_none();
     
-    Array<Value> sources = values_from_return(scratch.arena, src);
+    Array<Value> sources = ValuesFromReturn(context.arena, src, false);
     
     if (sources.count == 1)
     {
         foreach(i, destinations.count) {
-            out = IR_append(out, ir_from_assignment(ir, expects_lvalue, destinations[i], sources[0], op, code));
+            out = ir_append(out, ir_from_assignment(ir, expects_lvalue, destinations[i], sources[0], op, location));
         }
     }
     else
     {
         if (destinations.count > sources.count) {
-            report_error(code, "The number of destinations is greater than the number of sources");
+            report_error(location, "The number of destinations is greater than the number of sources");
             return ir_failed();
         }
         
         foreach(i, destinations.count) {
-            out = IR_append(out, ir_from_assignment(ir, expects_lvalue, destinations[i], sources[i], op, code));
+            out = ir_append(out, ir_from_assignment(ir, expects_lvalue, destinations[i], sources[i], op, location));
         }
         
-        for (u32 i = destinations.count; i < sources.count; ++i) {
+        for (U32 i = destinations.count; i < sources.count; ++i) {
             if (sources[i].vtype == VType_Result) {
-                out = IR_append(out, ir_from_result_eval(ir, sources[i], code));
+                out = ir_append(out, ir_from_result_eval(ir, sources[i], location));
             }
         }
     }
@@ -442,285 +429,307 @@ internal_fn IR_Group ir_from_multiple_assignment(IR_Context* ir, b32 expects_lva
     return out;
 }
 
-internal_fn IR_Group ir_from_function_call(IR_Context* ir, FunctionDefinition* fn, Array<Value> params, CodeLocation code)
+IR_Group ir_from_binary_operator(IR_Context* ir, Value left, Value right, BinaryOperator op, B32 reuse_left, Location location)
 {
-    SCRATCH();
+    IR_Group out = ir_from_none();
     
-    i32 first_register_index = -1;
+    VType vtype = vtype_from_binary_operation(left.vtype, right.vtype, op);
     
-    Array<Value> values = array_make<Value>(scratch.arena, fn->returns.count);
-    foreach(i, values.count) {
-        VariableType* vtype = fn->returns[i].vtype;
-        i32 register_index = ir_register_alloc_local(ir, vtype);
-        if (i == 0) first_register_index = register_index;
-        values[i] = value_from_register(register_index, vtype, false);
+    if (vtype == VType_Nil)
+    {
+        B32 deref = false;
+        deref |= left.vtype.kind == VKind_Reference && right.vtype.kind != VKind_Reference;
+        deref |= right.vtype.kind == VKind_Reference && left.vtype.kind != VKind_Reference;
+        
+        if (deref)
+        {
+            reuse_left = false;
+            
+            if (left.vtype.kind == VKind_Reference) {
+                out = ir_append(out, ir_from_dereference(ir, left, location));
+                left = out.value;
+            }
+            else {
+                out = ir_append(out, ir_from_dereference(ir, right, location));
+                right = out.value;
+            }
+            
+            vtype = vtype_from_binary_operation(left.vtype, right.vtype, op);
+        }
     }
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_FunctionCall, code);
-    unit->dst_index = first_register_index;
-    unit->function_call.fn = fn;
-    unit->function_call.parameters = array_copy(ir->arena, params);
+    if (vtype == VType_Nil) {
+        report_invalid_binary_op(location, VTypeGetName(left.vtype), string_from_binary_operator(op), VTypeGetName(right.vtype));
+        return ir_failed();
+    }
     
-    return ir_from_single(unit, value_from_return(ir->arena, values));
+    reuse_left = reuse_left && vtype == left.vtype && (left.kind == ValueKind_LValue || left.kind == ValueKind_Register);
+    
+    Value dst = reuse_left ? left : ValueFromRegister(IRRegisterAlloc(ir, vtype, RegisterKind_Local, false), vtype, false);
+    
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_BinaryOperation, location);
+    unit->dst_index = dst.reg.index;
+    unit->src = left;
+    unit->binary_op.src1 = right;
+    unit->binary_op.op = op;
+    
+    return ir_append(out, ir_from_single(unit, dst));
 }
 
-internal_fn IR_Group ir_from_default_initializer(IR_Context* ir, VariableType* vtype, CodeLocation code) {
-    assert(vtype->ID > VTypeID_Void);
-    return ir_from_none(value_from_default(vtype));
-}
-
-internal_fn IR_Group ir_from_return(IR_Context* ir, IR_Group expression, CodeLocation code)
+IR_Group ir_from_sign_operator(IR_Context* ir, Value src, BinaryOperator op, Location location)
 {
-    SCRATCH();
+    Assert(op != BinaryOperator_None);
+    
+    VType vtype = vtype_from_sign_operation(src.vtype, op);
+    
+    if (!VTypeValid(vtype)) {
+        report_invalid_signed_op(location, string_from_binary_operator(op), VTypeGetName(src.vtype));
+        return ir_failed();
+    }
+    
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_SignOperation, location);
+    unit->dst_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
+    unit->src = src;
+    unit->sign_op.op = op;
+    
+    return ir_from_single(unit, ValueFromRegister(unit->dst_index, vtype, false));
+}
+
+IR_Group ir_from_child(IR_Context* ir, Value src, Value index, B32 is_member, VType vtype, Location location)
+{
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Child, location);
+    unit->dst_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
+    unit->src = src;
+    unit->child.child_index = index;
+    unit->child.child_is_member = is_member;
+    
+    Value child = ValueFromRegister(unit->dst_index, vtype, src.kind == ValueKind_LValue);
+    return ir_from_single(unit, child);
+}
+
+IR_Group ir_from_child_access(IR_Context* ir, Value src, String child_name, ExpresionContext expr_context, Location location)
+{
+    if (src.vtype == VType_Void && VTypeValid(expr_context.vtype)) {
+        src = ValueFromType(expr_context.vtype);
+    }
+    
+    IR_Group out = ir_from_none();
+    
+    if (src.vtype.kind == VKind_Reference) {
+        out = ir_append(out, ir_from_dereference(ir, src, location));
+        src = out.value;
+    }
+    
+    VariableTypeChild info = vtype_get_child(src.vtype, child_name);
+    
+    IR_Group mem = ir_failed();
+    
+    if (info.index >= 0)
+    {
+        mem = ir_from_child(ir, src, ValueFromInt(info.index), info.is_member, info.vtype, location);
+    }
+    else if (src.vtype == VType_Type && ValueIsCompiletime(src))
+    {
+        VType vtype = TypeFromCompiletime(src);
+        
+        if (vtype.kind == VKind_Enum)
+        {
+            Assert(vtype._enum->stage >= DefinitionStage_Defined);
+            
+            if (StrEquals(child_name, "count")) {
+                mem = ir_from_none(ValueFromInt(vtype._enum->values.count));
+            }
+            else if (StrEquals(child_name, "array"))
+            {
+                Array<Value> values = array_make<Value>(context.arena, vtype._enum->names.count);
+                foreach(i, values.count) {
+                    values[i] = ValueFromEnum(vtype, i);
+                }
+                
+                mem = ir_from_none(ValueFromArray(ir->arena, vtype_from_dimension(vtype, 1), values));
+            }
+            else
+            {
+                I64 value_index = -1;
+                foreach(i, vtype._enum->names.count) {
+                    if (StrEquals(vtype._enum->names[i], child_name)) {
+                        value_index = i;
+                        break;
+                    }
+                }
+                
+                if (value_index >= 0) {
+                    mem = ir_from_none(ValueFromEnum(vtype, value_index));
+                }
+            }
+        }
+    }
+    
+    if (!mem.success) {
+        report_error(location, "Member '%S' not found in '%S'", child_name, VTypeGetName(src.vtype));
+        return ir_failed();
+    }
+    
+    return ir_append(out, mem);
+}
+
+IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR_Group failure, Location location)
+{
+    if (condition.vtype != VType_Bool) {
+        report_error(location, "If statement expects a Bool");
+        return ir_failed();
+    }
+    
+    if (ValueIsCompiletime(condition))
+    {
+        B32 result = B32FromCompiletime(condition);
+        if (result) return success;
+        return failure;
+    }
+    
+    IR_Unit* end_unit = ir_alloc_empty(ir, location);
+    IR_Unit* failed_unit = end_unit;
+    
+    if (failure.unit_count > 0)
+    {
+        IR_Unit* jump = ir_alloc_jump(ir, 0, ValueNone(), end_unit, location);
+        success = ir_append(success, ir_from_single(jump));
+        
+        failed_unit = failure.first;
+    }
+    
+    IR_Unit* jump = ir_alloc_jump(ir, -1, condition, failed_unit, location);
+    return ir_append_4(ir_from_single(jump), success, failure, ir_from_single(end_unit));
+}
+
+IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group content, IR_Group update, Location location)
+{
+    if (!init.success|| !update.success || !condition.success || !content.success)
+        return ir_failed();
+    
+    if (condition.value.vtype != VType_Bool) {
+        report_error(location, "Loop condition expects a Bool");
+        return ir_failed();
+    }
+    
+    B32 fixed_condition = ValueIsCompiletime(condition.value);
+    
+    if (fixed_condition && !B32FromCompiletime(condition.value)) {
+        return ir_from_none();
+    }
+    
+    IR_LoopingScope* scope = ir_get_looping_scope(ir);
+    
+    if (scope == NULL) {
+        InvalidCodepath();
+        return ir_failed();
+    }
+    
+    // "update" merges at the end of the content
+    update = ir_append(ir_from_single(scope->continue_unit), update);
+    content = ir_append(content, update);
+    
+    // Condition
+    if (!fixed_condition)
+    {
+        IR_Unit* jump = ir_alloc_jump(ir, -1, condition.value, scope->break_unit, location);
+        condition = ir_append(condition, ir_from_single(jump));
+    }
+    
+    // Loop
+    {
+        if (condition.unit_count == 0) {
+            condition = ir_append(condition, ir_from_single(ir_alloc_empty(ir, location)));
+        }
+        
+        IR_Unit* jump = ir_alloc_jump(ir, 0, ValueNone(), condition.first, location);
+        content = ir_append(content, ir_from_single(jump));
+    }
+    
+    IR_Group loop = ir_append(condition, content);
+    
+    return ir_append_3(init, loop, ir_from_single(scope->break_unit));
+}
+
+IR_Group IRFromFlowModifier(IR_Context* ir, B32 is_break, Location location)
+{
+    IR_LoopingScope* scope = ir_get_looping_scope(ir);
+    
+    if (scope == NULL) {
+        String op = is_break ? "break" : "continue";
+        report_error(location, "Can't use '%S' outside of a loop", op);
+        return ir_failed();
+    }
+    
+    IR_Unit* unit = is_break ? scope->break_unit : scope->continue_unit;
+    return ir_from_single(ir_alloc_jump(ir, 0, ValueNone(), unit, location));
+}
+
+IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location)
+{
     IR_Group out = expression;
     if (!out.success) return ir_failed();
     
     IR_Object* dst = ir_find_object(ir, "return", true);
     
-    b32 expecting_return_value = dst != NULL;
+    B32 expecting_return_value = dst != NULL;
     
     if (expecting_return_value)
     {
         if (out.value.kind == ValueKind_None) {
-            report_error(code, "Function is expecting a '%S' as a return", dst->vtype->name);
+            report_error(location, "Function is expecting a '%S' as a return", VTypeGetName(dst->vtype));
             return ir_failed();
         }
         
-        IR_Group assignment = ir_from_assignment(ir, true, value_from_ir_object(dst), out.value, BinaryOperator_None, code);
-        out = IR_append(out, assignment);
+        IR_Group assignment = ir_from_assignment(ir, true, ValueFromIrObject(dst), out.value, BinaryOperator_None, location);
+        out = ir_append(out, assignment);
     }
     else
     {
         if (out.value.kind != ValueKind_None) {
-            report_error(code, "Function is expecting an empty return");
+            report_error(location, "Function is expecting an empty return");
         }
         
         // Composition of tuple
         if (dst != NULL)
         {
-            out = IR_append(out, ir_from_default_initializer(ir, dst->vtype, code));
-            out = IR_append(out, ir_from_assignment(ir, true, value_from_ir_object(dst), out.value, BinaryOperator_None, code));
+            out = ir_append(out, ir_from_default_initializer(ir, dst->vtype, location));
+            out = ir_append(out, ir_from_assignment(ir, true, ValueFromIrObject(dst), out.value, BinaryOperator_None, location));
             
-            Array<VariableType*> vtypes = ir->returns;
+            //Array<VType> vtypes = ir->returns;
             
-            u32 start_index = ir->params.count + 1;
+            InvalidCodepath();
+            // TODO(Jose): 
+#if 0
+            
+            U32 start_index = ir->params.count + 1;
             
             foreach(i, vtypes.count)
             {
                 IR_Object* obj = ir_find_object_from_register(ir, start_index + i);
-                assert(obj != NULL && obj->vtype == vtypes[i]);
+                Assert(obj != NULL && obj->vtype == vtypes[i]);
                 
                 if (obj->assignment_count <= 0) {
-                    report_error(code, "Return value '%S' is not specified", obj->identifier);
+                    report_error(location, "Return value '%S' is not specified", obj->identifier);
                 }
                 
-                IR_Group child = ir_from_child(ir, value_from_ir_object(dst), value_from_int(i), true, vtypes[i], code);
-                IR_Group assignment = ir_from_assignment(ir, true, child.value, value_from_ir_object(obj), BinaryOperator_None, code);
-                out = IR_append_3(out, child, assignment);
+                IR_Group child = ir_from_child(ir, ValueFromIrObject(dst), ValueFromInt(i), true, vtypes[i], location);
+                IR_Group assignment = ir_from_assignment(ir, true, child.value, ValueFromIrObject(obj), BinaryOperator_None, location);
+                out = ir_append_3(out, child, assignment);
             }
+#endif
         }
     }
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Return, code);
-    return IR_append(out, ir_from_single(unit));
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Return, location);
+    return ir_append(out, ir_from_single(unit));
 }
 
-internal_fn IR_Group ir_from_loop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group content, IR_Group update, CodeLocation code)
-{
-    if (!init.success || !condition.success || !update.success || !content.success)
-        return ir_failed();
-    
-    IR_LoopingScope* scope = ir_get_looping_scope(ir);
-    
-    if (scope == NULL) {
-        invalid_codepath();
-        return ir_failed();
-    }
-    
-    // "update" merges at the end of the content
-    update = IR_append(ir_from_single(scope->continue_unit), update);
-    content = IR_append(content, update);
-    
-    // Condition
-    {
-        if (condition.value.vtype->ID != VTypeID_Bool) {
-            report_error(code, "Loop condition expects a Bool");
-            return ir_failed();
-        }
-        
-        IR_Unit* jump = ir_alloc_jump(ir, -1, condition.value, scope->break_unit, code);
-        condition = IR_append(condition, ir_from_single(jump));
-    }
-    
-    // Loop
-    {
-        IR_Unit* jump = ir_alloc_jump(ir, 0, value_none(), condition.first, code);
-        content = IR_append(content, ir_from_single(jump));
-    }
-    
-    IR_Group loop = IR_append(condition, content);
-    
-    return IR_append_3(init, loop, ir_from_single(scope->break_unit));
-}
+#if 0
 
-internal_fn IR_Group ir_from_block(IR_Context* ir, Array<OpNode*> ops, b32 add_scope)
-{
-    if (add_scope) ir_scope_push(ir);
-    
-    IR_Group out = ir_from_none();
-    
-    foreach(i, ops.count) {
-        IR_Group out0 = ir_from_node(ir, ops[i], ExpresionContext_from_void(), false);
-        out = IR_append(out, out0);
-    }
-    
-    if (add_scope) ir_scope_pop(ir);
-    
-    return out;
-}
-
-IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b32 new_scope)
+IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, B32 new_scope)
 {
     SCRATCH();
-    
-    if (new_scope) ir_scope_push(ir);
-    DEFER(if (new_scope) ir_scope_pop(ir););
-    
-    if (node0 == NULL || node0->kind == OpKind_None) {
-        return ir_from_none();
-    }
-    
-    if (node0->kind == OpKind_Block)
-    {
-        OpNode_Block* node = (OpNode_Block*)node0;
-        return ir_from_block(ir, node->ops, !new_scope);
-    }
-    
-    if (node0->kind == OpKind_Binary)
-    {
-        auto node = (OpNode_Binary*)node0;
-        
-        context.assignment_count = MIN(context.assignment_count, 1);
-        
-        IR_Group left = ir_from_node(ir, node->left, context, false);
-        IR_Group right = ir_from_node(ir, node->right, ExpresionContext_from_vtype(left.value.vtype, 1), false);
-        
-        if (!left.success || !right.success) return ir_failed();
-        
-        IR_Group op = ir_from_binary_operator(ir, left.value, right.value, node->op, false, node->code);
-        return IR_append_3(left, right, op);
-    }
-    
-    if (node0->kind == OpKind_Sign)
-    {
-        auto node = (OpNode_Sign*)node0;
-        
-        context.assignment_count = MIN(context.assignment_count, 1);
-        
-        IR_Group src = ir_from_node(ir, node->expresion, context, false);
-        if (!src.success) return ir_failed();
-        return IR_append(src, ir_from_sign_operator(ir, src.value, node->op, node->code));
-    }
-    
-    if (node0->kind == OpKind_IntLiteral)
-    {
-        OpNode_NumericLiteral* node = (OpNode_NumericLiteral*)node0;
-        return ir_from_none(value_from_int(node->int_literal));
-    }
-    if (node0->kind == OpKind_CodepointLiteral)
-    {
-        OpNode_NumericLiteral* node = (OpNode_NumericLiteral*)node0;
-        return ir_from_none(value_from_int(node->codepoint_literal));
-    }
-    if (node0->kind == OpKind_BoolLiteral)
-    {
-        OpNode_NumericLiteral* node = (OpNode_NumericLiteral*)node0;
-        return ir_from_none(value_from_bool(node->bool_literal));
-    }
-    if (node0->kind == OpKind_Symbol)
-    {
-        OpNode_Symbol* node = (OpNode_Symbol*)node0;
-        return ir_from_symbol(ir, node->identifier, node->code);
-    }
-    
-    if (node0->kind == OpKind_StringLiteral)
-    {
-        OpNode_StringLiteral* node = (OpNode_StringLiteral*)node0;
-        
-        if (node->expresions.count == 0) {
-            return ir_from_none(value_from_string(ir->arena, node->value));
-        }
-        
-        String value = node->value;
-        IR_Group out = ir_from_none();
-        PooledArray<Value> sources = pooled_array_make<Value>(scratch.arena, 8);
-        
-        u32 expresion_index = 0;
-        StringBuilder builder = string_builder_make(scratch.arena);
-        
-        u64 cursor = 0;
-        while (cursor < value.size)
-        {
-            u32 codepoint = string_get_codepoint(value, &cursor);
-            
-            if (codepoint == '\\')
-            {
-                codepoint = 0;
-                if (cursor < value.size) {
-                    codepoint = string_get_codepoint(value, &cursor);
-                }
-                
-                if (codepoint == '\\') append(&builder, "\\");
-                else if (codepoint == '%') append(&builder, "%");
-                else { invalid_codepath(); }
-                
-                continue;
-            }
-            
-            if (codepoint == '%')
-            {
-                if (expresion_index >= node->expresions.count) {
-                    invalid_codepath();
-                }
-                else
-                {
-                    OpNode* expression_node = node->expresions[expresion_index++];
-                    IR_Group expression = ir_from_node(ir, expression_node, ExpresionContext_from_vtype(VType_String, 1), false);
-                    if (!expression.success) return ir_failed();
-                    
-                    Value value = expression.value;
-                    
-                    if (value_is_compiletime(value)) {
-                        String ct_str = string_from_compiletime(scratch.arena, yov->inter, value);
-                        append(&builder, ct_str);
-                    }
-                    else
-                    {
-                        String literal = string_from_builder(scratch.arena, &builder);
-                        if (literal.size > 0) {
-                            builder = string_builder_make(scratch.arena);
-                            array_add(&sources, value_from_string(ir->arena, literal));
-                        }
-                        
-                        out = IR_append(out, expression);
-                        array_add(&sources, expression.value);
-                    }
-                }
-                
-                continue;
-            }
-            
-            append_codepoint(&builder, codepoint);
-        }
-        
-        String literal = string_from_builder(scratch.arena, &builder);
-        if (literal.size > 0) {
-            array_add(&sources, value_from_string(ir->arena, literal));
-        }
-        
-        out.value = value_from_string_array(yov->inter, ir->arena, array_from_pooled_array(scratch.arena, sources));
-        return out;
-    }
     
     if (node0->kind == OpKind_Reference)
     {
@@ -728,84 +737,7 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b
         
         IR_Group out = ir_from_node(ir, node->expresion, context, false);
         if (!out.success) return ir_failed();
-        return IR_append(out, ir_from_reference(ir, true, out.value, node->code));
-    }
-    
-    if (node0->kind == OpKind_MemberValue)
-    {
-        OpNode_MemberValue* node = (OpNode_MemberValue*)node0;
-        
-        IR_Group src_out = ir_from_node(ir, node->expresion, ExpresionContext_from_inference(1), false);
-        if (!src_out.success) return ir_failed();
-        
-        Value src = src_out.value;
-        if (src.vtype == void_vtype && context.vtype->ID > VTypeID_Void) {
-            src = value_from_type(context.vtype);
-        }
-        
-        if (src.vtype->kind == VariableKind_Reference) {
-            src_out = IR_append(src_out, ir_from_dereference(ir, src, node->code));
-            src = src_out.value;
-        }
-        
-        String member = node->member;
-        VariableTypeChild info = vtype_get_child(src.vtype, member);
-        
-        IR_Group mem = ir_failed();
-        
-        if (info.index >= 0)
-        {
-            if (value_is_compiletime(src)) {
-                Reference ref = ref_from_compiletime(yov->inter, src);
-                ref = ref_get_child(yov->inter, ref, info.index, info.is_member);
-                Value value = value_from_constant(ir->arena, ref);
-                object_free_unused_memory(yov->inter);
-                return ir_from_none(value);
-            }
-            
-            mem = ir_from_child(ir, src, value_from_int(info.index), info.is_member, info.vtype, node->code);
-        }
-        else if (src.vtype == VType_Type && value_is_compiletime(src))
-        {
-            VariableType* vtype = type_from_compiletime(yov->inter, src);
-            
-            if (vtype->kind == VariableKind_Enum)
-            {
-                if (string_equals(member, "count")) {
-                    mem = ir_from_none(value_from_int(vtype->_enum.values.count));
-                }
-                else if (string_equals(member, "array"))
-                {
-                    Array<Value> values = array_make<Value>(scratch.arena, vtype->_enum.names.count);
-                    foreach(i, values.count) {
-                        values[i] = value_from_enum(vtype, vtype->_enum.values[i]);
-                    }
-                    
-                    mem = ir_from_none(value_from_array(ir->arena, vtype_from_dimension(vtype, 1), values));
-                }
-                else
-                {
-                    i64 value_index = -1;
-                    foreach(i, vtype->_enum.names.count) {
-                        if (string_equals(vtype->_enum.names[i], member)) {
-                            value_index = i;
-                            break;
-                        }
-                    }
-                    
-                    if (value_index >= 0) {
-                        mem = ir_from_none(value_from_enum(vtype, value_index));
-                    }
-                }
-            }
-        }
-        
-        if (!mem.success) {
-            report_error(node->code, "Member '%S' not found in '%S'", member, src.vtype->name);
-            return ir_failed();
-        }
-        
-        return IR_append(src_out, mem);
+        return ir_append(out, ir_from_reference(ir, true, out.value, node->location));
     }
     
     if (node0->kind == OpKind_Null)
@@ -813,422 +745,18 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b
         return ir_from_none(value_null());
     }
     
-    if (node0->kind == OpKind_Indexing)
-    {
-        OpNode_Indexing* node = (OpNode_Indexing*)node0;
-        
-        IR_Group src = ir_from_node(ir, node->value, ExpresionContext_from_void(), false);
-        IR_Group index = ir_from_node(ir, node->index, ExpresionContext_from_void(), false);
-        if (!src.success || !index.success) return ir_failed();
-        
-        if (index.value.vtype->ID != VTypeID_Int) {
-            report_indexing_expects_an_int(node->code);
-            return ir_failed();
-        }
-        
-        VariableType* type = src.value.vtype;
-        
-        IR_Group out = IR_append(src, index);
-        
-        if (type->kind == VariableKind_Array)
-        {
-            VariableType* element_vtype = type->child_next;
-            out = IR_append(out, ir_from_child(ir, src.value, index.value, true, element_vtype, node->code));
-        }
-        else
-        {
-            report_indexing_not_allowed(node->code, type->name);
-            return ir_failed();
-        }
-        
-        return out;
-    }
-    
-    if (node0->kind == OpKind_ObjectDefinition)
-    {
-        OpNode_ObjectDefinition* node = (OpNode_ObjectDefinition*)node0;
-        
-        Array<String> identifiers = node->names;
-        
-        // Validation for duplicated symbols
-        foreach(i, identifiers.count) {
-            String identifier = identifiers[i];
-            if (ir_find_object(ir, identifier, false) != NULL) {
-                report_symbol_duplicated(node->code, identifier);
-                return ir_failed();
-            }
-        }
-        
-        // Explicit type
-        VariableType* definition_vtype = vtype_from_node(node->type);
-        if (definition_vtype->ID == VTypeID_Unknown) return ir_failed();
-        b32 inference_type = definition_vtype == void_vtype;
-        
-        // Assignment expresion
-        u32 assignment_count = identifiers.count;
-        ExpresionContext context = inference_type ? ExpresionContext_from_inference(assignment_count) : ExpresionContext_from_vtype(definition_vtype, assignment_count);
-        IR_Group src = ir_from_node(ir, node->assignment, context, false);
-        if (!src.success) return ir_failed();
-        
-        VariableType* assignment_vtype = definition_vtype;
-        
-        // Inference
-        if (inference_type) {
-            assignment_vtype = src.value.vtype;
-            definition_vtype = src.value.vtype;
-        }
-        
-        b32 is_any = definition_vtype == any_vtype;
-        
-        if (!is_any && (definition_vtype->ID <= VTypeID_Void || assignment_vtype->ID <= VTypeID_Void)) {
-            report_error(node->code, "Unresolved object type for definition");
-            return ir_failed();
-        }
-        
-        Array<VariableType*> vtypes = array_make<VariableType*>(scratch.arena, identifiers.count);
-        foreach(i, vtypes.count) vtypes[i] = definition_vtype;
-        
-#if 0// TODO(Jose): 
-        if (vtype_is_tuple(definition_vtype))
-        {
-            Array<VariableType*> childs = vtype_unpack(scratch.arena, definition_vtype);
-            vtypes = vtype_unpack(scratch.arena, definition_vtype);
-            foreach(i, MIN(vtypes.count, childs.count)) {
-                vtypes[i] = childs[i];
-            }
-        }
-#endif
-        
-        IR_Group out = ir_from_none();
-        
-        Array<Value> values = array_make<Value>(scratch.arena, identifiers.count);
-        foreach(i, values.count) {
-            VariableType* vtype = vtypes[i];
-            out = IR_append(out, ir_from_define_local(ir, identifiers[i], vtype, node->code));
-            values[i] = out.value;
-        }
-        
-        // Default src
-        if (src.value.kind == ValueKind_None && !is_any) {
-            src = ir_from_default_initializer(ir, definition_vtype, node->code);
-        }
-        
-        out = IR_append(out, src);
-        
-        if (src.value.kind != ValueKind_None) {
-            IR_Group assignment = ir_from_multiple_assignment(ir, true, values, src.value, BinaryOperator_None, node->code);
-            out = IR_append(out, assignment);
-        }
-        
-        if (node->is_constant)
-        {
-            foreach(i, values.count) {
-                IR_Register* reg = ir_register_from_value(ir, values[i]);
-                if (reg == NULL) continue;
-                reg->is_constant = true;
-            }
-        }
-        
-        return out;
-    }
-    
-    if (node0->kind == OpKind_Assignment)
-    {
-        OpNode_Assignment* node = (OpNode_Assignment*)node0;
-        
-        IR_Group out = ir_from_none();
-        Array<Value> values = {};
-        
-        if (node->destination->kind == OpKind_ParameterList)
-        {
-            OpNode_ParameterList* params_node = (OpNode_ParameterList*)node->destination;
-            
-            values = array_make<Value>(scratch.arena, params_node->nodes.count);
-            foreach(i, values.count) {
-                out = IR_append(out, ir_from_node(ir, params_node->nodes[i], ExpresionContext_from_void(), false));
-                values[i] = out.value;
-            }
-        }
-        else
-        {
-            out = IR_append(out, ir_from_node(ir, node->destination, ExpresionContext_from_void(), false));
-            values = array_make<Value>(scratch.arena, 1);
-            values[0] = out.value;
-        }
-        IR_Group src = ir_from_node(ir, node->source, ExpresionContext_from_vtype(values[0].vtype, values.count), false);
-        out = IR_append(out, src);
-        
-        if (!out.success) return ir_failed();
-        
-        IR_Group assignment = ir_from_multiple_assignment(ir, true, values, src.value, node->binary_operator, node->code);
-        return IR_append(out, assignment);
-    }
-    
-    if (node0->kind == OpKind_FunctionCall)
-    {
-        OpNode_FunctionCall* node = (OpNode_FunctionCall*)node0;
-        
-        Array<Value> params = {};
-        
-        FunctionDefinition* fn = find_function(node->identifier);
-        if (fn != NULL)
-        {
-            IR_Group out = ir_from_none();
-            
-            params = array_make<Value>(scratch.arena, node->parameters.count);
-            
-            foreach(i, node->parameters.count)
-            {
-                VariableType* expected_vtype = nil_vtype;
-                if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
-                
-                IR_Group param_IR = ir_from_node(ir, node->parameters[i], ExpresionContext_from_vtype(expected_vtype, 1), false);
-                out = IR_append(out, param_IR);
-                
-                Value param = out.value;
-                
-                if (param.kind == ValueKind_LValue && param.vtype->kind == VariableKind_Reference && param.vtype->child_next == expected_vtype) {
-                    param = value_from_dereference(param);
-                }
-                
-                params[i] = param;
-            }
-            
-            if (params.count != fn->parameters.count) {
-                report_function_expecting_parameters(node->code, fn->identifier, fn->parameters.count);
-                return ir_failed();
-            }
-            
-            // Check parameters
-            foreach(i, params.count)
-            {
-                if (fn->parameters[i].vtype != any_vtype && fn->parameters[i].vtype != params[i].vtype) {
-                    report_function_wrong_parameter_type(node->code, fn->identifier, fn->parameters[i].vtype->name, i + 1);
-                    return ir_failed();
-                }
-            }
-            
-            out = IR_append(out, ir_from_function_call(ir, fn, params, node->code));
-            
-            Array<Value> returns = values_from_return(scratch.arena, out.value);
-            
-            for (u32 i = context.assignment_count; i < returns.count; ++i) {
-                if (returns[i].vtype == VType_Result)
-                    out = IR_append(out, ir_from_result_eval(ir, returns[i], node->code));
-            }
-            
-            returns.count = MIN(returns.count, context.assignment_count);
-            Value return_value = value_from_return(ir->arena, returns);
-            
-            out.value = return_value;
-            
-            return out;
-        }
-        
-        VariableType* call_vtype = vtype_from_name(node->identifier);
-        if (call_vtype != nil_vtype) {
-            return ir_from_default_initializer(ir, call_vtype, node->code);
-        }
-        
-        report_symbol_not_found(node->code, node->identifier);
-        return ir_failed();
-    }
-    
-    if (node0->kind == OpKind_Return)
-    {
-        OpNode_Return* node = (OpNode_Return*)node0;
-        
-        VariableType* expected_vtype = void_vtype;
-        if (ir->returns.count == 1) expected_vtype = ir->returns[0];
-        
-        ExpresionContext context = (expected_vtype == void_vtype) ? ExpresionContext_from_void() : ExpresionContext_from_vtype(expected_vtype, 1);
-        
-        IR_Group expression = ir_from_node(ir, node->expresion, context, false);
-        if (!expression.success) return ir_failed();
-        return ir_from_return(ir, expression, node->code);
-    }
-    
-    if (node0->kind == OpKind_Continue || node0->kind == OpKind_Break)
-    {
-        OpNode* node = node0;
-        IR_LoopingScope* scope = ir_get_looping_scope(ir);
-        
-        if (scope == NULL) {
-            String op = (node->kind == OpKind_Continue) ? "continue" : "break";
-            report_error(node->code, "Can't use '%S' outside of a loop", op);
-            return ir_failed();
-        }
-        
-        IR_Unit* unit = (node->kind == OpKind_Continue) ? scope->continue_unit : scope->break_unit;
-        return ir_from_single(ir_alloc_jump(ir, 0, value_none(), unit, node->code));
-    }
-    
-    if (node0->kind == OpKind_IfStatement)
-    {
-        OpNode_IfStatement* node = (OpNode_IfStatement*)node0;
-        
-        IR_Group expression, success, failure;
-        
-        expression = ir_from_node(ir, node->expresion, ExpresionContext_from_vtype(VType_Bool, 1), false);
-        
-        {
-            ir_scope_push(ir);
-            
-            // TODO(Jose): This is not robust enough, improve in the future
-            if (node->expresion->kind == OpKind_Binary)
-            {
-                OpNode_Binary* node_expr = (OpNode_Binary*)node->expresion;
-                
-                if (node_expr->op == BinaryOperator_Is)
-                {
-                    IR_Unit* unit = NULL;
-                    
-                    for (IR_Unit* unit0 = expression.first; unit0 != NULL; unit0 = unit0->next) {
-                        if (unit0->kind == UnitKind_BinaryOperation && unit0->binary_op.op == BinaryOperator_Is) {
-                            unit = unit0;
-                            break;
-                        }
-                    }
-                    
-                    if (unit != NULL) {
-                        IR_Object* obj = ir_find_object_from_value(ir, unit->binary_op.src0);
-                        VariableType* vtype = type_from_compiletime(yov->inter, unit->binary_op.src1);
-                        
-                        if (obj != NULL && vtype != nil_vtype) {
-                            ir_assume_object(ir, obj, vtype);
-                        }
-                    }
-                }
-            }
-            
-            success = ir_from_node(ir, node->success, ExpresionContext_from_void(), false);
-            ir_scope_pop(ir);
-        }
-        
-        failure = ir_from_node(ir, node->failure, ExpresionContext_from_void(), true);
-        
-        if (!expression.success || !success.success || !failure.success) {
-            return ir_failed();
-        }
-        
-        IR_Unit* end_unit = ir_alloc_empty(ir, node->code);
-        IR_Unit* failed_unit = end_unit;
-        
-        if (failure.unit_count > 0)
-        {
-            IR_Unit* jump = ir_alloc_jump(ir, 0, value_none(), end_unit, node->code);
-            success = IR_append(success, ir_from_single(jump));
-            
-            failed_unit = failure.first;
-        }
-        
-        IR_Unit* jump = ir_alloc_jump(ir, -1, expression.value, failed_unit, node->code);
-        return IR_append_5(expression, ir_from_single(jump), success, failure, ir_from_single(end_unit));
-    }
-    
-    if (node0->kind == OpKind_WhileStatement)
-    {
-        OpNode_WhileStatement* node = (OpNode_WhileStatement*)node0;
-        
-        ir_looping_scope_push(ir, node->code);
-        IR_Group expression = ir_from_node(ir, node->expresion, ExpresionContext_from_vtype(VType_Bool, 1), false);
-        IR_Group content = ir_from_node(ir, node->content, ExpresionContext_from_void(), true);
-        
-        IR_Group out = ir_from_loop(ir, ir_from_none(), expression, content, ir_from_none(), node->code);
-        ir_looping_scope_pop(ir);
-        
-        return out;
-    }
-    
-    if (node0->kind == OpKind_ForStatement)
-    {
-        OpNode_ForStatement* node = (OpNode_ForStatement*)node0;
-        
-        ir_looping_scope_push(ir, node->code);
-        IR_Group init = ir_from_node(ir, node->initialize_sentence, ExpresionContext_from_void(), false);
-        IR_Group condition = ir_from_node(ir, node->condition_expresion, ExpresionContext_from_vtype(VType_Bool, 1), false);
-        IR_Group update = ir_from_node(ir, node->update_sentence, ExpresionContext_from_void(), false);
-        IR_Group content = ir_from_node(ir, node->content, ExpresionContext_from_void(), true);
-        
-        IR_Group out = ir_from_loop(ir, init, condition, content, update, node->code);
-        ir_looping_scope_pop(ir);
-        
-        return out;
-    }
-    
-    if (node0->kind == OpKind_ForeachArrayStatement)
-    {
-        OpNode_ForeachArrayStatement* node = (OpNode_ForeachArrayStatement*)node0;
-        
-        ir_looping_scope_push(ir, node->code);
-        DEFER(ir_looping_scope_pop(ir));
-        
-        IR_Group array_expression = ir_from_node(ir, node->expresion, ExpresionContext_from_void(), false);
-        
-        if (!array_expression.success)
-            return ir_failed();
-        
-        Value array = array_expression.value;
-        
-        if (array.vtype->kind != VariableKind_Array) {
-            report_for_expects_an_array(node->code);
-            return ir_failed();
-        }
-        
-        // internal_index := 0
-        IR_Group init = array_expression;
-        init = IR_append(init, ir_from_define_temporal(ir, VType_Int, node->code));
-        Value internal_index = init.value;
-        init = IR_append(init, ir_from_assignment(ir, false, internal_index, value_from_int(0), BinaryOperator_None, node->code));
-        
-        if (!init.success)
-            return ir_failed();
-        
-        // (internal_index < array.count)
-        VariableTypeChild count_info = vtype_get_property(array.vtype, "count");
-        IR_Group condition = ir_from_child(ir, array, value_from_int(count_info.index), count_info.is_member, count_info.vtype, node->code);
-        condition = IR_append(condition, ir_from_binary_operator(ir, internal_index, condition.value, BinaryOperator_LessThan, false, node->code));
-        
-        if (!condition.success)
-            return ir_failed();
-        
-        // "element" := array[internal_index]
-        IR_Group content = ir_from_define_local(ir, node->element_name, vtype_from_reference(array.vtype->child_next), node->code);
-        Value element = content.value;
-        content = IR_append(content, ir_from_child(ir, array, internal_index, true, array.vtype->child_next, node->code));
-        content = IR_append(content, ir_from_reference(ir, false, content.value, node->code));
-        content = IR_append(content, ir_from_assignment(ir, true, element, content.value, BinaryOperator_None, node->code));
-        
-        // "index" := internal_index
-        if (node->index_name.size > 0) {
-            content = IR_append(content, ir_from_define_local(ir, node->index_name, VType_Int, node->code));
-            Value index = content.value;
-            content = IR_append(content, ir_from_assignment(ir, true, index, internal_index, BinaryOperator_None, node->code));
-        }
-        
-        content = IR_append(content, ir_from_node(ir, node->content, ExpresionContext_from_void(), true));
-        
-        // internal_index += 1
-        IR_Group update = ir_from_assignment(ir, false, internal_index, value_from_int(1), BinaryOperator_Addition, node->code);
-        
-        if (!content.success || !update.success)
-            return ir_failed();
-        
-        return ir_from_loop(ir, init, condition, content, update, node->code);
-    }
-    
     if (node0->kind == OpKind_ArrayExpresion)
     {
         OpNode_ArrayExpresion* node = (OpNode_ArrayExpresion*)node0;
         
-        VariableType* array_vtype = void_vtype;
+        VType array_vtype = VType_Void;
         
         if (node->type->kind == OpKind_ObjectType) {
             array_vtype = vtype_from_node((OpNode_ObjectType*)node->type);
-            if (array_vtype == nil_vtype) return ir_failed();
+            if (array_vtype == VType_Nil) return ir_failed();
         }
         
-        if (array_vtype == void_vtype && context.vtype->kind == VariableKind_Array) {
+        if (array_vtype == VType_Void && context.vtype.kind == VKind_Array) {
             array_vtype = context.vtype;
         }
         
@@ -1236,38 +764,38 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b
         
         if (node->is_empty)
         {
-            if (array_vtype == void_vtype) {
-                report_error(node->code, "Unresolved type for array expression");
+            if (array_vtype == VType_Void) {
+                report_error(node->location, "Unresolved type for array expression");
                 return ir_failed();
             }
             
-            VariableType* base_vtype = array_vtype;
-            u32 starting_dimensions = 0;
+            VType base_vtype = array_vtype;
+            U32 starting_dimensions = 0;
             
-            if (array_vtype->kind == VariableKind_Array) {
-                base_vtype = array_vtype->child_base;
-                starting_dimensions = array_vtype->array_dimensions;
+            if (array_vtype.kind == VKind_Array) {
+                base_vtype = array_vtype.child_base;
+                starting_dimensions = array_vtype.array_dimensions;
             }
             
-            Array<Value> dimensions = array_make<Value>(scratch.arena, node->nodes.count + starting_dimensions);
+            Array<Value> dimensions = array_make<Value>(context.arena, node->nodes.count + starting_dimensions);
             
             foreach(i, starting_dimensions) {
-                dimensions[i] = value_from_int(0);
+                dimensions[i] = ValueFromInt(0);
             }
             
             foreach(i, node->nodes.count)
             {
-                out = IR_append(out, ir_from_node(ir, node->nodes[i], ExpresionContext_from_vtype(VType_Int, 1), false));
+                out = ir_append(out, ir_from_node(ir, node->nodes[i], ExpresionContext_from_vtype(VType_Int, 1), false));
                 if (!out.success) return ir_failed();
                 
                 Value dim = out.value;
                 
-                if (dim.vtype->ID != VTypeID_Int) {
-                    report_dimensions_expects_an_int(node->code);
+                if (dim.vtype != VType_Int) {
+                    report_dimensions_expects_an_int(node->location);
                     return ir_failed();
                 }
                 
-                u32 index = starting_dimensions + i;
+                U32 index = starting_dimensions + i;
                 dimensions[index] = dim;
             }
             
@@ -1276,72 +804,58 @@ IR_Group ir_from_node(IR_Context* ir, OpNode* node0, ExpresionContext context, b
         }
         else
         {
-            Array<Value> elements = array_make<Value>(scratch.arena, node->nodes.count);
+            Array<Value> elements = array_make<Value>(context.arena, node->nodes.count);
             
             foreach(i, node->nodes.count) {
-                out = IR_append(out, ir_from_node(ir, node->nodes[i], ExpresionContext_from_void(), false));
+                out = ir_append(out, ir_from_node(ir, node->nodes[i], ExpresionContext_from_void(), false));
                 elements[i] = out.value;
             }
             
-            if (array_vtype == void_vtype && elements.count > 0)
+            if (array_vtype == VType_Void && elements.count > 0)
             {
-                VariableType* element_vtype = elements[0].vtype;
+                VType element_vtype = elements[0].vtype;
                 
-                for (u32 i = 1; i < elements.count; i++) {
+                for (U32 i = 1; i < elements.count; i++) {
                     if (elements[i].vtype != element_vtype) {
-                        element_vtype = nil_vtype;
+                        element_vtype = VType_Nil;
                         break;
                     }
                 }
                 
-                if (element_vtype != nil_vtype) {
+                if (element_vtype != VType_Nil) {
                     array_vtype = vtype_from_dimension(element_vtype, 1);
                 }
             }
             
-            if (array_vtype == void_vtype) {
-                report_error(node->code, "Unresolved type for array expression");
+            if (array_vtype == VType_Void) {
+                report_error(node->location, "Unresolved type for array expression");
                 return ir_failed();
             }
             
-            VariableType* element_vtype = array_vtype->child_next;
+            VType element_vtype = array_vtype.child_next;
             
             // Assert same vtype
             foreach(i, elements.count) {
-                if (elements[i].vtype->ID != element_vtype->ID) {
-                    report_type_missmatch_array_expr(node->code, element_vtype->name, elements[i].vtype->name);
+                if (elements[i].vtype != element_vtype) {
+                    report_type_missmatch_array_expr(node->location, element_vtype.name, elements[i].vtype.name);
                     return ir_failed();
                 }
             }
             
-            out.value = value_from_array(ir->arena, array_vtype, elements);
+            out.value = ValueFromArray(ir->arena, array_vtype, elements);
         }
         
         
         return out;
     }
     
-    report_expr_semantic_unknown(node0->code);
+    report_expr_semantic_unknown(node0->location);
     return ir_failed();
 }
 
-internal_fn IR_Context* ir_context_alloc(Array<VariableType*> returns, Array<VariableType*> params)
-{
-    Arena* arena = yov->static_arena;// TODO(Jose):
-    
-    IR_Context* ir = arena_push_struct<IR_Context>(arena);
-    ir->arena = arena;
-    ir->temp_arena = yov->temp_arena;// TODO(Jose):
-    ir->registers = pooled_array_make<IR_Register>(ir->temp_arena, 16);
-    ir->objects = pooled_array_make<IR_Object>(ir->temp_arena, 32);
-    ir->looping_scopes = pooled_array_make<IR_LoopingScope>(ir->temp_arena, 8);
-    ir->scope = 0;
-    ir->returns = array_copy(ir->temp_arena, returns);
-    ir->params = array_copy(ir->temp_arena, params);
-    return ir;
-}
+#endif
 
-internal_fn Unit unit_make(IR_Unit* unit)
+internal_fn Unit UnitMake(Arena* arena, IR_Unit* unit)
 {
     if (unit->kind == UnitKind_Error || unit->kind == UnitKind_Empty) return {};
     
@@ -1349,60 +863,41 @@ internal_fn Unit unit_make(IR_Unit* unit)
     
     Unit dst = {};
     dst.kind = kind;
-    dst.code = unit->code;
+    dst.location = unit->location;
     dst.dst_index = unit->dst_index;
+    dst.src = ValueCopy(arena, unit->src);
     
-    if (kind == UnitKind_Copy) {
-        dst.copy.src = unit->copy.src;
-    }
-    else if (kind == UnitKind_Store) {
-        dst.store.src = unit->store.src;
-    }
-    else if (kind == UnitKind_FunctionCall) {
+    if (kind == UnitKind_FunctionCall) {
         dst.function_call.fn = unit->function_call.fn;
-        dst.function_call.parameters = unit->function_call.parameters;
-    }
-    else if (kind == UnitKind_Return) {
+        dst.function_call.parameters = ValueArrayCopy(arena, unit->function_call.parameters);
     }
     else if (kind == UnitKind_Jump) {
         dst.jump.condition = unit->jump.condition;
-        dst.jump.src = unit->jump.src;
-        dst.jump.offset = i32_min; // Calculated later
+        dst.jump.offset = I32_MIN; // Calculated later
     }
     else if (kind == UnitKind_BinaryOperation) {
-        dst.binary_op.src0 = unit->binary_op.src0;
-        dst.binary_op.src1 = unit->binary_op.src1;
+        dst.binary_op.src1 = ValueCopy(arena, unit->binary_op.src1);
         dst.binary_op.op = unit->binary_op.op;
     }
     else if (kind == UnitKind_SignOperation) {
-        dst.sign_op.src = unit->sign_op.src;
         dst.sign_op.op = unit->sign_op.op;
     }
     else if (kind == UnitKind_Child) {
-        dst.child.src = unit->child.src;
         dst.child.child_index = unit->child.child_index;
         dst.child.child_is_member = unit->child.child_is_member;
-    }
-    else if (kind == UnitKind_ResultEval) {
-        dst.result_eval.src = unit->result_eval.src;
-    }
-    else {
-        invalid_codepath();
     }
     
     return dst;
 }
 
-internal_fn IR ir_make(Arena* arena, Array<IR_Register> registers, u32 param_count, IR_Group out)
+IR MakeIR(Arena* arena, Array<Register> local_registers, IR_Group group)
 {
-    SCRATCH(arena);
-    
-    Array<IR_Unit*> units = array_make<IR_Unit*>(scratch.arena, out.unit_count);
+    Array<IR_Unit*> units = array_make<IR_Unit*>(context.arena, group.unit_count);
     {
-        IR_Unit* unit = out.first;
+        IR_Unit* unit = group.first;
         foreach(i, units.count) {
             if (unit == NULL) {
-                invalid_codepath();
+                InvalidCodepath();
                 units.count = i;
                 break;
             }
@@ -1411,11 +906,11 @@ internal_fn IR ir_make(Arena* arena, Array<IR_Register> registers, u32 param_cou
         }
     }
     
-    PooledArray<Unit> instructions = pooled_array_make<Unit>(scratch.arena, 64);
-    PooledArray<u32> mapping = pooled_array_make<u32>(scratch.arena, 64);
+    PooledArray<Unit> instructions = pooled_array_make<Unit>(context.arena, 64);
+    PooledArray<U32> mapping = pooled_array_make<U32>(context.arena, 64);
     
     foreach(i, units.count) {
-        Unit instr = unit_make(units[i]);
+        Unit instr = UnitMake(arena, units[i]);
         if (instr.kind == UnitKind_Error) continue;
         array_add(&instructions, instr);
         array_add(&mapping, i);
@@ -1430,7 +925,7 @@ internal_fn IR ir_make(Arena* arena, Array<IR_Register> registers, u32 param_cou
         
         IR_Unit* ir = units[mapping[it.index]];
         
-        i32 ir_index = -1;
+        I32 ir_index = -1;
         foreach(i, units.count) {
             if (units[i] == ir->jump.unit) {
                 ir_index = i;
@@ -1438,148 +933,115 @@ internal_fn IR ir_make(Arena* arena, Array<IR_Register> registers, u32 param_cou
             }
         }
         
-        i32 jump_index = -1;
+        I32 jump_index = -1;
         for (auto it = pooled_array_make_iterator(&mapping); it.valid; ++it)
         {
             jump_index = it.index;
-            u32 v = *it.value;
+            U32 v = *it.value;
             if (v >= ir_index) break;
         }
         
         if (ir_index < 0 || jump_index < 0) {
-            invalid_codepath();
+            InvalidCodepath();
             *rt = {};
             continue;
         }
         
-        rt->jump.offset = jump_index - (i32)it.index - 1;
+        rt->jump.offset = jump_index - (I32)it.index - 1;
     }
     
     IR ir = {};
-    ir.success = out.success;
-    ir.value = out.value;
-    ir.registers = array_copy(arena, registers);
+    ir.success = group.success;
+    ir.value = group.value;
+    ir.local_registers = array_copy(arena, local_registers);
     ir.instructions = array_from_pooled_array(arena, instructions);
-    ir.param_count = param_count;
+    
+    // Count params
+    foreach(i, ir.local_registers.count) {
+        if (ir.local_registers[i].kind == RegisterKind_Parameter) {
+            ir.parameter_count++;
+        }
+    }
+    
+    // Take return registers or last value as a return
+    {
+        PooledArray<Value> returns = pooled_array_make<Value>(context.arena, 8);
+        
+        for (I32 i = 0; i < ir.local_registers.count; i++)
+        {
+            Register reg = ir.local_registers[i];
+            
+            if (reg.kind == RegisterKind_Return) {
+                Value value = ValueFromRegister(RegIndexFromLocal(i), reg.vtype, true);
+                array_add(&returns, value);
+            }
+        }
+        
+        Array<Value> values = array_from_pooled_array(context.arena, returns);
+        
+        if (values.count == 0) {
+            ir.value = group.value;
+        }
+        else {
+            ir.value = value_from_return(arena, values);
+        }
+    }
     
     return ir;
 }
 
-internal_fn b32 validate_return_path(Array<Unit> units)
+IR_Context* ir_context_alloc()
 {
-    i32 next_jump_index = -1;
-    foreach(i, units.count) {
-        if (units[i].kind == UnitKind_Jump) {
-            next_jump_index = i;
-            break;
-        }
-    }
-    
-    if (next_jump_index >= 0)
-    {
-        Unit jump = units[next_jump_index];
-        b32 has_condition = jump.jump.condition != 0;
-        b32 is_backwards = jump.jump.offset < 0;
-        
-        Array<Unit> path_prev = array_subarray(units, 0, next_jump_index);
-        i32 index = next_jump_index + 1 + jump.jump.offset;
-        Array<Unit> path_fail = array_subarray(units, next_jump_index + 1, units.count - next_jump_index - 1);
-        Array<Unit> path_jump = array_subarray(units, index, units.count - index);
-        
-        if (validate_return_path(path_prev)) return true;
-        
-        b32 jump_res = is_backwards || validate_return_path(path_jump);
-        b32 fail_res = has_condition || validate_return_path(path_fail);
-        return jump_res && fail_res;
-    }
-    else {
-        foreach(i, units.count) {
-            if (units[i].kind == UnitKind_Return) return true;
-        }
-        return false;
-    }
+    IR_Context* ir = ArenaPushStruct<IR_Context>(context.arena);
+    ir->arena = context.arena;
+    ir->local_registers = pooled_array_make<Register>(ir->arena, 16);
+    ir->objects = pooled_array_make<IR_Object>(ir->arena, 32);
+    ir->looping_scopes = pooled_array_make<IR_LoopingScope>(ir->arena, 8);
+    ir->scope = 0;
+    return ir;
 }
 
-IR ir_generate_from_function_definition(FunctionDefinition* fn)
+Array<VType> ReturnsFromRegisters(Arena* arena, Array<Register> registers)
 {
-    SCRATCH();
-    
-    OpNode* node = fn->defined.block;
-    
-    IR_Context* ir = ir_context_alloc(vtypes_from_definitions(scratch.arena, fn->returns), vtypes_from_definitions(scratch.arena, fn->parameters));
-    
-    foreach(i, fn->parameters.count) {
-        i32 register_index = ir_register_alloc_local(ir, fn->parameters[i].vtype);
-        ir_define_object(ir, fn->parameters[i].name, fn->parameters[i].vtype, ir->scope, register_index);
+    U32 count = 0;
+    foreach(i, registers.count) {
+        if (registers[i].kind == RegisterKind_Return) count++;
     }
     
-    Array<Value> returns = array_make<Value>(scratch.arena, fn->returns.count);
-    
-    foreach(i, fn->returns.count) {
-        i32 register_index = ir_register_alloc_local(ir, fn->returns[i].vtype);
-        IR_Object* object = ir_define_object(ir, fn->returns[i].name, fn->returns[i].vtype, ir->scope, register_index);
-        returns[i] = value_from_ir_object(object);
-    }
-    
-    IR_Group out = ir_from_node(ir, node, ExpresionContext_from_void(), false);
-    out.value = value_from_return(ir->arena, returns);
-    
-    IR res = ir_make(ir->arena, array_from_pooled_array(scratch.arena, ir->registers), fn->parameters.count, out);
-    
-    // Validation
-    if (res.success)
-    {
-        Array<Unit> units = res.instructions;
-        
-        // TODO(Jose): Check for infinite loops
-        
-        // Check all paths have a return
-        b32 expects_return = fn->returns.count == 1 && string_equals(fn->returns[0].name, "return");
-        if (expects_return && !validate_return_path(units)) {
-            report_function_no_return(fn->defined.block->code, fn->identifier);
+    Array<VType> returns = array_make<VType>(arena, count);
+    U32 index = 0;
+    foreach(i, registers.count) {
+        if (registers[i].kind == RegisterKind_Return) {
+            returns[index++] = registers[i].vtype;
         }
     }
     
-    return res;
-}
-
-IR ir_generate_from_initializer(OpNode* node, ExpresionContext context)
-{
-    SCRATCH();
-    
-    Array<VariableType*> returns = array_make<VariableType*>(scratch.arena, 1);
-    returns[0] = context.vtype;
-    
-    IR_Context* ir = ir_context_alloc(returns, {});
-    
-    IR_Group out = ir_from_node(ir, node, context, false);
-    if (out.value.vtype == void_vtype && context.vtype->ID > VTypeID_Void) {
-        out = IR_append(out, ir_from_default_initializer(ir, context.vtype, node->code));
-    }
-    return ir_make(ir->arena, array_from_pooled_array(scratch.arena, ir->registers), ir->params.count, out);
+    return returns;
 }
 
 IR ir_generate_from_value(Value value) {
-    return ir_make(yov->static_arena, {}, 0, ir_from_none(value));
+    return MakeIR(yov->arena, {}, ir_from_none(value));
 }
 
-b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value)
+#if 0
+
+B32 ct_value_from_node(OpNode* node, VType expected_vtype, Value* value)
 {
     IR ir = ir_generate_from_initializer(node, ExpresionContext_from_vtype(expected_vtype, 1));
     
-    *value = value_none();
+    *value = ValueNone();
     
     if (!ir.success) return false;
     
     Value v = ir.value;
     
-    if (expected_vtype->ID > VTypeID_Void && v.vtype != expected_vtype) {
-        report_type_missmatch_assign(node->code, v.vtype->name, expected_vtype->name);
+    if (expected_vtype > VType_Void && v.vtype != expected_vtype) {
+        report_type_missmatch_assign(node->location, v.vtype.name, expected_vtype.name);
         return false;
     }
     
-    if (!value_is_compiletime(v)) {
-        report_error(node->code, "Expecting a compile time resolved value");
+    if (!ValueIsCompiletime(v)) {
+        report_error(node->location, "Expecting a compile time resolved value");
         return false;
     }
     
@@ -1587,7 +1049,7 @@ b32 ct_value_from_node(OpNode* node, VariableType* expected_vtype, Value* value)
     return true;
 }
 
-b32 ct_string_from_node(Arena* arena, OpNode* node, String* str)
+B32 ct_string_from_node(Arena* arena, OpNode* node, String* str)
 {
     *str = {};
     Value v;
@@ -1597,7 +1059,7 @@ b32 ct_string_from_node(Arena* arena, OpNode* node, String* str)
     return true;
 }
 
-b32 ct_bool_from_node(OpNode* node, b32* b)
+B32 ct_bool_from_node(OpNode* node, B32* b)
 {
     *b = {};
     Value v;
@@ -1610,7 +1072,7 @@ b32 ct_bool_from_node(OpNode* node, b32* b)
 internal_fn Array<OpNode_StructDefinition*> get_struct_definitions(Arena* arena, Array<OpNode*> nodes)
 {
     SCRATCH(arena);
-    PooledArray<OpNode_StructDefinition*> result = pooled_array_make<OpNode_StructDefinition*>(scratch.arena, 8);
+    PooledArray<OpNode_StructDefinition*> result = pooled_array_make<OpNode_StructDefinition*>(context.arena, 8);
     
     foreach(i, nodes.count) {
         OpNode* node0 = nodes[i];
@@ -1618,17 +1080,17 @@ internal_fn Array<OpNode_StructDefinition*> get_struct_definitions(Arena* arena,
         {
             OpNode_StructDefinition* node = (OpNode_StructDefinition*)node0;
             
-            b32 duplicated = false;
+            B32 duplicated = false;
             
             foreach(i, result.count) {
-                if (string_equals(result[i]->identifier, node->identifier)) {
+                if (StrEquals(result[i]->identifier, node->identifier)) {
                     duplicated = true;
                     break;
                 }
             }
             
             if (duplicated) {
-                report_symbol_duplicated(node->code, node->identifier);
+                report_symbol_duplicated(node->location, node->identifier);
                 continue;
             }
             
@@ -1642,17 +1104,17 @@ internal_fn Array<OpNode_StructDefinition*> get_struct_definitions(Arena* arena,
 internal_fn Array<String> get_struct_dependencies(Arena* arena, OpNode_StructDefinition* node, Array<OpNode_StructDefinition*> struct_nodes)
 {
     SCRATCH(arena);
-    PooledArray<String> names = pooled_array_make<String>(scratch.arena, 8);
+    PooledArray<String> names = pooled_array_make<String>(context.arena, 8);
     
     foreach(i, node->members.count) {
         OpNode_ObjectDefinition* member = node->members[i];
-        VariableType* member_vtype = vtype_from_name(member->type->name);
-        if (member_vtype->ID != VTypeID_Unknown) continue;
+        VType member_vtype = vtype_from_name(member->type->name);
+        if (member_vtype != VType_Unknown) continue;
         
         foreach(j, struct_nodes.count) {
             OpNode_StructDefinition* struct0 = struct_nodes[j];
             if (struct0 == node) continue;
-            if (string_equals(member->type->name, struct0->identifier)) {
+            if (StrEquals(member->type->name, struct0->identifier)) {
                 array_add(&names, member->type->name);
                 break;
             }
@@ -1662,7 +1124,7 @@ internal_fn Array<String> get_struct_dependencies(Arena* arena, OpNode_StructDef
     return array_from_pooled_array(arena, names);
 }
 
-internal_fn i32 OpNode_StructDefinition_compare_dependency_index(const void* _0, const void* _1)
+internal_fn I32 OpNode_StructDefinition_compare_dependency_index(const void* _0, const void* _1)
 {
     auto node0 = *(const OpNode_StructDefinition**)_0;
     auto node1 = *(const OpNode_StructDefinition**)_1;
@@ -1671,576 +1133,51 @@ internal_fn i32 OpNode_StructDefinition_compare_dependency_index(const void* _0,
     return (node0->dependency_index < node1->dependency_index) ? -1 : 1;
 }
 
-internal_fn b32 validate_arg_name(String name, CodeLocation code)
+#endif
+
+B32 ir_validate_return_path(Array<Unit> units)
 {
-    b32 valid_chars = true;
-    
-    u64 cursor = 0;
-    while (cursor < name.size) {
-        u32 codepoint = string_get_codepoint(name, &cursor);
-        
-        b32 valid = false;
-        if (codepoint_is_text(codepoint)) valid = true;
-        if (codepoint_is_number(codepoint)) valid = true;
-        if (codepoint == '-') valid = true;
-        if (codepoint == '_') valid = true;
-        
-        if (!valid) {
-            valid_chars = false;
+    I32 next_jump_index = -1;
+    foreach(i, units.count) {
+        if (units[i].kind == UnitKind_Jump) {
+            next_jump_index = i;
             break;
         }
     }
     
-    if (!valid_chars || name.size == 0) {
-        report_arg_invalid_name(code, name);
+    if (next_jump_index >= 0)
+    {
+        Unit jump = units[next_jump_index];
+        B32 has_condition = jump.jump.condition != 0;
+        B32 is_backwards = jump.jump.offset < 0;
+        
+        Array<Unit> path_prev = array_subarray(units, 0, next_jump_index);
+        I32 index = next_jump_index + 1 + jump.jump.offset;
+        Array<Unit> path_fail = array_subarray(units, next_jump_index + 1, units.count - next_jump_index - 1);
+        Array<Unit> path_jump = array_subarray(units, index, units.count - index);
+        
+        if (ir_validate_return_path(path_prev)) return true;
+        
+        B32 jump_res = is_backwards || ir_validate_return_path(path_jump);
+        B32 fail_res = has_condition || ir_validate_return_path(path_fail);
+        return jump_res && fail_res;
+    }
+    else {
+        foreach(i, units.count) {
+            if (units[i].kind == UnitKind_Return) return true;
+        }
         return false;
     }
-    
-    if (find_arg_definition_by_name(name) != NULL) {
-        report_arg_duplicated_name(code, name);
-        return false;
-    }
-    
-    return true;
 }
 
-internal_fn void extract_definitions(OpNode_Block* block, b32 is_main_script, b32 require_args, b32 require_intrinsics)
-{
-    SCRATCH();
-    
-    // Assert only definitions in root block
-    foreach(i, block->ops.count)
-    {
-        OpNode* node = block->ops[i];
-        
-        b32 is_definition = false;
-        if (node->kind == OpKind_EnumDefinition) is_definition = true;
-        if (node->kind == OpKind_ArgDefinition) is_definition = true;
-        if (node->kind == OpKind_StructDefinition) is_definition = true;
-        if (node->kind == OpKind_FunctionDefinition) is_definition = true;
-        if (node->kind == OpKind_Import) is_definition = true;
-        if (node->kind == OpKind_ObjectDefinition) is_definition = true;
-        
-        if (!is_definition) {
-            report_unsupported_operations(node->code);
-            return;
-        }
-    }
-    
-    // Enums
-    foreach(i, block->ops.count)
-    {
-        OpNode* node0 = block->ops[i];
-        if (node0->kind != OpKind_EnumDefinition) continue;
-        
-        OpNode_EnumDefinition* node = (OpNode_EnumDefinition*)node0;
-        
-        assert(node->values.count == node->names.count);
-        
-        b32 valid = true;
-        
-        String name = node->identifier;
-        
-        if (definition_exists(name)) {
-            report_symbol_duplicated(node->code, name);
-            valid = false;
-        }
-        
-        Array<i64> values = array_make<i64>(scratch.arena, node->values.count);
-        foreach(i, values.count)
-        {
-            OpNode* value_node = node->values[i];
-            
-            if (value_node == NULL || value_node->kind == OpKind_None) {
-                values[i] = i;
-                continue;
-            }
-            
-            IR ir = ir_generate_from_initializer(value_node, ExpresionContext_from_vtype(VType_Int, 1));
-            if (!ir.success) continue;
-            
-            if (ir.value.kind != ValueKind_Literal || ir.value.vtype->ID != VTypeID_Int) {
-                report_error(node->code, "Enum value expects an Int literal");
-                valid = false;
-                continue;
-            }
-            
-            values[i] = ir.value.literal_int;
-        }
-        
-        if (!valid) continue;
-        
-        define_enum(name, node->names, values);
-    }
-    
-    // Structs
-    {
-        Array<OpNode_StructDefinition*> struct_nodes = get_struct_definitions(scratch.arena, block->ops);
-        
-        // Solve struct dependencies
-        {
-            foreach(i, struct_nodes.count) struct_nodes[i]->dependency_index = 0;
-            
-            foreach(i, struct_nodes.count)
-            {
-                OpNode_StructDefinition* node = struct_nodes[i];
-                b32 valid = true;
-                
-                Array<String> deps0 = get_struct_dependencies(scratch.arena, node, struct_nodes);
-                
-                foreach(j, deps0.count)
-                {
-                    String dep_name = deps0[j];
-                    
-                    OpNode_StructDefinition* node1 = NULL;
-                    foreach(i, struct_nodes.count) {
-                        if (string_equals(struct_nodes[i]->identifier, dep_name)) {
-                            node1 = struct_nodes[i];
-                            break;
-                        }
-                    }
-                    assert(node1 != NULL);
-                    
-                    Array<String> deps1 = get_struct_dependencies(scratch.arena, node1, struct_nodes);
-                    
-                    foreach(i, deps1.count) {
-                        if (string_equals(deps1[i], node->identifier)) {
-                            report_struct_circular_dependency(node->code);
-                            valid = false;
-                            break;
-                        }
-                    }
-                    
-                    if (!valid) break;
-                    
-                    node->dependency_index = MAX(node1->dependency_index + 1, node->dependency_index);
-                }
-            }
-            
-            array_sort(struct_nodes, OpNode_StructDefinition_compare_dependency_index);
-        }
-        
-        foreach(i, struct_nodes.count)
-        {
-            OpNode_StructDefinition* node = struct_nodes[i];
-            
-            b32 valid = true;
-            String name = node->identifier;
-            
-            if (definition_exists(name)) {
-                report_symbol_duplicated(node->code, name);
-                valid = false;
-            }
-            
-            VariableType* struct_vtype = vtype_define_struct(name, node);
-            
-            PooledArray<ObjectDefinition> members = pooled_array_make<ObjectDefinition>(scratch.arena, 8);
-            
-            foreach(i, node->members.count) {
-                OpNode_ObjectDefinition* member_node = node->members[i];
-                
-                if (member_node->type->name.size == 0) {
-                    report_struct_implicit_member_type(node->code);
-                    valid = false;
-                    continue;
-                }
-                
-                VariableType* vtype = vtype_from_node(member_node->type);
-                if (vtype->ID == VTypeID_Unknown) {
-                    valid = false;
-                    continue;
-                }
-                
-                if (vtype == any_vtype) {
-                    report_error(node->code, "Any is not a valid member for a struct");
-                    valid = false;
-                    continue;
-                }
-                
-                if (vtype == struct_vtype) {
-                    report_struct_recursive(node->code);
-                    valid = false;
-                    continue;
-                }
-                
-                foreach(j, member_node->names.count)
-                {
-                    ObjectDefinition def = {};
-                    def.name = member_node->names[j];
-                    def.vtype = vtype;
-                    def.ir = {};
-                    array_add(&members, def);
-                }
-            }
-            
-            if (!valid) continue;
-            
-            vtype_init_struct(struct_vtype, array_from_pooled_array(scratch.arena, members));
-        }
-    }
-    
-    // Functions
-    foreach(i, block->ops.count)
-    {
-        OpNode* node0 = block->ops[i];
-        if (node0->kind != OpKind_FunctionDefinition) continue;
-        
-        OpNode_FunctionDefinition* node = (OpNode_FunctionDefinition*)node0;
-        
-        b32 valid = true;
-        
-        if (definition_exists(node->identifier)) {
-            report_symbol_duplicated(node->code, node->identifier);
-            valid = false;
-        }
-        
-        Array<ObjectDefinition> parameters = array_make<ObjectDefinition>(scratch.arena, node->parameters.count);
-        
-        foreach(i, parameters.count)
-        {
-            OpNode_ObjectDefinition* param_node = node->parameters[i];
-            ObjectDefinition* def = &parameters[i];
-            
-            VariableType* vtype = vtype_from_node(param_node->type);
-            
-            if (vtype == void_vtype || vtype == nil_vtype) {
-                valid = false;
-                continue;
-            }
-            
-            if (param_node->names.count != 1) {
-                report_error(param_node->code, "Parameters requires a single name per definition");
-                valid = false;
-                continue;
-            }
-            
-            def->vtype = vtype;
-            def->name = param_node->names[0];
-            def->ir = ir_generate_from_initializer(param_node->assignment, ExpresionContext_from_vtype(vtype, 1));
-        }
-        
-        PooledArray<ObjectDefinition> returns_list = pooled_array_make<ObjectDefinition>(scratch.arena, 8);
-        
-        foreach(i, node->returns.count)
-        {
-            OpNode* return_node0 = node->returns[i];
-            
-            if (return_node0->kind == OpKind_ObjectType)
-            {
-                OpNode_ObjectType* return_node = (OpNode_ObjectType*)return_node0;
-                
-                ObjectDefinition def = {};
-                def.vtype = vtype_from_node(return_node);
-                def.name = "return";
-                def.ir = {};
-                array_add(&returns_list, def);
-            }
-            else if (return_node0->kind == OpKind_ObjectDefinition)
-            {
-                OpNode_ObjectDefinition* return_node = (OpNode_ObjectDefinition*)return_node0;
-                
-                VariableType* vtype = vtype_from_node(return_node->type);
-                
-                if (vtype == void_vtype) {
-                    IR out = ir_generate_from_initializer(return_node->assignment, ExpresionContext_from_void());
-                    vtype = out.value.vtype;
-                }
-                
-                if (vtype == void_vtype || vtype == nil_vtype) {
-                    report_error(return_node->code, "Unresolved return type");
-                    valid = false;
-                    continue;
-                }
-                
-                ObjectDefinition def = {};
-                def.vtype = vtype;
-                def.ir = ir_generate_from_initializer(return_node->assignment, ExpresionContext_from_vtype(vtype, 1));
-                foreach(i, return_node->names.count) {
-                    def.name = return_node->names[i];
-                    array_add(&returns_list, def);
-                }
-            }
-            else {
-                invalid_codepath();
-            }
-        }
-        
-        Array<ObjectDefinition> returns = array_from_pooled_array(scratch.arena, returns_list);
-        
-        b32 is_intrinsic = true;
-        OpNode_Block* block = NULL;
-        
-        if (node->block->kind == OpKind_Block) {
-            is_intrinsic = false;
-            block = (OpNode_Block*)node->block;
-        }
-        else if (node->block->kind == OpKind_None) { }
-        else {
-            valid = false;
-            invalid_codepath();
-        }
-        
-        if (!valid) continue;
-        
-        if (is_intrinsic)
-        {
-            b32 exists = find_function(node->identifier) != NULL;
-            
-            if (!exists) {
-                if (require_intrinsics) {
-                    report_intrinsic_not_resolved(node->code, node->identifier);
-                }
-                else {
-                    define_intrinsic_function(node->code, NULL, node->identifier, parameters, returns);
-                }
-            }
-        }
-        else define_function(node->code, node->identifier, parameters, returns, block);
-    }
-    
-    // Args
-    if (is_main_script)
-    {
-        foreach(i, block->ops.count)
-        {
-            OpNode* node0 = block->ops[i];
-            if (node0->kind != OpKind_ArgDefinition) continue;
-            OpNode_ArgDefinition* node = (OpNode_ArgDefinition*)node0;
-            
-            b32 valid = true;
-            b32 required = false;
-            String name = string_format(yov->static_arena, "-%S", node->identifier);
-            Value default_value = value_none();
-            b32 has_explicit_vtype = false;
-            String description = {};
-            
-            VariableType* vtype = VType_Bool;
-            
-            if (node->type->kind == OpKind_ObjectType) {
-                vtype = vtype_from_node((OpNode_ObjectType*)node->type);
-                if (vtype->ID == VTypeID_Unknown) continue;
-                has_explicit_vtype = true;
-            }
-            
-            if (node->name->kind == OpKind_Assignment)
-            {
-                OpNode_Assignment* assignment = (OpNode_Assignment*)node->name;
-                
-                if (!ct_string_from_node(scratch.arena, assignment->source, &name)) {
-                    valid = false;
-                }
-                else if (!validate_arg_name(name, assignment->code)) {
-                    valid = false;
-                }
-            }
-            
-            if (node->description->kind == OpKind_Assignment)
-            {
-                OpNode_Assignment* assignment = (OpNode_Assignment*)node->description;
-                
-                if (!ct_string_from_node(scratch.arena, assignment->source, &description)) {
-                    valid = false;
-                }
-            }
-            
-            if (node->required->kind == OpKind_Assignment)
-            {
-                OpNode_Assignment* assignment = (OpNode_Assignment*)node->required;
-                
-                if (!ct_bool_from_node(assignment->source, &required)) {
-                    valid = false;
-                }
-            }
-            
-            if (node->default_value->kind == OpKind_Assignment)
-            {
-                OpNode_Assignment* assignment = (OpNode_Assignment*)node->default_value;
-                
-                if (!ct_value_from_node(assignment->source, vtype, &default_value)) continue;
-                
-                if (has_explicit_vtype && vtype != default_value.vtype) {
-                    report_type_missmatch_assign(assignment->code, default_value.vtype->name, vtype->name);
-                    continue;
-                }
-                
-                vtype = default_value.vtype;
-            }
-            
-            if (definition_exists(node->identifier)) {
-                report_symbol_duplicated(node->code, node->identifier);
-                valid = false;
-            }
-            
-            Value value = value_none();
-            
-            if (!valid || require_args)
-            {
-                required = false;
-            }
-            else
-            {
-                // From arg
-                if (value.kind == ValueKind_None)
-                {
-                    ScriptArg* script_arg = yov_find_script_arg(name);
-                    
-                    if (script_arg == NULL) {
-                        if (required) {
-                            report_arg_is_required(node->code, name);
-                            continue;
-                        }
-                    }
-                    else
-                    {
-                        if (script_arg->value.size <= 0)
-                        {
-                            if (vtype->ID == VTypeID_Bool) {
-                                value = value_from_bool(true);
-                            }
-                        }
-                        else
-                        {
-                            value = value_from_string_expression(yov->static_arena, script_arg->value, vtype);
-                        }
-                        
-                        if (value.kind == ValueKind_None) {
-                            report_arg_wrong_value(NO_CODE, name, script_arg->value);
-                            continue;
-                        }
-                    }
-                }
-                
-                // From default
-                if (value.kind == ValueKind_None && default_value.kind != ValueKind_None) {
-                    value = default_value;
-                }
-            }
-            
-            // Default vtype
-            if (value.kind == ValueKind_None) {
-                value = value_from_default(vtype);
-            }
-            
-            //print_info("Arg %S: name=%S, required=%s\n", node->identifier, name, required ? "true" : "false");
-            ObjectDefinition def = define_arg(node->identifier, name, value, required, description);
-            global_init(yov->inter, def, node->code);
-        }
-    }
-    
-    // Global Objects
-    foreach(i, block->ops.count)
-    {
-        OpNode* node0 = block->ops[i];
-        if (node0->kind != OpKind_ObjectDefinition) continue;
-        OpNode_ObjectDefinition* node = (OpNode_ObjectDefinition*)node0;
-        
-        VariableType* vtype = vtype_from_node(node->type);
-        
-        ExpresionContext context = {};
-        if (vtype == void_vtype) context = ExpresionContext_from_inference(1);
-        else context = ExpresionContext_from_vtype(vtype, 1);
-        
-        IR ir = ir_generate_from_initializer(node->assignment, context);
-        
-        if (vtype == void_vtype) {
-            vtype = ir.value.vtype;
-        }
-        else if (ir.value.vtype->ID > VTypeID_Void && vtype != ir.value.vtype) {
-            report_error(node->code, "Type missmatch");
-            continue;
-        }
-        
-        if (vtype->ID <= VTypeID_Void) {
-            report_error(node->code, "Unresolved object type for definition");
-            continue;
-        }
-        
-        if (vtype == void_vtype && ir.value.kind != ValueKind_None) vtype = ir.value.vtype;
-        
-        foreach(i, node->names.count) {
-            ObjectDefinition def = obj_def_make(node->names[i], vtype, node->is_constant, ir);
-            define_global(def);
-            
-            if (value_is_compiletime(ir.value)) {
-                global_init(yov->inter, def, node->code);
-            }
-        }
-    }
-}
-
-void ir_generate(b32 require_args, b32 require_intrinsics)
-{
-    SCRATCH();
-    
-    // Script Definitions
-    for (auto it = pooled_array_make_iterator(&yov->scripts); it.valid; ++it)
-    {
-        OpNode_Block* ast = it.value->ast;
-        
-        if (ast->kind != OpKind_Block) {
-            invalid_codepath();
-            continue;
-        }
-        
-        extract_definitions(ast, it.index == 0, require_args, require_intrinsics);
-    }
-    
-    // Assign IR
-    {
-        for (auto it = pooled_array_make_iterator(&yov->functions); it.valid; ++it)
-        {
-            FunctionDefinition* fn = it.value;
-            
-            if (fn->is_intrinsic) continue;
-            
-            fn->defined.ir = ir_generate_from_function_definition(fn);
-#if DEV_PRINT_AST
-            print_ir(fn->identifier, fn->defined.ir);
-#endif
-        }
-        
-        for (auto it = pooled_array_make_iterator(&yov->vtype_table); it.valid; ++it)
-        {
-            VariableType* vtype = it.value;
-            
-            if (vtype->kind == VariableKind_Struct)
-            {
-                foreach(i, vtype->_struct.irs.count) {
-                    VariableType* member_vtype = vtype->_struct.vtypes[i];
-                    OpNode_StructDefinition* node = vtype->_struct.node;
-                    if (node == NULL) {
-                        vtype->_struct.irs[i] = ir_generate_from_value(value_from_default(member_vtype));
-                    }
-                    else {
-                        OpNode* assignment = vtype->_struct.node->members[i]->assignment;
-                        vtype->_struct.irs[i] = ir_generate_from_initializer(assignment, ExpresionContext_from_vtype(member_vtype, 1));
-                    }
-                }
-            }
-        }
-    }
-    
-    // Validate args
-    foreach(i, yov->script_args.count)
-    {
-        String name = yov->script_args[i].name;
-        if (string_equals(name, "-help")) continue;
-        
-        ArgDefinition* def = find_arg_definition_by_name(name);
-        if (def == NULL) {
-            report_arg_unknown(NO_CODE, name);
-        }
-    }
-}
-
-IR_Object* ir_find_object(IR_Context* ir, String identifier, b32 parent_scopes)
+IR_Object* ir_find_object(IR_Context* ir, String identifier, B32 parent_scopes)
 {
     IR_Object* res = NULL;
     
     for (auto it = pooled_array_make_iterator(&ir->objects); it.valid; ++it) {
         IR_Object* obj = it.value;
         if (!parent_scopes && obj->scope != ir->scope) continue;
-        if (!string_equals(obj->identifier, identifier)) continue;
+        if (!StrEquals(obj->identifier, identifier)) continue;
         if (res != NULL && res->scope >= obj->scope) continue;
         res = obj;
     }
@@ -2250,13 +1187,14 @@ IR_Object* ir_find_object(IR_Context* ir, String identifier, b32 parent_scopes)
 
 IR_Object* ir_find_object_from_value(IR_Context* ir, Value value)
 {
-    if (value.kind == ValueKind_LValue || value.kind == ValueKind_Register) {
+    I32 register_index = ValueGetRegister(value);
+    if (register_index >= 0) {
         return ir_find_object_from_register(ir, value.reg.index);
     }
     return NULL;
 }
 
-IR_Object* ir_find_object_from_register(IR_Context* ir, i32 register_index)
+IR_Object* ir_find_object_from_register(IR_Context* ir, I32 register_index)
 {
     for (auto it = pooled_array_make_iterator(&ir->objects); it.valid; ++it) {
         IR_Object* obj = it.value;
@@ -2266,21 +1204,21 @@ IR_Object* ir_find_object_from_register(IR_Context* ir, i32 register_index)
     return NULL;
 }
 
-IR_Object* ir_define_object(IR_Context* ir, String identifier, VariableType* vtype, i32 scope, i32 register_index)
+IR_Object* ir_define_object(IR_Context* ir, String identifier, VType vtype, I32 scope, I32 register_index)
 {
-    assert(scope != ir->scope || ir_find_object(ir, identifier, false) == NULL);
+    Assert(scope != ir->scope || ir_find_object(ir, identifier, false) == NULL);
     
     IR_Object* def = array_add(&ir->objects);
-    def->identifier = string_copy(ir->arena, identifier);
+    def->identifier = StrCopy(ir->arena, identifier);
     def->vtype = vtype;
     def->register_index = register_index;
     def->scope = scope;
     return def;
 }
 
-IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, VariableType* vtype)
+IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, VType vtype)
 {
-    assert(ir_register_get(ir, object->register_index)->vtype == any_vtype);
+    Assert(IRRegisterGet(ir, object->register_index).vtype == VType_Any);
     
     IR_Object* def = array_add(&ir->objects);
     def->identifier = object->identifier;
@@ -2306,7 +1244,7 @@ Symbol ir_find_symbol(IR_Context* ir, String identifier)
     }
     
     {
-        FunctionDefinition* fn = find_function(identifier);
+        FunctionDefinition* fn = FunctionFromIdentifier(identifier);
         
         if (fn != NULL) {
             symbol.type = SymbolType_Function;
@@ -2316,9 +1254,9 @@ Symbol ir_find_symbol(IR_Context* ir, String identifier)
     }
     
     {
-        VariableType* vtype = vtype_from_name(identifier);
+        VType vtype = vtype_from_name(identifier);
         
-        if (vtype->ID != VTypeID_Unknown) {
+        if (vtype != VType_Nil) {
             symbol.type = SymbolType_Type;
             symbol.vtype = vtype;
             return symbol;
@@ -2328,10 +1266,10 @@ Symbol ir_find_symbol(IR_Context* ir, String identifier)
     return {};
 }
 
-IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, CodeLocation code)
+IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, Location location)
 {
-    IR_Unit* continue_unit = ir_alloc_empty(ir, code);
-    IR_Unit* break_unit = ir_alloc_empty(ir, code);
+    IR_Unit* continue_unit = ir_alloc_empty(ir, location);
+    IR_Unit* break_unit = ir_alloc_empty(ir, location);
     
     IR_LoopingScope* scope = array_add(&ir->looping_scopes);
     scope->continue_unit = continue_unit;
@@ -2360,9 +1298,9 @@ void ir_scope_push(IR_Context* ir)
 void ir_scope_pop(IR_Context* ir)
 {
     ir->scope--;
-    assert(ir->scope >= 0);
+    Assert(ir->scope >= 0);
     
-    for (i32 i = (i32)ir->objects.count - 1; i >= 0; --i)
+    for (I32 i = (I32)ir->objects.count - 1; i >= 0; --i)
     {
         if (ir->objects[i].scope > ir->scope) {
             array_erase(&ir->objects, i);
@@ -2370,96 +1308,100 @@ void ir_scope_pop(IR_Context* ir)
     }
 }
 
-internal_fn i32 ir_register_alloc(IR_Context* ir, VariableType* vtype, String global_identifier) {
-    assert(vtype != void_vtype);
-    i32 index = ir->registers.count;
-    IR_Register* reg = array_add(&ir->registers);
+I32 IRRegisterAlloc(IR_Context* ir, VType vtype, RegisterKind kind, B32 constant) {
+    Assert(vtype != VType_Void);
+    Assert(kind != RegisterKind_Global);
+    Assert(kind != RegisterKind_None);
+    U32 local_index = ir->local_registers.count;
+    Register* reg = array_add(&ir->local_registers);
     reg->vtype = vtype;
-    reg->global_identifier = global_identifier;
-    return index;
+    reg->kind = kind;
+    reg->is_constant = constant;
+    return RegIndexFromLocal(local_index);
 }
 
-i32 ir_register_alloc_local(IR_Context* ir, VariableType* vtype) {
-    return ir_register_alloc(ir, vtype, {});
-}
-
-i32 ir_register_get_global(IR_Context* ir, String identifier)
+Register IRRegisterGet(IR_Context* ir, I32 register_index)
 {
-    if (identifier.size <= 0) {
-        invalid_codepath();
-        return -1;
+    I32 local_index = LocalFromRegIndex(register_index);
+    if (local_index >= 0) {
+        if (local_index >= ir->local_registers.count) return {};
+        return ir->local_registers[local_index];
     }
     
-    for (auto it = pooled_array_make_iterator(&ir->registers); it.valid; ++it)
-    {
-        IR_Register* reg = it.value;
-        
-        if (string_equals(identifier, reg->global_identifier)) {
-            return it.index;
-        }
+    Global* global = GlobalFromRegisterIndex(register_index);
+    if (global != NULL) {
+        Register reg = {};
+        reg.kind = RegisterKind_Global;
+        reg.is_constant = global->is_constant;
+        reg.vtype = global->vtype;
+        return reg;
     }
     
-    ObjectDefinition* def = find_global(identifier);
-    if (def == NULL) {
-        invalid_codepath();
-        return -1;
-    }
-    
-    i32 reg_index = ir_register_alloc(ir, def->vtype, def->name);
-    IR_Register* reg = ir_register_get(ir, reg_index);
-    reg->is_constant = def->is_constant;
-    return reg_index;
+    return {};
 }
 
-IR_Register* ir_register_get(IR_Context* ir, i32 index)
-{
-    if (index < 0 || index >= ir->registers.count) return NULL;
-    return &ir->registers[index];
-}
-
-IR_Register* ir_register_from_value(IR_Context* ir, Value value)
+Register IRRegisterFromValue(IR_Context* ir, Value value)
 {
     IR_Object* obj = ir_find_object_from_value(ir, value);
-    if (obj == NULL) return NULL;
-    return ir_register_get(ir, obj->register_index);
+    if (obj == NULL) return {};
+    return IRRegisterGet(ir, obj->register_index);
 }
 
-String string_from_register(Arena* arena, i32 index)
+I32 RegIndexFromGlobal(U32 global_index)
 {
-    if (index < 0) return "rE";
-    return string_format(arena, "r%i", index);
+    return global_index;
 }
 
-internal_fn String string_from_unit_info(Arena* arena, Unit unit)
+I32 RegIndexFromLocal(U32 local_index)
 {
-    SCRATCH(arena);
+    return local_index + yov->globals.count;
+}
+
+I32 LocalFromRegIndex(I32 register_index)
+{
+    if (register_index < yov->globals.count) return -1;
+    return register_index - yov->globals.count;
+}
+
+String StringFromRegister(Arena* arena, I32 index)
+{
+    Global* global = GlobalFromRegisterIndex(index);
+    if (global != NULL) return global->identifier;
     
-    String dst = string_from_register(scratch.arena, unit.dst_index);
+    I32 local_index = LocalFromRegIndex(index);
+    
+    if (local_index < 0) return "rE";
+    return StrFormat(arena, "r%i", local_index);
+}
+
+internal_fn String StringFromUnitInfo(Arena* arena, Unit unit)
+{
+    String dst = StringFromRegister(context.arena, unit.dst_index);
     
     if (unit.kind == UnitKind_Error) return {};
     
     if (unit.kind == UnitKind_Copy)
     {
-        String src = string_from_value(scratch.arena, unit.copy.src);
-        return string_format(arena, "%S = %S", dst, src);
+        String src = StrFromValue(context.arena, unit.src);
+        return StrFormat(arena, "%S = %S", dst, src);
     }
     
     if (unit.kind == UnitKind_Store)
     {
-        String src = string_from_value(scratch.arena, unit.store.src);
-        return string_format(arena, "%S = %S", dst, src);
+        String src = StrFromValue(context.arena, unit.src);
+        return StrFormat(arena, "%S = %S", dst, src);
     }
     
     if (unit.kind == UnitKind_FunctionCall)
     {
         FunctionDefinition* fn = unit.function_call.fn;
-        StringBuilder builder = string_builder_make(scratch.arena);
+        StringBuilder builder = string_builder_make(context.arena);
         
         if (unit.dst_index >= 0)
         {
             foreach(i, fn->returns.count)
             {
-                appendf(&builder, string_from_register(scratch.arena, unit.dst_index + i));
+                appendf(&builder, StringFromRegister(context.arena, unit.dst_index + i));
                 if (i + 1 < fn->returns.count) {
                     appendf(&builder, ", ");
                 }
@@ -2474,7 +1416,7 @@ internal_fn String string_from_unit_info(Arena* arena, Unit unit)
         appendf(&builder, "%S(", identifier);
         
         foreach(i, params.count) {
-            String param = string_from_value(scratch.arena, params[i]);
+            String param = StrFromValue(context.arena, params[i]);
             appendf(&builder, "%S", param);
             if (i < params.count - 1) append(&builder, ", ");
         }
@@ -2486,8 +1428,8 @@ internal_fn String string_from_unit_info(Arena* arena, Unit unit)
     
     if (unit.kind == UnitKind_Jump)
     {
-        StringBuilder builder = string_builder_make(scratch.arena);
-        String condition = string_from_value(scratch.arena, unit.jump.src);
+        StringBuilder builder = string_builder_make(context.arena);
+        String condition = StrFromValue(context.arena, unit.src);
         if (unit.jump.condition > 0) appendf(&builder, "%S ", condition);
         else if (unit.jump.condition < 0) appendf(&builder, "!%S ", condition);
         appendf(&builder, "%i", unit.jump.offset);
@@ -2497,56 +1439,54 @@ internal_fn String string_from_unit_info(Arena* arena, Unit unit)
     if (unit.kind == UnitKind_BinaryOperation)
     {
         String op = string_from_binary_operator(unit.binary_op.op);
-        String src0 = string_from_value(scratch.arena, unit.binary_op.src0);
-        String src1 = string_from_value(scratch.arena, unit.binary_op.src1);
-        return string_format(arena, "%S = %S %S %S", dst, src0, op, src1);
+        String src0 = StrFromValue(context.arena, unit.src);
+        String src1 = StrFromValue(context.arena, unit.binary_op.src1);
+        return StrFormat(arena, "%S = %S %S %S", dst, src0, op, src1);
     }
     
     if (unit.kind == UnitKind_SignOperation)
     {
         String op = string_from_binary_operator(unit.sign_op.op);
-        String src = string_from_value(scratch.arena, unit.sign_op.src);
-        return string_format(arena, "%S = %S%S", dst, op, src);
+        String src = StrFromValue(context.arena, unit.src);
+        return StrFormat(arena, "%S = %S%S", dst, op, src);
     }
     
     if (unit.kind == UnitKind_Child)
     {
-        Value src = unit.child.src;
+        Value src = unit.src;
         Value index = unit.child.child_index;
-        b32 is_member = unit.child.child_is_member;
-        b32 is_literal_int = index.kind == ValueKind_Literal && index.vtype->ID == VTypeID_Int;
+        B32 is_member = unit.child.child_is_member;
+        B32 is_literal_int = index.kind == ValueKind_Literal && index.vtype == VType_Int;
         
         String op = {};
         
-        if (is_member && src.vtype->kind == VariableKind_Struct && is_literal_int) {
-            op = src.vtype->_struct.names[index.literal_int];
-            op = string_format(scratch.arena, ".%S", op);
+        if (is_member && src.vtype.kind == VKind_Struct && is_literal_int) {
+            op = src.vtype._struct->names[index.literal_int];
+            op = StrFormat(context.arena, ".%S", op);
         }
         else if (!is_member && is_literal_int) {
-            Array<VariableTypeChild> props = vtype_get_properties(src.vtype);
-            op = string_format(scratch.arena, ".%S", props[index.literal_int].name);
+            Array<VariableTypeChild> props = VTypeGetProperties(src.vtype);
+            op = StrFormat(context.arena, ".%S", props[index.literal_int].name);
         }
         else {
-            String index = string_from_value(scratch.arena, unit.child.child_index);
-            op = string_format(scratch.arena, "[%S]", index);
+            String index = StrFromValue(context.arena, unit.child.child_index);
+            op = StrFormat(context.arena, "[%S]", index);
         }
         
-        String src_str = string_from_value(scratch.arena, unit.child.src);
-        return string_format(arena, "%S = %S%S", dst, src_str, op);
+        String src_str = StrFromValue(context.arena, unit.src);
+        return StrFormat(arena, "%S = %S%S", dst, src_str, op);
     }
     
     if (unit.kind == UnitKind_ResultEval) {
-        return string_from_value(arena, unit.result_eval.src);
+        return StrFromValue(arena, unit.src);
     }
     
-    invalid_codepath();
+    InvalidCodepath();
     return {};
 }
 
-String string_from_unit_kind(Arena* arena, UnitKind unit)
+String StringFromUnitKind(Arena* arena, UnitKind unit)
 {
-    SCRATCH(arena);
-    
     if (unit == UnitKind_Error) return "error";
     if (unit == UnitKind_Copy) return "copy";
     if (unit == UnitKind_Store) return "store";
@@ -2559,56 +1499,63 @@ String string_from_unit_kind(Arena* arena, UnitKind unit)
     if (unit == UnitKind_ResultEval) return "res_ev";
     if (unit == UnitKind_Empty) return "empty";
     
-    invalid_codepath();
+    InvalidCodepath();
     return "?";
 }
 
-String string_from_unit(Arena* arena, u32 index, u32 index_digits, u32 line_digits, Unit unit)
+#if DEV
+
+String StringFromUnit(Arena* arena, U32 index, U32 index_digits, U32 line_digits, Unit unit)
 {
-    SCRATCH(arena);
+    StringBuilder builder = string_builder_make(context.arena);
     
-    StringBuilder builder = string_builder_make(scratch.arena);
+    String index_str = StrFormat(context.arena, "%u", index);
+#if DEV_LOCATION_INFO
+    String line_str = StrFormat(context.arena, "%u", unit.location.info.line);
+#else
+    String line_str = "";
+#endif
     
-    String index_str = string_format(scratch.arena, "%u", index);
-    String line_str = string_format(scratch.arena, "%u", unit.code.line);
-    
-    for (u32 i = (u32)index_str.size; i < index_digits; ++i) append(&builder, "0");
+    for (U32 i = (U32)index_str.size; i < index_digits; ++i) append(&builder, "0");
     append(&builder, index_str);
     append(&builder, " (");
-    for (u32 i = (u32)line_str.size; i < line_digits; ++i) append(&builder, "0");
+    for (U32 i = (U32)line_str.size; i < line_digits; ++i) append(&builder, "0");
     append(&builder, line_str);
     append(&builder, ") ");
     
-    String name = string_from_unit_kind(scratch.arena, unit.kind);
+    String name = StringFromUnitKind(context.arena, unit.kind);
     
     append(&builder, name);
-    for (u32 i = (u32)name.size; i < 7; ++i) append(&builder, " ");
+    for (U32 i = (U32)name.size; i < 7; ++i) append(&builder, " ");
     
-    String info = string_from_unit_info(scratch.arena, unit);
+    String info = StringFromUnitInfo(context.arena, unit);
     append(&builder, info);
     
     return string_from_builder(arena, &builder);
 }
 
-void print_units(Array<Unit> units)
+void PrintUnits(Array<Unit> units)
 {
-    SCRATCH();
+    U32 max_index = units.count;
+    U32 max_line = 0;
     
-    u32 max_index = units.count;
-    u32 max_line = 0;
+#if DEV_LOCATION_INFO
     foreach(i, units.count) {
-        max_line = MAX(units[i].code.line, max_line);
+        max_line = Max(units[i].location.info.line, max_line);
     }
+#else
+    max_line = 10000;
+#endif
     
     // TODO(Jose): Use log
-    u32 index_digits = 0;
-    u32 aux = max_index;
+    U32 index_digits = 0;
+    U32 aux = max_index;
     while (aux != 0) {
         aux /= 10;
         index_digits++;
     }
     
-    u32 line_digits = 0;
+    U32 line_digits = 0;
     aux = max_line;
     while (aux != 0) {
         aux /= 10;
@@ -2616,40 +1563,34 @@ void print_units(Array<Unit> units)
     }
     
     foreach(i, units.count) {
-        print_info("%S\n", string_from_unit(scratch.arena, i, index_digits, line_digits, units[i]));
+        PrintEx(PrintLevel_DevLog, "%S\n", StringFromUnit(context.arena, i, index_digits, line_digits, units[i]));
     }
 }
 
-void print_ir(String name, IR ir)
+void PrintIr(String name, IR ir)
 {
-    SCRATCH();
+    PrintEx(PrintLevel_DevLog, "[IR] %S:\n", name);
+    PrintUnits(ir.instructions);
     
-    print_info("%S:\n", name);
-    print_units(ir.instructions);
-    print_info("---\n");
+    if (ir.local_registers.count > 0)
+        PrintEx(PrintLevel_DevLog, "----- REGISTERS -----\n");
     
-    i32 return_index = -1;
-    
-    if (ir.value.kind == ValueKind_Register || ir.value.kind == ValueKind_LValue) {
-        return_index = ir.value.reg.index;
-    }
-    
-    foreach(i, ir.registers.count)
+    foreach(i, ir.local_registers.count)
     {
-        IR_Register reg = ir.registers[i];
+        Register reg = ir.local_registers[i];
         
-        b32 is_param = i < ir.param_count;
-        b32 is_return = return_index == i;
-        b32 is_global = reg.global_identifier.size > 0;
+        B32 is_param = reg.kind == RegisterKind_Parameter;
+        B32 is_return = reg.kind == RegisterKind_Return;
         
-        if (is_param) print_info("[param] ");
-        else if (is_return) print_info("[return] ");
-        assert(is_param + is_return <= 1);
+        if (is_param) PrintEx(PrintLevel_DevLog, "[param] ");
+        else if (is_return) PrintEx(PrintLevel_DevLog, "[return] ");
+        Assert(is_param + is_return <= 1);
         
-        print_info("%S: %S", string_from_register(scratch.arena, i), reg.vtype->name);
-        if (is_global) print_info(" (%S)", reg.global_identifier);
-        print_info("\n");
+        PrintEx(PrintLevel_DevLog, "%S: %S", StringFromRegister(context.arena, RegIndexFromLocal(i)), VTypeGetName(reg.vtype));
+        PrintEx(PrintLevel_DevLog, "\n");
     }
     
-    print_info("\n");
+    PrintEx(PrintLevel_DevLog, SEPARATOR_STRING "\n");
 }
+
+#endif

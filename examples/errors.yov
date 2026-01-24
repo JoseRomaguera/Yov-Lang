@@ -3,7 +3,7 @@
 //    If the return value is used, the program continues.
 //    Otherwise the program exists with a runtime error.
 
-main :: ()
+main :: func
 {
     invalid := "\".txt";
     

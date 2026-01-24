@@ -5,7 +5,7 @@ indent :: (count: Int) -> String {
     return str;
 }
 
-transpile_script :: (script_path: String, result_path: String, function_name: String) -> Result
+transpile_script :: (script_path: String, result_path: String) -> Result
 {
     out := yov_parse(script_path);
     // print_parsing(out);
@@ -17,81 +17,146 @@ transpile_script :: (script_path: String, result_path: String, function_name: St
         return failed("Can't parse script", -1);
     }
     
-    file := "#pragma once\n\n";
+    head := "#pragma once\n\n";
+    
+    head += "void YovDefineCore();\n";
+    head += "void YovResolveCore();\n";
+    head += "\n";
     
     for (fn: out.functions) {
-        file += "void intrinsic__{fn.identifier}(Interpreter* inter, Array<Reference> params, Array<Reference> returns, CodeLocation code);\n";
+        head += "void intrinsic__{fn.identifier}(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location);\n";
     }
+    head += "\n";
     
-    file += "\n";
-    file += "void {function_name}()\n";
-    file += "\{\n";
+    // Enums Array
+    head += "static const char* core_enum_definitions[] = \{\n";
+    for (def: out.enums) {
+        head += "{indent(1)}\"{def.identifier}\",\n";
+    }
+    head += "\};\n\n";
+    
+    // Structs Array
+    head += "static const char* core_struct_definitions[] = \{\n";
+    for (def: out.structs) {
+        head += "{indent(1)}\"{def.identifier}\",\n";
+    }
+    head += "\};\n\n";
+    
+    // Functions Array
+    head += "static const char* core_function_definitions[] = \{\n";
+    for (def: out.functions) {
+        head += "{indent(1)}\"{def.identifier}\",\n";
+    }
+    head += "\};\n\n";
+    
+    // Globals Array
+    head += "static const char* core_global_definitions[] = \{\n";
+    for (def: out.globals) {
+        head += "{indent(1)}\"{def.identifier}\",\n";
+    }
+    head += "\};\n\n";
+    
+    src := "\n";
+    
+    src += "#include \"inc.h\"\n\n";
+    
+    src += "void YovDefineCore()\n";
+    src += "\{\n";
     
     for (def: out.enums)
     {
-        file += "{indent(1)}// {string_from_enum_definition(def)}\n";
-        file += "{indent(1)}\{\n";
-        file += transpile_string_array(2, "names", def.elements);
-        file += transpile_int_array(2, "values", def.values);
-        file += "{indent(2)}define_enum(\"{def.identifier}\", names, values);\n";
-        file += "{indent(1)}\}\n";
+        src += "{indent(1)}// {string_from_enum_definition(def)}\n";
+        src += "{indent(1)}\{\n";
+        src += transpile_string_array(2, "names", def.elements);
+        src += "{indent(2)}EnumDefinition* def = EnumFromIdentifier(\"{def.identifier}\");\n";
+        src += "{indent(2)}EnumDefine(def, names);\n";
+        src += "{indent(1)}\}\n";
     }
     
     for (def: out.structs)
     {
-        file += "{indent(1)}// {string_from_struct_definition(def)}\n";
-        file += "{indent(1)}\{\n";
-        file += transpile_object_definition_array(2, "members", def.members);
-        file += "{indent(2)}VariableType* vtype = vtype_define_struct(\"{def.identifier}\");\n";
-        file += "{indent(2)}vtype_init_struct(vtype, members);\n";
-        file += "{indent(1)}\}\n";
+        src += "{indent(1)}// {string_from_struct_definition(def)}\n";
+        src += "{indent(1)}\{\n";
+        src += transpile_object_definition_array(2, "members", def.members);
+        src += "{indent(2)}StructDefinition* def = StructFromIdentifier(\"{def.identifier}\");\n";
+        src += "{indent(2)}StructDefine(def, members);\n";
+        src += "{indent(1)}\}\n";
     }
     
     for (fn: out.functions)
     {
-        file += "{indent(1)}// {string_from_function_definition(fn)}\n";
-        file += "{indent(1)}\{\n";
-        file += transpile_object_definition_array(2, "parameters", fn.parameters);
-        file += transpile_object_definition_array(2, "returns", fn.returns);
-        file += "{indent(2)}define_intrinsic_function(NO_CODE, intrinsic__{fn.identifier}, \"{fn.identifier}\", parameters, returns);\n";
-        file += "{indent(1)}\}\n";
+        src += "{indent(1)}// {string_from_function_definition(fn)}\n";
+        src += "{indent(1)}\{\n";
+        src += transpile_object_definition_array(2, "parameters", fn.parameters);
+        src += transpile_object_definition_array(2, "returns", fn.returns);
+        src += "{indent(2)}FunctionDefinition* def = FunctionFromIdentifier(\"{fn.identifier}\");\n";
+        src += "{indent(2)}FunctionDefine(def, parameters, returns);\n";
+        src += "{indent(1)}\}\n";
     }
     
     for (def: out.globals)
     {
-        file += "{indent(1)}// {string_from_object_definition(def)}\n";
-        file += "{indent(1)}\{\n";
-        file += "{indent(1)}ObjectDefinition def = {transpile_object_definition(def, true)};\n";
-        file += "{indent(2)}define_global(def);\n";
-        file += "{indent(1)}\}\n";
+        vtype := "vtype_from_name(\"{def.type.name}\")";
+        
+        src += "{indent(1)}// {string_from_object_definition(def)}\n";
+        src += "{indent(1)}\{\n";
+        src += "{indent(2)}I32 index = GlobalIndexFromIdentifier(\"{def.identifier}\");\n";
+        src += "{indent(2)}GlobalDefine(index, {vtype}, {def.is_constant});\n";
+        src += "{indent(1)}\}\n";
     }
     
-    file += "\}\n";
+    src += "\}\n\n";
     
-    //println(file);
+    src += "void YovResolveCore()\n";
+    src += "\{\n";
     
-    write_entire_file(result_path, file);
+    for (def: out.enums)
+    {
+        src += "{indent(1)}// {string_from_enum_definition(def)}\n";
+        src += "{indent(1)}\{\n";
+        src += transpile_int_array(2, "values", def.values);
+        src += "{indent(2)}EnumDefinition* def = EnumFromIdentifier(\"{def.identifier}\");\n";
+        src += "{indent(2)}EnumResolve(def, values);\n";
+        src += "{indent(1)}\}\n";
+    }
+    
+    for (def: out.structs)
+    {
+        src += "{indent(1)}// {string_from_struct_definition(def)}\n";
+        src += "{indent(1)}\{\n";
+        src += "{indent(2)}StructDefinition* def = StructFromIdentifier(\"{def.identifier}\");\n";
+        src += "{indent(2)}StructResolve(def);\n";
+        src += "{indent(1)}\}\n";
+    }
+    
+    for (fn: out.functions)
+    {
+        src += "{indent(1)}// {string_from_function_definition(fn)}\n";
+        src += "{indent(1)}\{\n";
+        src += "{indent(2)}FunctionDefinition* def = FunctionFromIdentifier(\"{fn.identifier}\");\n";
+        src += "{indent(2)}FunctionResolveIntrinsic(def, intrinsic__{fn.identifier});\n";
+        src += "{indent(1)}\}\n";
+    }
+    
+    src += "\}\n";
+    
+    write_entire_file(result_path / "core.h", head);
+    write_entire_file(result_path / "core.cpp", src);
     
     return Result();
 }
 
-transpile_object_definition :: (def: ObjectDefinition, init_default: Bool) -> String
+transpile_object_definition :: (def: ObjectDefinition) -> String
 {
     vtype := "vtype_from_name(\"{def.type.name}\")";
-    ir := "\{\}";
-    
-    if (init_default) {
-        ir = "ir_generate_from_value(value_from_default({vtype}))";
-    }
-    
-    return "obj_def_make(\"{def.identifier}\", {vtype}, {def.is_constant}, {ir})";
+    return "obj_def_make(\"{def.identifier}\", {vtype}, NO_CODE, {def.is_constant}, value_from_zero({vtype}))";
 }
 
 transpile_object_definition_array :: (in: Int, name: String, defs: ObjectDefinition[]) -> String
 {
     values := [defs.count]->String;
     for (def, i: defs) {
-        values[i] = transpile_object_definition(def, false);
+        values[i] = transpile_object_definition(def);
     }
     return transpile_array(in, name, "ObjectDefinition", values);
 }
@@ -111,7 +176,7 @@ transpile_int_array :: (in: Int, name: String, ints: Int[]) -> String
     for (int, i: ints) {
         values[i] = "{int}";
     }
-    return transpile_array(in, name, "i64", values);
+    return transpile_array(in, name, "I64", values);
 }
 
 transpile_array :: (in: Int, name: String, type: String, values: String[]) -> String

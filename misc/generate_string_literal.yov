@@ -1,28 +1,11 @@
 
-script_description :: "Given a .txt file, this script generates a C header file containing the entire text as a string literal.";
-
-src_path :: arg -> String {
-    required = true;
-    description = "path to the source .txt file to read from.";
-}
-
-dst_path :: arg -> String {
-    required = true;
-    description = "path to the destination .h file where the generated string literal will be written.";
-}
-
-expr_name :: arg -> String {
-    required = true;
-    description = "name of the C expression (variable or constant) that will hold the string literal.";
-}
-
-main :: ()
+generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_name: String)
 {
-    println("Reading file: {src_path}");
+    //println("Reading file: {src_path}");
     
     raw := read_entire_file(src_path);
     
-    println("Processing text");
+    //println("Processing text");
     
     lines: String[];
     {
@@ -55,9 +38,9 @@ main :: ()
     
     code += "\"\";";
     
-    println("Writing file: {dst_path}");
+    //println("Writing file: {dst_path}");
     
     write_entire_file(dst_path, code);
     
-    println("Finished");
+    //println("Finished");
 }

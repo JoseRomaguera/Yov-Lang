@@ -1,5 +1,5 @@
 
-main :: ()
+main :: func
 {
     // Multiple expressions
     assert(5 == 5 && 10 + 10 == 20);
@@ -59,13 +59,15 @@ main :: ()
         a, b = -fn_return_two();
         assert(a == -12 && b == -12);
     }
+    
+    assert(I64 == Int);
 }
 
-fn_return_one :: () -> Int {
+fn_return_one :: func -> Int {
     return 69;
 }
 
-fn_return_two :: () -> (r0: Int, r1: Int) {
+fn_return_two :: func -> (r0: Int, r1: Int) {
     r0 = 12;
     r1 = 32;
 }

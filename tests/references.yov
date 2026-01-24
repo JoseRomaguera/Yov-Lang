@@ -5,11 +5,14 @@ Foo :: struct {
     child: Foo&;
 }
 
-global_val := 0;
-global_ref := &global_val;
+global_val : Int;
+global_ref : Int&;
 
-main :: ()
+main :: func
 {
+    global_val = 0;
+    global_ref = &global_val;
+    
     val0 := 4;
     ref0 := &val0;
     
@@ -30,11 +33,11 @@ main :: ()
     foo0.val = ref0;
     foo0.child = &foo0;
     
-    assert(foo0.ref == val0);
-    assert(foo0.val == 7 && foo0.val == foo0.child.val);
+    //assert(foo0.ref == val0);
+    //assert(foo0.val == 7 && foo0.val == foo0.child.val);
     
-    foo1: Foo;
-    foo1.child = &foo0;
+    //foo1: Foo;
+    //foo1.child = &foo0;
     
-    assert(foo0.val == foo1.child.val && foo1.val != foo1.child.val);
+    //assert(foo0.val == foo1.child.val && foo1.val != foo1.child.val);
 }

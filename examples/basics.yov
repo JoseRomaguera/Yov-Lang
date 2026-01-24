@@ -8,7 +8,7 @@ Animal :: enum {
     Cat, Dog, Human = 10
 }
 
-main :: ()
+main :: func
 {
     println("\n-> DEFINITIONS");
     
@@ -161,18 +161,18 @@ main :: ()
     println("Value after: {ret_ref}");
 }
 
-basic_function :: () {
+basic_function :: func {
     println("Hello from function");
 }
 
-function_with_return :: () -> Int {
+function_with_return :: func -> Int {
     return 25;
 }
 
-function_with_params :: (a: Int, b: Int) -> Int {
+function_with_params :: func (a: Int, b: Int) -> Int {
     return a * b;
 }
 
-function_with_refs :: (a: Int&) {
+function_with_refs :: func (a: Int&) {
     a *= 2;
 }
