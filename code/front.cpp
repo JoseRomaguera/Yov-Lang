@@ -128,6 +128,10 @@ Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
     program->script_dir = StrCopy(arena, PathGetFolder(input->main_script_path));
     program->caller_dir = StrCopy(arena, input->caller_dir);
     
+    if (reporter->exit_requested) {
+        return program;
+    }
+    
     FrontContext* front = NULL;
     
     Arena* front_arena = ArenaAlloc(Gb(32), 8);
@@ -149,18 +153,17 @@ Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
     ArenaPopTo(context.arena, 0);
     
 #if LOG_IR_ENABLED
-    PrintIr("Initialize Globals", program->globals_initialize_ir);
+    PrintIr(program, "Initialize Globals", program->globals_initialize_ir);
     foreach(i, program->definitions.count)
     {
         DefinitionHeader* header = &program->definitions[i].header;
         FunctionDefinition* fn = &program->definitions[i].function;
         if (fn->is_intrinsic) continue;
-        PrintIr(fn->identifier, fn->defined.ir);
+        PrintIr(program, fn->identifier, fn->defined.ir);
     }
-}
 #endif
-
-return program;
+    
+    return program;
 }
 
 YovScript* FrontAddScript(FrontContext* front, String path)
@@ -1270,16 +1273,14 @@ void FrontResolveFunction(FrontContext* front, FunctionDefinition* def, CodeDefi
         YovScript* script = FrontGetScript(front, code->entire_location.script_id);
         IR res = MakeIR(front->program->arena, front->program, array_from_pooled_array(context.arena, ir->local_registers), out, script);
         
-        // Validation
+        // Check for returns
         if (res.success)
         {
             Array<Unit> units = res.instructions;
             
             // TODO(Jose): Check for infinite loops
             
-            // Check all paths have a return
-            B32 expects_return = def->returns.count == 1 && StrEquals(def->returns[0].name, "return");
-            if (expects_return && !IRValidateReturnPath(units)) {
+            if (!IRValidateReturnPath(units)) {
                 report_function_no_return(block_location, def->identifier);
             }
         }

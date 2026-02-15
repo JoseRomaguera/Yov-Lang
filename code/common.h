@@ -7,8 +7,7 @@
 
 // DEBUG
 
-#define DEV_ASAN          DEV && 1
-#define DEV_LOCATION_INFO DEV && 0
+#define DEV_ASAN DEV && 1
 
 //-
 
@@ -599,7 +598,7 @@ void LogInternal(String tag, String str, ...);
 
 #define LOG_FLOW_ENABLED DEV && 0
 #define LOG_TYPE_ENABLED DEV && 0
-#define LOG_IR_ENABLED DEV && 0
+#define LOG_IR_ENABLED DEV && 1
 #define LOG_MEMORY_ENABLED DEV && 0
 #define LOG_TRACE_ENABLED DEV && 0
 

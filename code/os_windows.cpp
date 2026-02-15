@@ -920,7 +920,7 @@ void OsConsoleWait()
     HANDLE window = GetConsoleWindow();
     
     while (1) {
-        if (GetAsyncKeyState(VK_RETURN) & 0x8000) {
+        if (GetAsyncKeyState(VK_RETURN) & 1) {
             return;
         }
         OsThreadSleep(50);

@@ -13,9 +13,9 @@ struct Scope {
     I32 pc; // Program Counter
     
     U32 current_line;
+    U32 current_depth;
     String current_path;
     
-    B32 return_requested;
     U32 scratch_arena_index;
     Scope* prev;
 };
@@ -38,6 +38,7 @@ struct Runtime {
     
     Array<Reference> globals;
     Scope* current_scope;
+    Unit* next_unit;
     
     struct {
         Reference yov;
@@ -56,7 +57,12 @@ void RuntimeStart(Runtime* runtime, String function_name);
 void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR ir, Array<Value> params);
 void RuntimePopScope(Runtime* runtime);
 
-B32 RuntimeRunUnit(Runtime* runtime);
+B32 RuntimeFetch(Runtime* runtime);
+B32 RuntimeStep(Runtime* runtime);
+B32 RuntimeStepInto(Runtime* runtime);
+B32 RuntimeStepOver(Runtime* runtime);
+B32 RuntimeStepOut(Runtime* runtime);
+void RuntimeStepAll(Runtime* runtime);
 
 void RuntimePrintScriptHelp(Runtime* runtime);
 
@@ -77,7 +83,7 @@ RedirectStdout RuntimeGetCallsRedirectStdout(Runtime* runtime);
 
 Reference RefFromValue(Runtime* runtime, Scope* scope, Value value);
 
-void RunInstruction(Runtime* runtime, Unit unit, String path);
+void RunInstruction(Runtime* runtime, Unit unit);
 void RunStore(Runtime* runtime, I32 dst_index, Reference src);
 void RunCopy(Runtime* runtime, I32 dst_index, Reference src);
 void RunReturn(Runtime* runtime);

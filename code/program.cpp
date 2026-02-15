@@ -1485,11 +1485,7 @@ String StringFromUnit(Arena* arena, Program* program, U32 index, U32 index_digit
     StringBuilder builder = string_builder_make(context.arena);
     
     String index_str = StrFormat(context.arena, "%u", index);
-#if DEV_LOCATION_INFO
-    String line_str = StrFormat(context.arena, "%u", unit.location.info.line);
-#else
-    String line_str = "";
-#endif
+    String line_str = StrFormat(context.arena, "%u", unit.line);
     
     for (U32 i = (U32)index_str.size; i < index_digits; ++i) append(&builder, "0");
     append(&builder, index_str);

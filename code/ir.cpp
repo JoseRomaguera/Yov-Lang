@@ -987,26 +987,43 @@ IR MakeIR(Arena* arena, Program* program, Array<Register> local_registers, IR_Gr
         rt->jump.offset = jump_index - (I32)it.index - 1;
     }
     
+    String ir_debug_path = {};
+    
+    // DEBUG INFO
+    if (script != NULL)
+    {
+        ir_debug_path = StrCopy(arena, script->path);
+        
+        // Calculate lines
+        foreach(i, instructions.count)
+        {
+            IR_Unit* unit0 = units[mapping[i]];
+            Unit* unit = &instructions[i];
+            
+            unit->line = LineFromLocation(unit0->location, script);
+        }
+    }
+    
+    // Add last return
+    if (instructions.count == 0 || instructions[instructions.count - 1].kind != UnitKind_Return)
+    {
+        Unit ret = {};
+        ret.kind = UnitKind_Return;
+        
+        if (instructions.count > 0) {
+            ret.line = instructions[instructions.count - 1].line + 1;
+        }
+        
+        array_add(&instructions, ret);
+    }
+    
     IR ir = {};
     ir.success = group.success;
     ir.value = group.value;
     ir.local_registers = array_copy(arena, local_registers);
     ir.instructions = array_from_pooled_array(arena, instructions);
     
-    // DEBUG INFO
-    if (script != NULL)
-    {
-        ir.path = StrCopy(arena, script->path);
-        
-        // Calculate lines
-        foreach(i, ir.instructions.count)
-        {
-            IR_Unit* unit0 = units[mapping[i]];
-            Unit* unit = &ir.instructions[i];
-            
-            unit->line = LineFromLocation(unit0->location, script);
-        }
-    }
+    ir.path = ir_debug_path;
     
     // Count params
     foreach(i, ir.local_registers.count) {

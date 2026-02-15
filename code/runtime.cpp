@@ -7,8 +7,7 @@ void ExecuteProgram(Program* program, Reporter* reporter, RuntimeSettings settin
     RuntimeInitializeGlobals(runtime);
     
     RuntimeStart(runtime, "main");
-    
-    while (RuntimeRunUnit(runtime)) {}
+    RuntimeStepAll(runtime);
     
     RuntimeFree(runtime);
 }
@@ -132,7 +131,8 @@ void RuntimeInitializeGlobals(Runtime* runtime)
     if (program->globals_initialize_ir.success)
     {
         RuntimePushScope(runtime, -1, 0, program->globals_initialize_ir, {});
-        while (RuntimeRunUnit(runtime)) {};
+        RuntimeFetch(runtime);
+        RuntimeStepAll(runtime);
     }
     
     F64 ellapsed = TimerNow() - start_time;
@@ -145,6 +145,8 @@ void RuntimeStart(Runtime* runtime, String function_name)
 {
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
+    
+    if (reporter->exit_requested) return;
     
     LogFlow("Starting Execution");
     LogFlow(SEPARATOR_STRING);
@@ -162,6 +164,7 @@ void RuntimeStart(Runtime* runtime, String function_name)
     }
     
     RunFunctionCall(runtime, -1, fn, {});
+    RuntimeFetch(runtime);
 }
 
 void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR ir, Array<Value> params)
@@ -184,6 +187,9 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
     
     scope->prev = runtime->current_scope;
     runtime->current_scope = scope;
+    
+    scope->current_depth = 0;
+    if (scope->prev != NULL) scope->current_depth = scope->prev->current_depth + 1;
     
     // Define params
     {
@@ -236,31 +242,114 @@ void RuntimePopScope(Runtime* runtime)
     }
     
     runtime->current_scope = scope->prev;
-    
 }
 
-B32 RuntimeRunUnit(Runtime* runtime)
+B32 RuntimeFetch(Runtime* runtime)
 {
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     Scope* scope = runtime->current_scope;
-    IR ir = scope->ir;
     
+    runtime->next_unit = NULL;
+    
+    if (scope == NULL) return false;
     if (reporter->exit_requested) return false;
     
-    if (scope->pc >= ir.instructions.count || scope->return_requested)
+    Assert(scope->pc < scope->ir.instructions.count);
+    
+    IR ir = scope->ir;
+    
+    runtime->next_unit = &ir.instructions[scope->pc];
+    scope->pc++;
+    
+    runtime->current_scope->current_line = runtime->next_unit->line;
+    runtime->current_scope->current_path = ir.path;
+    
+    return true;
+}
+
+B32 RuntimeStep(Runtime* runtime)
+{
+    if (runtime->next_unit == NULL) return false;
+    
+    Program* program = runtime->program;
+    Unit unit = *runtime->next_unit;
+    RunInstruction(runtime, unit);
+    
+    //PrintF("\n->%S\n", StringFromUnit(context.arena, program, 0, 3, 3, unit));
+    
+    // TODO(Jose): Free garbage memory
+    
+    return RuntimeFetch(runtime);
+}
+
+B32 RuntimeStepInto(Runtime* runtime)
+{
+    String ref_path = runtime->current_scope->current_path;
+    U32 ref_line = runtime->current_scope->current_line;
+    
+    while (1)
     {
-        RuntimePopScope(runtime);
-        return runtime->current_scope != NULL;
+        if (!RuntimeStep(runtime)) {
+            return false;
+        }
+        
+        String path = runtime->current_scope->current_path;
+        U32 line = runtime->current_scope->current_line;
+        
+        if (ref_line != line || ref_path != path) {
+            break;
+        }
     }
     
-    Unit unit = ir.instructions[scope->pc];
-    scope->pc++;
-    RunInstruction(runtime, unit, ir.path);
-    
-    // TODO(Jose): 
-    //object_free_unused_memory(runtime);
     return true;
+}
+
+B32 RuntimeStepOver(Runtime* runtime)
+{
+    U32 ref_line = runtime->current_scope->current_line;
+    U32 ref_depth = runtime->current_scope->current_depth;
+    
+    while (1)
+    {
+        if (!RuntimeStep(runtime)) {
+            return false;
+        }
+        
+        U32 depth = runtime->current_scope->current_depth;
+        U32 line = runtime->current_scope->current_line;
+        
+        if (ref_line != line && depth <= ref_depth) {
+            break;
+        }
+    }
+    
+    return true;
+}
+
+B32 RuntimeStepOut(Runtime* runtime)
+{
+    U32 ref_depth = runtime->current_scope->current_depth;
+    
+    while (1)
+    {
+        if (!RuntimeStep(runtime)) {
+            return false;
+        }
+        
+        U32 depth = runtime->current_scope->current_depth;
+        
+        if (depth < ref_depth) {
+            break;
+        }
+    }
+    
+    return true;
+}
+
+void RuntimeStepAll(Runtime* runtime)
+{
+    while (RuntimeStep(runtime)) {}
 }
 
 void RuntimePrintScriptHelp(Runtime* runtime)
@@ -516,13 +605,10 @@ Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
     return ref_from_object(null_obj);
 }
 
-void RunInstruction(Runtime* runtime, Unit unit, String path)
+void RunInstruction(Runtime* runtime, Unit unit)
 {
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
-    
-    runtime->current_scope->current_line = unit.line;
-    runtime->current_scope->current_path = path;
     
     I32 dst_index = unit.dst_index;
     
@@ -698,7 +784,6 @@ void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Ar
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
-    
     if (fn->is_intrinsic)
     {
         Array<Reference> returns = array_make<Reference>(context.arena, fn->returns.count);
@@ -725,14 +810,11 @@ void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Ar
     {
         RuntimePushScope(runtime, dst_index, fn->returns.count, fn->defined.ir, parameters);
     }
-    
-    
 }
 
 void RunReturn(Runtime* runtime)
 {
-    Scope* scope = runtime->current_scope;
-    scope->return_requested = true;
+    RuntimePopScope(runtime);
 }
 
 void RunJump(Runtime* runtime, Reference ref, I32 condition, I32 offset)
