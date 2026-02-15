@@ -1,249 +1,251 @@
-#include "inc.h"
+#include "runtime.h"
 
 //- CORE
 
-void Intrinsic_typeof(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_typeof(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
+    Program* program = runtime->program;
+    
     Reference ref = params[0];
     VType vtype = ref.vtype;
     
-    if (vtype == VType_Nil) {
+    if (TypeIsNil(vtype)) {
         InvalidCodepath();
         vtype = VType_Void;
     }
     
-    Reference type = object_alloc(inter, VType_Type);
-    ref_assign_Type(inter, type, vtype);
+    Reference type = object_alloc(runtime, VType_Type);
+    ref_assign_Type(runtime, type, vtype);
     returns[0] = type;
 }
 
-void Intrinsic_print(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_print(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String str = string_from_ref(context.arena, params[0]);
+    String str = StrFromRef(context.arena, runtime, params[0]);
     OsPrint(PrintLevel_UserCode, str);
 }
 
-void Intrinsic_println(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_println(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String str = string_from_ref(context.arena, params[0]);
+    String str = StrFromRef(context.arena, runtime, params[0]);
     PrintEx(PrintLevel_UserCode, "%S\n", str);
 }
 
-void Intrinsic_exit(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_exit(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     I64 exit_code = get_int(params[0]);
-    interpreter_exit(inter, (I32)exit_code);
+    RuntimeExit(runtime, (I32)exit_code);
 }
 
-void Intrinsic_set_cd(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_set_cd(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Reference ref = get_cd(inter);
+    Reference ref = RuntimeGetCurrentDirRef(runtime);
     String path = get_string(params[0]);
     
-    if (!os_path_is_absolute(path)) {
-        path = path_resolve(context.arena, path_append(context.arena, get_string(ref), path));
+    if (!OsPathIsAbsolute(path)) {
+        path = PathResolve(context.arena, PathAppend(context.arena, get_string(ref), path));
     }
     
     Result res;
     
     if (OsPathExists(path)) {
         res = RESULT_SUCCESS;
-        ref_string_set(inter, ref, path);
+        ref_string_set(runtime, ref, path);
     }
     else {
         res = ResultMakeFailed("Path does not exists");
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_assert(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_assert(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     B32 result = get_bool(params[0]);
     
     Result res = RESULT_SUCCESS;
     if (!result) {
-        String line_sample = yov_get_line_sample(context.arena, location);
-        res = ResultMakeFailed(StrFormat(yov->arena, "Assertion failed: %S", line_sample));
+        res = ResultMakeFailed(StrFormat(runtime->arena, "Assertion failed at '%S:%u'", runtime->current_scope->current_path, runtime->current_scope->current_line));
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_failed(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_failed(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String message = get_string(params[0]);
     I64 exit_code = get_int(params[1]);
     
     Result res = ResultMakeFailed(message, exit_code);
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_sleep(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_sleep(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     I64 millis = get_int(params[0]);
-    os_thread_sleep(millis);
+    OsThreadSleep(millis);
 }
 
-void Intrinsic_env(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_env(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
-    Result res = os_env_get(context.arena, &value, name);
+    Result res = OsEnvGet(context.arena, &value, name);
     
-    returns[0] = alloc_string(inter, value);
-    returns[1] = ref_from_Result(inter, res);
+    returns[0] = alloc_string(runtime, value);
+    returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_env_path(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_env_path(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
-    Result res = os_env_get(context.arena, &value, name);
+    Result res = OsEnvGet(context.arena, &value, name);
     
     if (!res.failed) {
-        value = path_resolve(context.arena, value);
+        value = PathResolve(context.arena, value);
     }
     
-    returns[0] = alloc_string(inter, value);
-    returns[1] = ref_from_Result(inter, res);
+    returns[0] = alloc_string(runtime, value);
+    returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_env_path_array(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_env_path_array(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
-    Result res = os_env_get(context.arena, &value, name);
+    Result res = OsEnvGet(context.arena, &value, name);
     
     Reference array;
     
     if (!res.failed)
     {
-        Array<String> values = string_split(context.arena, value, ";");
-        array = alloc_array(inter, VType_String, values.count);
+        Array<String> values = StrSplit(context.arena, value, ";");
+        array = alloc_array(runtime, VType_String, values.count);
         
         foreach(i, values.count) {
-            Reference element = ref_get_member(inter, array, i);
+            Reference element = ref_get_member(runtime, array, i);
             String path = values[i];
-            path = path_resolve(context.arena, path);
-            ref_string_set(inter, element, path);
+            path = PathResolve(context.arena, path);
+            ref_string_set(runtime, element, path);
         }
     }
     else {
-        array = alloc_array(inter, VType_String, 0);
+        array = alloc_array(runtime, VType_String, 0);
     }
     
     returns[0] = array;
-    returns[1] = ref_from_Result(inter, res);
+    returns[1] = ref_from_Result(runtime, res);
 }
 
 //- CONSOLE 
 
-void Intrinsic_console_write(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_console_write(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String str = get_string(params[0]);
     OsPrint(PrintLevel_UserCode, str);
 }
 
-void Intrinsic_console_clear(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_console_clear(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     OsConsoleClear();
 }
 
 //- EXTERNAL CALLS
 
-internal_fn void return_from_external_call(Interpreter* inter, CallOutput res, Array<Reference> returns)
+internal_fn void ReturnFromExternalCall(Runtime* runtime, CallOutput res, Array<Reference> returns)
 {
-    Reference call_result = object_alloc(inter, VType_CallOutput);
-    ref_assign_CallOutput(inter, call_result, res);
+    Program* program = runtime->program;
+    Reference call_result = object_alloc(runtime, VType_CallOutput);
+    ref_assign_CallOutput(runtime, call_result, res);
     
     returns[0] = call_result;
-    returns[1] = ref_from_Result(inter, res.result);
+    returns[1] = ref_from_Result(runtime, res.result);
 }
 
-void Intrinsic_call(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_call(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     CallOutput res = {};
     
     String command_line = get_string(params[0]);
     
-    res.result = user_assertion(inter, StrFormat(context.arena, "Call:\n%S", command_line));
+    res.result = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Call:\n%S", command_line));
     
-    RedirectStdout redirect_stdout = get_calls_redirect_stdout(inter);
+    RedirectStdout redirect_stdout = RuntimeGetCallsRedirectStdout(runtime);
     
     if (!res.result.failed) {
-        res = os_call(context.arena, get_cd_value(inter), command_line, redirect_stdout);
+        res = OsCall(context.arena, RuntimeGetCurrentDirStr(runtime), command_line, redirect_stdout);
     }
     
-    return_from_external_call(inter, res, returns);
+    ReturnFromExternalCall(runtime, res, returns);
 }
 
-void Intrinsic_call_exe(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_call_exe(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String exe_name = get_string(params[0]);
     String args = get_string(params[1]);
     
     CallOutput res{};
     
-    res.result = user_assertion(inter, StrFormat(context.arena, "Call Exe:\n%S %S", exe_name, args));
+    res.result = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Call Exe:\n%S %S", exe_name, args));
     
-    RedirectStdout redirect_stdout = get_calls_redirect_stdout(inter);
+    RedirectStdout redirect_stdout = RuntimeGetCallsRedirectStdout(runtime);
     
     if (!res.result.failed) {
-        res = os_call_exe(context.arena, get_cd_value(inter), exe_name, args, redirect_stdout);
+        res = OsCallExe(context.arena, RuntimeGetCurrentDirStr(runtime), exe_name, args, redirect_stdout);
     }
     
-    return_from_external_call(inter, res, returns);
+    ReturnFromExternalCall(runtime, res, returns);
 }
 
-void Intrinsic_call_script(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_call_script(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String script_name = get_string(params[0]);
     String args = get_string(params[1]);
-    String yov_args = get_string(params[2]);
+    String lang_args = get_string(params[2]);
     
     CallOutput res{};
     
-    res.result = user_assertion(inter, StrFormat(context.arena, "Call Script:\n%S %S %S", yov_args, script_name, args));
+    res.result = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Call Script:\n%S %S %S", lang_args, script_name, args));
     
-    RedirectStdout redirect_stdout = get_calls_redirect_stdout(inter);
+    RedirectStdout redirect_stdout = RuntimeGetCallsRedirectStdout(runtime);
     
     if (!res.result.failed) {
-        res = os_call_script(context.arena, get_cd_value(inter), script_name, args, yov_args, redirect_stdout);
+        res = RuntimeCallScript(runtime, script_name, args, lang_args, redirect_stdout);
     }
     
-    return_from_external_call(inter, res, returns);
+    ReturnFromExternalCall(runtime, res, returns);
 }
 
 //- UTILS
 
-void Intrinsic_path_resolve(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_path_resolve(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String res = path_resolve(context.arena, get_string(params[0]));
-    returns[0] = alloc_string(inter, res);
+    String res = PathResolve(context.arena, get_string(params[0]));
+    returns[0] = alloc_string(runtime, res);
 }
 
-void Intrinsic_str_get_codepoint(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_str_get_codepoint(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String str = get_string(params[0]);
     U64 cursor = get_int(params[1]);
     
-    U32 codepoint = string_get_codepoint(str, &cursor);
+    U32 codepoint = StrGetCodepoint(str, &cursor);
     
-    returns[0] = alloc_int(inter, codepoint);
-    returns[1] = alloc_int(inter, cursor);
+    returns[0] = alloc_int(runtime, codepoint);
+    returns[1] = alloc_int(runtime, cursor);
 }
 
-void Intrinsic_str_split(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_str_split(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String str = get_string(params[0]);
     String separator = get_string(params[1]);
     
-    Array<String> result = string_split(context.arena, str, separator);
+    Array<String> result = StrSplit(context.arena, str, separator);
     
-    Reference array = alloc_array(inter, VType_String, result.count);
+    Reference array = alloc_array(runtime, VType_String, result.count);
     foreach(i, result.count) {
-        ref_set_member(inter, array, i, alloc_string(inter, result[i]));
+        ref_set_member(runtime, array, i, alloc_string(runtime, result[i]));
     }
     
     returns[0] = array;
@@ -302,12 +304,12 @@ internal_fn B32 json_access(String* dst, String json, String searching_name)
     return false;
 }
 
-void Intrinsic_json_route(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_json_route(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String json = get_string(params[0]);
     String route = get_string(params[1]);
     
-    Array<String> names = string_split(context.arena, route, "/");
+    Array<String> names = StrSplit(context.arena, route, "/");
     
     B32 success = true;
     foreach(i, names.count)
@@ -323,13 +325,13 @@ void Intrinsic_json_route(Interpreter* inter, Array<Reference> params, Array<Ref
     Result res = RESULT_SUCCESS;
     if (!success) res = ResultMakeFailed("Json route not found");
     
-    returns[0] = alloc_string(inter, json);
-    returns[1] = ref_from_Result(inter, res);
+    returns[0] = alloc_string(runtime, json);
+    returns[1] = ref_from_Result(runtime, res);
 }
 
 //- YOV
 
-void Intrinsic_yov_require(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_yov_require(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     I64 major = get_int(params[0]);
     I64 minor = get_int(params[1]);
@@ -341,10 +343,10 @@ void Intrinsic_yov_require(Interpreter* inter, Array<Reference> params, Array<Re
         res = ResultMakeFailed(StrFormat(context.arena, "Require version: Yov v%u.%u", major, minor));
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_yov_require_min(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_yov_require_min(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     I64 major = get_int(params[0]);
     I64 minor = get_int(params[1]);
@@ -358,10 +360,10 @@ void Intrinsic_yov_require_min(Interpreter* inter, Array<Reference> params, Arra
         res = ResultMakeFailed(StrFormat(context.arena, "Require minimum version: Yov v%u.%u", major, minor));
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_yov_require_max(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_yov_require_max(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     I64 major = get_int(params[0]);
     I64 minor = get_int(params[1]);
@@ -375,10 +377,10 @@ void Intrinsic_yov_require_max(Interpreter* inter, Array<Reference> params, Arra
         res = ResultMakeFailed(StrFormat(context.arena, "Require maximum version: Yov v%u.%u", major, minor));
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_yov_parse(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_yov_parse(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
 #if 0 // TODO(Jose): 
     SCRATCH();
@@ -403,8 +405,8 @@ void Intrinsic_yov_parse(Interpreter* inter, Array<Reference> params, Array<Refe
     Yov* temp_yov = yov;
     yov = last_yov;
     
-    Reference out = object_alloc(inter, VType_YovParseOutput);
-    ref_assign_YovParseOutput(inter, out, temp_yov);
+    Reference out = object_alloc(runtime, VType_YovParseOutput);
+    ref_assign_YovParseOutput(runtime, out, temp_yov);
     
     yov = temp_yov;
     
@@ -417,181 +419,183 @@ void Intrinsic_yov_parse(Interpreter* inter, Array<Reference> params, Array<Refe
 
 //- MISC
 
-void Intrinsic_ask_yesno(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_ask_yesno(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String content = get_string(params[0]);
-    B32 result = yov_ask_yesno("Ask", content);
-    returns[0] = alloc_bool(inter, result);
+    B32 result = RuntimeAskYesNo(runtime, "Ask", content);
+    returns[0] = alloc_bool(runtime, result);
 }
 
-void Intrinsic_exists(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_exists(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String path = get_string(params[0]);
     B32 result = OsPathExists(path);
-    returns[0] = alloc_bool(inter, result);
+    returns[0] = alloc_bool(runtime, result);
 }
 
-void Intrinsic_create_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_create_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String path = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     B32 recursive = get_bool(params[1]);
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Create directory:\n%S", path));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Create directory:\n%S", path));
     
     if (!res.failed) {
         res = OsCreateDirectory(path, recursive);
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_delete_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_delete_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String path = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Delete directory:\n%S", path));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Delete directory:\n%S", path));
     
     if (!res.failed) {
         res = OsDeleteDirectory(path);
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_copy_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_copy_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String dst = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
-    String src = path_absolute_to_cd(context.arena, inter, get_string(params[1]));
+    String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
+    String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Copy directory\n'%S'\nto\n'%S'", src, dst));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Copy directory\n'%S'\nto\n'%S'", src, dst));
     
     if (!res.failed) {
         res = OsCopyDirectory(dst, src);
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_move_directory(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_move_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String dst = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
-    String src = path_absolute_to_cd(context.arena, inter, get_string(params[1]));
+    String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
+    String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Move directory\n'%S'\nto\n'%S'", src, dst));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Move directory\n'%S'\nto\n'%S'", src, dst));
     
     if (!res.failed) {
         res = OsMoveDirectory(dst, src);
     }
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_copy_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_copy_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String dst = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
-    String src = path_absolute_to_cd(context.arena, inter, get_string(params[1]));
+    String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
+    String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
     CopyMode copy_mode = get_enum_CopyMode(params[2]);
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Copy file\n'%S'\nto\n'%S'", src, dst));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Copy file\n'%S'\nto\n'%S'", src, dst));
     
     if (!res.failed) res = OsCopyFile(dst, src, copy_mode == CopyMode_Override);
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_move_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_move_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String dst = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
-    String src = path_absolute_to_cd(context.arena, inter, get_string(params[1]));
+    String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
+    String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Move file\n'%S'\nto\n'%S'", src, dst));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Move file\n'%S'\nto\n'%S'", src, dst));
     
     if (!res.failed) res = OsMoveFile(dst, src);
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_delete_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_delete_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String path = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Delete file:\n'%S'", path));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Delete file:\n'%S'", path));
     
     if (!res.failed) res = OsDeleteFile(path);
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_write_entire_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_write_entire_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String path = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String content = get_string(params[1]);
     // TODO(Jose): B32 append = get_bool(params[2]);
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Write entire file:\n'%S'", path));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Write entire file:\n'%S'", path));
     if (!res.failed) res = OsWriteEntireFile(path, { content.data, content.size });
     
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_read_entire_file(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_read_entire_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String path = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
-    Result res = user_assertion(inter, StrFormat(context.arena, "Read entire file:\n'%S'", path));
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Read entire file:\n'%S'", path));
     RBuffer content{};
     if (!res.failed) res = OsReadEntireFile(context.arena, path, &content);
     String content_str = StrMake((char*)content.data, content.size);
     
-    returns[0] = alloc_string(inter, content_str);
-    returns[1] = ref_from_Result(inter, res);
+    returns[0] = alloc_string(runtime, content_str);
+    returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_file_get_info(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_file_get_info(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String path = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
+    Program* program = runtime->program;
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
     FileInfo info;
     Result res = OsFileGetInfo(context.arena, path, &info);
     
-    Reference ret = object_alloc(inter, VType_FileInfo);
-    if (!res.failed) ref_assign_FileInfo(inter, ret, info);
+    Reference ret = object_alloc(runtime, VType_FileInfo);
+    if (!res.failed) ref_assign_FileInfo(runtime, ret, info);
     
     returns[0] = ret;
-    returns[1] = ref_from_Result(inter, res);
+    returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_dir_get_files_info(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_dir_get_files_info(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String path = path_absolute_to_cd(context.arena, inter, get_string(params[0]));
+    Program* program = runtime->program;
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
     Array<FileInfo> infos;
     Result res = OsDirGetFilesInfo(context.arena, path, &infos);
     
-    Reference ret = alloc_array(inter, VType_FileInfo, infos.count);
+    Reference ret = alloc_array(runtime, VType_FileInfo, infos.count);
     if (!res.failed) {
         foreach(i, infos.count) {
-            Reference element = ref_get_member(inter, ret, i);
-            ref_assign_FileInfo(inter, element, infos[i]);
+            Reference element = ref_get_member(runtime, ret, i);
+            ref_assign_FileInfo(runtime, element, infos[i]);
         }
     }
     
     returns[0] = ret;
-    returns[1] = ref_from_Result(inter, res);
+    returns[1] = ref_from_Result(runtime, res);
 }
 
 //- MSVC
 
-void Intrinsic_msvc_import_env_x64(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_msvc_import_env_x64(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Result res = MSVCImportEnv(MSVC_Env_x64);
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_msvc_import_env_x86(Interpreter* inter, Array<Reference> params, Array<Reference> returns, Location location)
+void Intrinsic_msvc_import_env_x86(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Result res = MSVCImportEnv(MSVC_Env_x86);
-    returns[0] = ref_from_Result(inter, res);
+    returns[0] = ref_from_Result(runtime, res);
 }
 
 //- REGISTRY 

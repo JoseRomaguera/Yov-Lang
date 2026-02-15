@@ -1,4 +1,4 @@
-#include "inc.h"
+#include "common.h"
 
 void AssertionFailed(const char* text, const char* file, U32 line)
 {
@@ -47,7 +47,7 @@ Arena* ArenaAlloc(U64 capacity, U32 alignment)
 {
     alignment = Max(alignment, 1);
     Arena* arena = (Arena*)OsHeapAllocate(sizeof(Arena));
-    arena->reserved_pages = pages_from_bytes(capacity);
+    arena->reserved_pages = PagesFromBytes(capacity);
     arena->memory = OsReserveVirtualMemory(arena->reserved_pages, false);
     arena->alignment = alignment;
     return arena;
@@ -67,9 +67,9 @@ void ArenaFree(Arena* arena) {
 
 void* ArenaPush(Arena* arena, U64 size)
 {
-    mutex_lock_hot_guard(&arena->mutex);
+    MutexLockGuard(&arena->mutex);
     U64 position = arena->memory_position;
-    position = u64_divide_high(position, arena->alignment) * arena->alignment;
+    position = U64DivideHigh(position, arena->alignment) * arena->alignment;
     
     U64 page_size = system_info.page_size;
     U64 commited_size = (U64)arena->commited_pages * page_size;
@@ -83,9 +83,9 @@ void* ArenaPush(Arena* arena, U64 size)
     
     if (end_position > commited_size)
     {
-        U32 commited_pages_needed = pages_from_bytes(end_position);
+        U32 commited_pages_needed = PagesFromBytes(end_position);
         U32 page_count = commited_pages_needed - arena->commited_pages;
-        page_count = Max(page_count, pages_from_bytes(Kb(200)));
+        page_count = Max(page_count, PagesFromBytes(Kb(200)));
         OsCommitVirtualMemory(arena->memory, arena->commited_pages, page_count);
         arena->commited_pages += page_count;
     }
@@ -102,7 +102,7 @@ void ArenaPopTo(Arena* arena, U64 position)
 #endif
     
     Assert(arena->mutex == 0);
-    mutex_lock_hot_guard(&arena->mutex);
+    MutexLockGuard(&arena->mutex);
     Assert(position <= arena->memory_position);
     U64 bytes_poped = arena->memory_position - position;
     arena->memory_position = position;
@@ -120,7 +120,7 @@ void ArenaProtectAndReset(Arena* arena)
     
     if (arena->reserved_pages * system_info.page_size < Gb(1))
     {
-        arena->reserved_pages = pages_from_bytes(Gb(32));
+        arena->reserved_pages = PagesFromBytes(Gb(32));
         arena->memory = OsReserveVirtualMemory(arena->reserved_pages, false);
     }
 }
@@ -181,7 +181,7 @@ internal_fn I32 lane_entry_point(void* data)
     return 0;
 }
 
-LaneGroup* LaneGroupStart(Arena* arena, LaneFn* fn, U32 lane_count)
+LaneGroup* LaneGroupStart(Arena* arena, LaneFn* fn, void* user_data, U32 lane_count)
 {
     U32 max_lane_count = Max(system_info.logical_cores, 2) - 1;
     
@@ -191,6 +191,7 @@ LaneGroup* LaneGroupStart(Arena* arena, LaneFn* fn, U32 lane_count)
     group->arena = arena;
     group->threads = array_make<OS_Thread>(arena, lane_count);
     group->fn = fn;
+    group->user_data = user_data;
     
     foreach(i, group->threads.count)
     {
@@ -219,7 +220,7 @@ void LaneBarrier(LaneContext* lane)
     
     CompilerReadBarrier();
     U32 barrier_index = *counter / lane->count;
-    AtomicIncrementU32(counter);
+    AtomicIncrement32(counter);
     
     while ((*counter / lane->count) <= barrier_index) {
         OsThreadYield();
@@ -271,7 +272,7 @@ void LaneTaskAdd(LaneGroup* group, U32 count)
     {
         U32 last = group->task_total;
         U32 next = group->task_total + count;
-        B32 success = AtomicExchangeU32(&group->task_total, last, next) == last;
+        B32 success = AtomicCompareExchange32_Full(&group->task_total, last, next) == last;
         if (success) break;
     }
 }
@@ -281,7 +282,7 @@ B32 LaneTaskFetch(LaneGroup* group, U32* index)
     *index = group->task_total;
     while (group->task_next < group->task_total) {
         U32 value = group->task_next;
-        B32 success = value < group->task_total && AtomicExchangeU32(&group->task_next, value, value + 1) == value;
+        B32 success = value < group->task_total && AtomicCompareExchange32_Full(&group->task_next, value, value + 1) == value;
         if (success) {
             *index = value;
             return true;
@@ -298,63 +299,60 @@ B32 LaneDynamicTaskIsBusy(LaneGroup* group)
 
 void LaneDynamicTaskFinish(LaneGroup* group)
 {
-    AtomicIncrementU32(&group->task_finished);
+    AtomicIncrement32(&group->task_finished);
 }
 
-B32 mutex_try_lock(Mutex* mutex)
+B32 MutexTryLock(Mutex* mutex)
 {
-	if (mutex == NULL) return false;
-	
-	CompilerReadBarrier();
-	if (*mutex != 0) return false;
+    return AtomicCompareExchange32_Acquire(mutex, 0, 1) == 0;
+}
+
+void MutexLock(Mutex* mutex)
+{
+    U32 spins = 0;
     
-	Mutex last = AtomicExchangeU32(mutex, 0, 1);
-    
-	CompilerReadBarrier();
-	return last == 0 && *mutex == 1;
+    while (!MutexTryLock(mutex))
+    {
+        while (*mutex == 1) { 
+            _mm_pause();
+            
+            spins++;
+            if (spins > 100) {
+                spins = 0;
+                OsThreadYield();
+            }
+        }
+    }
 }
 
-void mutex_lock(Mutex* mutex) {
-	if (mutex == NULL) return;
-	while (!mutex_try_lock(mutex)) OsThreadYield();
-}
-
-void mutex_lock_hot(Mutex* mutex) {
-	if (mutex == NULL) return;
-	while (!mutex_try_lock(mutex)) {}
-}
-
-B32 mutex_is_locked(Mutex* mutex)
+B32 MutexIsLocked(Mutex* mutex)
 {
-    if (mutex == NULL) return false;
-	
-	CompilerReadBarrier();
-    return (*mutex != 0);
+    CompilerReadBarrier();
+    return *mutex != 0;
 }
 
-void mutex_unlock(Mutex* mutex)
+void MutexUnlock(Mutex* mutex)
 {
-	if (mutex == NULL) return;
-    AtomicExchangeU32(mutex, 1, 0);
+    AtomicStore32(mutex, 0);
 }
 
 //- MATH 
 
-U64 u64_divide_high(U64 n0, U64 n1)
+U64 U64DivideHigh(U64 n0, U64 n1)
 {
     U64 res = n0 / n1;
     if (n0 % n1 != 0) res++;
     return res;
 }
-U32 u32_divide_high(U32 n0, U32 n1)
+U32 U32DivideHigh(U32 n0, U32 n1)
 {
     U32 res = n0 / n1;
     if (n0 % n1 != 0) res++;
     return res;
 }
 
-U32 pages_from_bytes(U64 bytes) {
-    return (U32)u64_divide_high(bytes, system_info.page_size);
+U32 PagesFromBytes(U64 bytes) {
+    return (U32)U64DivideHigh(bytes, system_info.page_size);
 }
 
 //- CSTRING 
@@ -570,7 +568,7 @@ String StrFromRBuffer(RBuffer buffer) {
     return str;
 }
 
-String StringAlloc(Arena* arena, U64 size)
+String StrAlloc(Arena* arena, U64 size)
 {
     String str;
     str.data = (char*)ArenaPush(arena, size + 1);
@@ -583,6 +581,25 @@ String StrCopy(Arena* arena, String src) {
     dst.size = src.size;
     dst.data = (char*)ArenaPush(arena, (U32)dst.size + 1);
     MemoryCopy(dst.data, src.data, src.size);
+    return dst;
+}
+
+Array<String> StrArrayCopy(Arena* arena, Array<String> src)
+{
+    Array<String> dst = array_make<String>(arena, src.count);
+    foreach(i, dst.count) {
+        dst[i] = StrCopy(arena, src[i]);
+    }
+    return dst;
+}
+
+String StrHeapCopy(String src)
+{
+    String dst;
+    dst.size = src.size;
+    dst.data = (char*)OsHeapAllocate(dst.size + 1);
+    MemoryCopy(dst.data, src.data, dst.size);
+    dst.data[dst.size] = '\0';
     return dst;
 }
 
@@ -602,17 +619,17 @@ B32 StrEquals(String s0, String s1) {
     return true;
 }
 
-B32 string_starts(String str, String with) {
+B32 StrStarts(String str, String with) {
     if (with.size > str.size) return false;
     return StrEquals(StrSub(str, 0, with.size), with);
 }
 
-B32 string_ends(String str, String with) {
+B32 StrEnds(String str, String with) {
     if (with.size > str.size) return false;
     return StrEquals(StrSub(str, str.size - with.size, with.size), with);
 }
 
-B32 u32_from_string(U32* dst, String str)
+B32 U32FromString(U32* dst, String str)
 {
 	U32 digits = (U32)str.size;
 	*dst = 0u;
@@ -638,7 +655,7 @@ B32 u32_from_string(U32* dst, String str)
 	return true;
 }
 
-B32 u32_from_char(U32* dst, char c)
+B32 U32FromChar(U32* dst, char c)
 {
     *dst = 0;
 	I32 v = c - '0';
@@ -647,7 +664,7 @@ B32 u32_from_char(U32* dst, char c)
 	return true;
 }
 
-B32 i64_from_string(String str, I64* out)
+B32 I64FromString(String str, I64* out)
 {
     B32 negative = false;
     if (str.size >= 2 && str[0] == '-') {
@@ -681,7 +698,7 @@ B32 i64_from_string(String str, I64* out)
 	return true;
 }
 
-B32 i32_from_string(String str, I32* out)
+B32 I32FromString(String str, I32* out)
 {
     U32 digits = (U32)str.size;
 	*out = 0;
@@ -706,7 +723,7 @@ B32 i32_from_string(String str, I32* out)
 	return true;
 }
 
-String string_from_codepoint(Arena* arena, U32 c)
+String StringFromCodepoint(Arena* arena, U32 c)
 {
     U32 byte_count;
     
@@ -790,7 +807,7 @@ String StringFromEllapsedTime(F64 seconds)
     return StrFormat(arena, "%.2fs", seconds);
 }
 
-String string_join(Arena* arena, LinkedList<String> ll)
+String StrJoin(Arena* arena, LinkedList<String> ll)
 {
     U64 size = 0;
     for (LLNode* node = ll.root; node != NULL; node = node->next) {
@@ -810,7 +827,7 @@ String string_join(Arena* arena, LinkedList<String> ll)
     return StrMake(data, size);
 }
 
-Array<String> string_split(Arena* arena, String str, String separator)
+Array<String> StrSplit(Arena* arena, String str, String separator)
 {
     LinkedList<String> ll = ll_make<String>(context.arena);
     
@@ -873,7 +890,7 @@ String StrReplace(Arena* arena, String str, String old_str, String new_str)
         ll_push(&ll, next);
     }
     
-    return string_join(arena, ll);
+    return StrJoin(arena, ll);
 }
 
 String string_format_with_args(Arena* arena, String string, va_list args)
@@ -955,7 +972,7 @@ String string_format_with_args(Arena* arena, String string, va_list args)
             {
                 cursor++;
                 char num = string[cursor];
-                if (!u32_from_char(&number_of_decimals, num)) invalid_format = true;
+                if (!U32FromChar(&number_of_decimals, num)) invalid_format = true;
                 continue;
             }
             
@@ -983,7 +1000,7 @@ String string_format_ex(Arena* arena, String string, ...)
     return result;
 }
 
-U32 string_get_codepoint(String str, U64* cursor_ptr)
+U32 StrGetCodepoint(String str, U64* cursor_ptr)
 {
     U64 cursor = *cursor_ptr;
     defer(*cursor_ptr = cursor);
@@ -1029,12 +1046,12 @@ U32 string_get_codepoint(String str, U64* cursor_ptr)
     return c;
 }
 
-U32 string_calculate_char_count(String str)
+U32 StrCalculateCharCount(String str)
 {
     U32 count = 0;
     U64 cursor = 0;
     while (cursor < str.size) {
-        string_get_codepoint(str, &cursor);
+        StrGetCodepoint(str, &cursor);
         count++;
     }
     return count;
@@ -1046,7 +1063,7 @@ String escape_string_from_raw_string(Arena* arena, String raw)
     
     U64 cursor = 0;
     while (cursor < raw.size) {
-        U32 codepoint = string_get_codepoint(raw, &cursor);
+        U32 codepoint = StrGetCodepoint(raw, &cursor);
         if (codepoint == '\n') append(&builder, "\\n");
         else if (codepoint == '\r') append(&builder, "\\r");
         else if (codepoint == '\t') append(&builder, "\\t");
@@ -1077,7 +1094,7 @@ B32 codepoint_is_text(U32 codepoint) {
 
 //- PATH 
 
-Array<String> path_subdivide(Arena* arena, String path)
+Array<String> PathSubdivide(Arena* arena, String path)
 {
     PooledArray<String> list = pooled_array_make<String>(context.arena, 32);
     
@@ -1100,12 +1117,12 @@ Array<String> path_subdivide(Arena* arena, String path)
     return array_from_pooled_array(arena, list);
 }
 
-String path_resolve(Arena* arena, String path)
+String PathResolve(Arena* arena, String path)
 {
     String res = path;
     res = StrReplace(context.arena, res, "\\", "/");
     
-    Array<String> elements = path_subdivide(context.arena, res);
+    Array<String> elements = PathSubdivide(context.arena, res);
     
     {
         I32 remove_prev_element_count = 0;
@@ -1131,14 +1148,25 @@ String path_resolve(Arena* arena, String path)
     }
     
     res = string_from_builder(context.arena, &builder);
-    if (os_path_is_directory(res)) res = StrFormat(context.arena, "%S/", res);
+    if (OsPathIsDirectory(res)) res = StrFormat(context.arena, "%S/", res);
     
     return StrCopy(arena, res);
 }
 
-String path_append(Arena* arena, String str0, String str1)
+String PathResolveImport(Arena* arena, String caller_script_dir, String path)
 {
-    if (os_path_is_absolute(str1)) return StrCopy(arena, str0);
+    path = PathResolve(context.arena, path);
+    
+    if (!OsPathIsAbsolute(path)) {
+        path = PathAppend(context.arena, caller_script_dir, path);
+    }
+    
+    return StrCopy(arena, path);
+}
+
+String PathAppend(Arena* arena, String str0, String str1)
+{
+    if (OsPathIsAbsolute(str1)) return StrCopy(arena, str0);
     if (str0.size == 0) return StrCopy(arena, str1);
     if (str1.size == 0) return StrCopy(arena, str0);
     
@@ -1146,12 +1174,20 @@ String path_append(Arena* arena, String str0, String str1)
     return StrFormat(arena, "%S%S", str0, str1);
 }
 
-String path_get_last_element(String path)
+String PathGetLastElement(String path)
 {
     // TODO(Jose): Optimize
-    Array<String> array = path_subdivide(context.arena, path);
+    Array<String> array = PathSubdivide(context.arena, path);
     if (array.count == 0) return {};
     return array[array.count - 1];
+}
+
+String PathGetFolder(String path)
+{
+    if (path.size == 0) return {};
+    I64 cursor = path.size - 1;
+    while (cursor > 0 && path[cursor] != '/') cursor--;
+    return StrSub(path, 0, cursor);
 }
 
 //- STRING BUILDER
@@ -1207,7 +1243,7 @@ void append(StringBuilder* builder, String str)
 }
 
 void append_codepoint(StringBuilder* builder, U32 codepoint) {
-    append(builder, string_from_codepoint(context.arena, codepoint));
+    append(builder, StringFromCodepoint(context.arena, codepoint));
 }
 
 void append_i64(StringBuilder* builder, I64 v, U32 base)
@@ -1240,7 +1276,7 @@ void append_char(StringBuilder* builder, char c) {
 String string_from_builder(Arena* arena, StringBuilder* builder)
 {
     _string_builder_push_buffer(builder);
-    return string_join(arena, builder->ll);
+    return StrJoin(arena, builder->ll);
 }
 
 //- POOLED ARRAY 
@@ -1406,259 +1442,18 @@ U32 array_calculate_index(PooledArrayR* array, void* ptr)
     return U32_MAX;
 }
 
-//- MISC 
-
-ObjectDefinition ObjDefMake(String name, VType vtype, Location location, B32 is_constant, Value value) {
-    ObjectDefinition d{};
-    d.name = name;
-    d.vtype = vtype;
-    d.is_constant = is_constant;
-    d.value = value;
-    d.location = location;
-    return d;
-}
-
-String StringFromDefinitionType(DefinitionType type)
-{
-    if (type == DefinitionType_Function) return "Function";
-    if (type == DefinitionType_Struct) return "Struct";
-    if (type == DefinitionType_Enum) return "Enum";
-    if (type == DefinitionType_Arg) return "Arg";
-    InvalidCodepath();
-    return "?";
-}
+//- LOCATION
 
 Location LocationMake(U64 start, U64 end, I32 script_id)
 {
-    // TODO(Jose): Check for out of range location
-    
     Location location = {};
     location.range = { start, end };
     location.script_id = script_id;
-    
-#if DEV_LOCATION_INFO
-    location.info = LocationInfoMake(script_id, start);
-#endif
-    
     return location;
 }
 
 B32 LocationIsValid(Location location) {
     return location.script_id >= 0;
-}
-
-LocationInfo LocationInfoMake(I32 script_id, U64 cursor)
-{
-    YovScript* script = GetScript(script_id);
-    if (script == NULL) return {};
-    
-    cursor = Min(cursor, script->text.size);
-    
-    LocationInfo info = {};
-    info.line = 1;
-    info.column = 1;
-    info.start_line_cursor = 0;
-    
-    U64 it = 0;
-    while (it <= cursor) {
-        U32 cp = string_get_codepoint(script->text, &it);
-        if (cp == '\n') {
-            info.line++;
-            info.start_line_cursor = it;
-            info.column = 1;
-        }
-        else info.column++;
-    }
-    
-    return info;
-}
-
-String string_from_binary_operator(BinaryOperator op) {
-    if (op == BinaryOperator_Addition) return "+";
-    if (op == BinaryOperator_Substraction) return "-";
-    if (op == BinaryOperator_Multiplication) return "*";
-    if (op == BinaryOperator_Division) return "/";
-    if (op == BinaryOperator_Modulo) return "%";
-    if (op == BinaryOperator_LogicalNot) return "!";
-    if (op == BinaryOperator_LogicalOr) return "||";
-    if (op == BinaryOperator_LogicalAnd) return "&&";
-    if (op == BinaryOperator_Equals) return "==";
-    if (op == BinaryOperator_NotEquals) return "!=";
-    if (op == BinaryOperator_LessThan) return "<";
-    if (op == BinaryOperator_LessEqualsThan) return "<=";
-    if (op == BinaryOperator_GreaterThan) return ">";
-    if (op == BinaryOperator_GreaterEqualsThan) return ">=";
-    if (op == BinaryOperator_Is) return "is";
-    Assert(0);
-    return "?";
-}
-
-B32 binary_operator_is_arithmetic(BinaryOperator op) {
-    if (op == BinaryOperator_Addition) return true;
-    if (op == BinaryOperator_Substraction) return true;
-    if (op == BinaryOperator_Multiplication) return true;
-    if (op == BinaryOperator_Division) return true;
-    if (op == BinaryOperator_Modulo) return true;
-    return false;
-}
-
-String string_from_tokens(Arena* arena, Array<Token> tokens)
-{
-    StringBuilder builder = string_builder_make(context.arena);
-    
-    foreach(i, tokens.count) {
-        append(&builder, tokens[i].value);
-    }
-    
-    String res = string_from_builder(context.arena, &builder);
-    res = StrReplace(context.arena, res, "\n", "\\n");
-    res = StrReplace(context.arena, res, "\r", "");
-    res = StrReplace(context.arena, res, "\t", " ");
-    
-    return StrCopy(arena, res);
-}
-
-String debug_info_from_token(Arena* arena, Token token)
-{
-    TokenKind k = token.kind;
-    
-    if (k == TokenKind_Separator) return "separator";
-    if (k == TokenKind_Identifier) return StrFormat(arena, "identifier: %S", token.value);
-    if (k == TokenKind_IfKeyword) return "if";
-    if (k == TokenKind_ElseKeyword) return "else";
-    if (k == TokenKind_WhileKeyword) return "while";
-    if (k == TokenKind_ForKeyword) return "for";
-    if (k == TokenKind_EnumKeyword) return "enum";
-    if (k == TokenKind_IntLiteral) return StrFormat(arena, "Int Literal: %S", token.value);
-    if (k == TokenKind_BoolLiteral) { return StrFormat(arena, "Bool Literal: %S", token.value); }
-    if (k == TokenKind_StringLiteral) { return StrFormat(arena, "String Literal: %S", token.value); }
-    if (k == TokenKind_Comment) { return StrFormat(arena, "Comment: %S", token.value); }
-    if (k == TokenKind_Comma) return ",";
-    if (k == TokenKind_Dot) return ".";
-    if (k == TokenKind_Colon) return ":";
-    if (k == TokenKind_OpenBrace) return "{";
-    if (k == TokenKind_CloseBrace) return "}";
-    if (k == TokenKind_OpenBracket) return "[";
-    if (k == TokenKind_CloseBracket) return "]";
-    if (k == TokenKind_OpenParenthesis) return "(";
-    if (k == TokenKind_CloseParenthesis) return ")";
-    if (k == TokenKind_Assignment) {
-        if (token.assignment_binary_operator == BinaryOperator_None) return "=";
-        return StrFormat(arena, "%S=", string_from_binary_operator(token.assignment_binary_operator));
-    }
-    if (k == TokenKind_PlusSign) return "+";
-    if (k == TokenKind_MinusSign) return "-";
-    if (k == TokenKind_Asterisk) return "*";
-    if (k == TokenKind_Slash) return "/";
-    if (k == TokenKind_Modulo) return "%";
-    if (k == TokenKind_Ampersand) return "&";
-    if (k == TokenKind_Exclamation) return "!";
-    if (k == TokenKind_LogicalOr) return "||";
-    if (k == TokenKind_LogicalAnd) return "&&";
-    if (k == TokenKind_CompEquals) return "==";
-    if (k == TokenKind_CompNotEquals) return "!=";
-    if (k == TokenKind_CompLess) return "<";
-    if (k == TokenKind_CompLessEquals) return "<=";
-    if (k == TokenKind_CompGreater) return ">";
-    if (k == TokenKind_CompGreaterEquals) return ">=";
-    if (k == TokenKind_OpenString) return "Open String";
-    if (k == TokenKind_NextLine) return "Next Line";
-    if (k == TokenKind_CloseString) return "Close String";
-    if (k == TokenKind_NextSentence) return ";";
-    if (k == TokenKind_Error) return "Error";
-    if (k == TokenKind_None) return "None";
-    
-    return "?";
-}
-
-BinaryOperator binary_operator_from_token(TokenKind token)
-{
-    if (token == TokenKind_PlusSign) return BinaryOperator_Addition;
-    if (token == TokenKind_MinusSign) return BinaryOperator_Substraction;
-    if (token == TokenKind_Asterisk) return BinaryOperator_Multiplication;
-    if (token == TokenKind_Slash) return BinaryOperator_Division;
-    if (token == TokenKind_Modulo) return BinaryOperator_Modulo;
-    if (token == TokenKind_Ampersand) return BinaryOperator_None;
-    if (token == TokenKind_Exclamation) return BinaryOperator_LogicalNot;
-    if (token == TokenKind_LogicalOr) return BinaryOperator_LogicalOr;
-    if (token == TokenKind_LogicalAnd) return BinaryOperator_LogicalAnd;
-    if (token == TokenKind_CompEquals) return BinaryOperator_Equals;
-    if (token == TokenKind_CompNotEquals) return BinaryOperator_NotEquals;
-    if (token == TokenKind_CompLess) return BinaryOperator_LessThan;
-    if (token == TokenKind_CompLessEquals) return BinaryOperator_LessEqualsThan;
-    if (token == TokenKind_CompGreater) return BinaryOperator_GreaterThan;
-    if (token == TokenKind_CompGreaterEquals) return BinaryOperator_GreaterEqualsThan;
-    if (token == TokenKind_IsKeyword) return BinaryOperator_Is;
-    return BinaryOperator_None;
-};
-
-B32 token_is_sign_or_binary_op(TokenKind token)
-{
-    TokenKind tokens[] = {
-        TokenKind_PlusSign,
-        TokenKind_MinusSign,
-        TokenKind_Asterisk,
-        TokenKind_Slash,
-        TokenKind_Modulo,
-        TokenKind_Ampersand,
-        TokenKind_Exclamation,
-        
-        TokenKind_LogicalOr,
-        TokenKind_LogicalAnd,
-        
-        TokenKind_CompEquals,
-        TokenKind_CompNotEquals,
-        TokenKind_CompLess,
-        TokenKind_CompLessEquals,
-        TokenKind_CompGreater,
-        TokenKind_CompGreaterEquals,
-        
-        TokenKind_IsKeyword,
-    };
-    
-    foreach(i, countof(tokens)) {
-        if (tokens[i] == token) return true;
-    }
-    return false;
-}
-
-B32 TokenIsFlowModifier(TokenKind token) {
-    if (token == TokenKind_IfKeyword) return true;
-    if (token == TokenKind_ElseKeyword) return true;
-    if (token == TokenKind_WhileKeyword) return true;
-    if (token == TokenKind_ForKeyword) return true;
-    return false;
-}
-
-TokenKind TokenKindFromOpenScope(TokenKind open_token)
-{
-    if (open_token == TokenKind_OpenParenthesis) return TokenKind_CloseParenthesis;
-    if (open_token == TokenKind_OpenBracket) return TokenKind_CloseBracket;
-    if (open_token == TokenKind_OpenBrace) return TokenKind_CloseBrace;
-    
-    InvalidCodepath();
-    return TokenKind_Error;
-}
-
-Location LocationFromTokens(Array<Token> tokens)
-{
-    if (tokens.count == 0) return NO_CODE;
-    
-#if DEV
-    foreach(i, tokens.count - 1)
-    {
-        Token t0 = tokens[i + 0];
-        Token t1 = tokens[i + 1];
-        Assert(t0.cursor + t0.skip_size == t1.cursor);
-        Assert(t0.location.script_id == t1.location.script_id);
-    }
-#endif
-    
-    Token first_token = tokens[0];
-    Token last_token = tokens[tokens.count - 1];
-    
-    I32 script_id = first_token.location.script_id;
-    return LocationMake(first_token.cursor, last_token.cursor + last_token.skip_size, script_id);
 }
 
 //- REPORT 
@@ -1690,55 +1485,91 @@ void LogInternal(String tag, String str, ...)
 }
 
 YovSystemInfo system_info; 
-Yov* yov;
 per_thread_var YovThreadContext context;
 
-void yov_initialize_thread()
+void InitializeThread()
 {
     context.arena = ArenaAlloc(Gb(16), 8);
 }
 
-void yov_shutdown_thread()
+void ShutdownThread()
 {
     ArenaFree(context.arena);
 }
 
-void yov_initialize()
+Reporter* ReporterAlloc(Arena* arena)
 {
-    Arena* arena = ArenaAlloc(Gb(32), 8);
-    
-    yov = ArenaPushStruct<Yov>(arena);
-    
-    yov->arena = arena;
-    
-    OsInitialize();
-    
-    yov->scripts = pooled_array_make<YovScript>(yov->arena, 8);
-    yov->reports = pooled_array_make<Report>(yov->arena, 32);
-    yov->caller_dir = os_get_working_path(yov->arena);
-    
-    Interpreter* inter = ArenaPushStruct<Interpreter>(yov->arena);
-    yov->inter = inter;
-    
-    inter->global_scope = ArenaPushStruct<Scope>(yov->arena);
-    inter->current_scope = inter->global_scope;
+    Reporter* reporter = ArenaPushStruct<Reporter>(arena);
+    reporter->arena = arena;
+    reporter->reports = pooled_array_make<Report>(arena, 32);
+    return reporter;
 }
 
-void yov_shutdown()
+void ReportErrorEx(Reporter* reporter, Location location, U32 line, String path, String text, ...)
 {
-    if (yov == NULL) return;
+    va_list args;
+    va_start(args, text);
+    String formatted_text = string_format_with_args(context.arena, text, args);
+    va_end(args);
     
-    if (yov->settings.wait_end) {
-        os_console_wait();
+    Report report;
+    report.text = StrCopy(reporter->arena, formatted_text);
+    report.location = location;
+    report.line = line;
+    report.path = StrCopy(reporter->arena, path);
+    
+    MutexLock(&reporter->mutex);
+    array_add(&reporter->reports, report);
+    reporter->exit_requested = true;
+    if (!reporter->exit_code_is_set) {
+        reporter->exit_code = -1;
     }
-    
-    OsShutdown();
-    
-    ArenaFree(yov->arena);
-    yov = NULL;
+    MutexUnlock(&reporter->mutex);
 }
 
-internal_fn Array<ScriptArg> generate_script_args(Arena* arena, Array<String> raw_args)
+void ReporterSetExitCode(Reporter* reporter, I64 exit_code)
+{
+    MutexLockGuard(&reporter->mutex);
+    
+    if (reporter->exit_code_is_set) return;
+    reporter->exit_code_is_set = true;
+    reporter->exit_code = exit_code;
+    reporter->exit_requested = true;
+}
+
+internal_fn I32 ReportCompare(const void* _0, const void* _1)
+{
+    const Report* r0 = (const Report*)_0;
+    const Report* r1 = (const Report*)_1;
+    
+    if (r0->location.range.min == r1->location.range.min) return 0;
+    return (r0->location.range.min < r1->location.range.min) ? -1 : 1;
+}
+
+void ReporterPrint(Reporter* reporter)
+{
+    Array<Report> reports = array_from_pooled_array(context.arena, reporter->reports);
+    array_sort(reports, ReportCompare);
+    
+    foreach(i, reports.count) {
+        PrintReport(reports[i]);
+    }
+}
+
+String StringFromReport(Arena* arena, Report report)
+{
+    if (report.path.size == 0 || report.line == 0) return StrCopy(arena, report.text);
+    else {
+        return StrFormat(arena, "%S(%u): %S", report.path, (U32)report.line, report.text);
+    }
+}
+
+void PrintReport(Report report) {
+    String str = StringFromReport(context.arena, report);
+    PrintEx(PrintLevel_ErrorReport, "%S\n", str);
+}
+
+internal_fn Array<ScriptArg> GenerateScriptArgs(Arena* arena, Reporter* reporter, Array<String> raw_args)
 {
     Array<ScriptArg> args = array_make<ScriptArg>(arena, raw_args.count);
     
@@ -1746,19 +1577,19 @@ internal_fn Array<ScriptArg> generate_script_args(Arena* arena, Array<String> ra
     {
         String raw = raw_args[i];
         
-        Array<String> split = string_split(context.arena, raw, "=");
+        Array<String> split = StrSplit(context.arena, raw, "=");
         
         ScriptArg arg{};
         if (split.count == 1) {
-            arg.name = split[0];
+            arg.name = StrCopy(arena, split[0]);
             arg.value = "";
         }
         else if (split.count == 2) {
-            arg.name = split[0];
-            arg.value = split[1];
+            arg.name = StrCopy(arena, split[0]);
+            arg.value = StrCopy(arena, split[1]);
         }
         else {
-            report_error(NO_CODE, "Invalid arg '%S', expected format: name=value\n", raw);
+            ReportErrorNoCode("Invalid arg '%S', expected format: name=value\n", raw);
             arg.name = "?";
             arg.value = "0";
         }
@@ -1771,300 +1602,71 @@ internal_fn Array<ScriptArg> generate_script_args(Arena* arena, Array<String> ra
 
 #include "autogenerated/help.h"
 
-#define YOV_ARG_ANALYZE STR("-analyze")
-#define YOV_ARG_TRACE STR("-trace")
-#define YOV_ARG_USER_ASSERT STR("-user_assert")
-#define YOV_ARG_WAIT_END STR("-wait_end")
-#define YOV_ARG_NO_USER STR("-no_user")
-
-void yov_config_from_args()
+Input* InputFromArgs(Arena* arena, Reporter* reporter)
 {
-    Array<String> args = os_get_args(context.arena);
+    Input* input = ArenaPushStruct<Input>(arena);
+    input->caller_dir = StrCopy(arena, system_info.working_path);
     
-    String path = {};
+    Array<String> args = OsGetArgs(context.arena);
     I32 script_args_start_index = args.count;
-    
-    YovSettings settings = {};
     
     foreach(i, args.count)
     {
         String arg = args[i];
         
         if (arg.size > 0 && arg[0] != '-') {
-            path = arg;
+            input->main_script_path = arg;
             script_args_start_index = i + 1;
             break;
         }
         
-        if (StrEquals(arg, YOV_ARG_ANALYZE)) settings.analyze_only = true;
-        else if (StrEquals(arg, YOV_ARG_TRACE)) settings.trace = true;
-        else if (StrEquals(arg, YOV_ARG_USER_ASSERT)) settings.user_assert = true;
-        else if (StrEquals(arg, YOV_ARG_WAIT_END)) settings.wait_end = true;
-        else if (StrEquals(arg, YOV_ARG_NO_USER)) settings.no_user = true;
+        if (StrEquals(arg, LANG_ARG_ANALYZE)) input->settings.analyze_only = true;
+        else if (StrEquals(arg, LANG_ARG_TRACE)) input->settings.trace = true;
+        else if (StrEquals(arg, LANG_ARG_USER_ASSERT)) input->settings.user_assert = true;
+        else if (StrEquals(arg, LANG_ARG_WAIT_END)) input->settings.wait_end = true;
+        else if (StrEquals(arg, LANG_ARG_NO_USER)) input->settings.no_user = true;
         else if (StrEquals(arg, "-help") || StrEquals(arg, "-h")) {
             PrintF("Yov Programming Language %S\n", YOV_VERSION);
-            PrintF("Location: %S\n\n", os_get_executable_path(context.arena));
+            PrintF("Location: %S\n\n", system_info.executable_path);
             PrintF(YOV_HELP_STR);
-            yov->exit_requested = true;
-            return;
+            reporter->exit_requested = true;
+            return input;
         }
         else if (StrEquals(arg, "-version") || StrEquals(arg, "-v")) {
             PrintF("Yov Programming Language %S\n", YOV_VERSION);
-            yov->exit_requested = true;
-            return;
+            reporter->exit_requested = true;
+            return input;
         }
         else {
-            report_error(NO_CODE, "Unknown Yov argument '%S'\n", arg);
+            ReportErrorNoCode("Unknown Yov argument '%S'\n", arg);
         }
     }
     
-    if (path.size == 0) {
-        report_error(NO_CODE, "Script not specified");
-        return;
+    if (input->main_script_path.size == 0) {
+        ReportErrorNoCode("Script not specified");
+        return input;
     }
     
     Array<String> script_args_str = array_subarray(args, script_args_start_index, args.count - script_args_start_index);
-    Array<ScriptArg> script_args = generate_script_args(context.arena, script_args_str);
+    input->script_args = GenerateScriptArgs(arena, reporter, script_args_str);
     
-    path = resolve_import_path(context.arena, os_get_working_path(context.arena), path);
+    input->main_script_path = PathResolveImport(arena, input->caller_dir, input->main_script_path);
     
-    yov_config(path, settings, script_args);
-}
-
-void yov_config(String path, YovSettings settings, Array<ScriptArg> script_args)
-{
-    yov->settings = settings;
-    yov->main_script_path = StrCopy(yov->arena, path);
-    yov->script_args = array_copy(yov->arena, script_args);
-    foreach(i, yov->script_args.count) {
-        yov->script_args[i].name = StrCopy(yov->arena, script_args[i].name);
-        yov->script_args[i].value = StrCopy(yov->arena, script_args[i].value);
-    }
-    
-    ScriptArg* help_arg = yov_find_script_arg("-help");
-    
-    if (help_arg != NULL && !StrEquals(help_arg->value, "")) {
-        report_arg_wrong_value(NO_CODE, help_arg->name, help_arg->value);
-    }
-}
-
-String resolve_import_path(Arena* arena, String caller_script_dir, String path)
-{
-    path = path_resolve(context.arena, path);
-    
-    if (!os_path_is_absolute(path)) {
-        path = path_append(context.arena, caller_script_dir, path);
-    }
-    
-    return StrCopy(arena, path);
-}
-
-void yov_set_exit_code(I64 exit_code)
-{
-    if (yov->exit_code_is_set) return;
-    yov->exit_code_is_set = true;
-    yov->exit_code = exit_code;
-}
-
-void yov_print_script_help()
-{
-    StringBuilder builder = string_builder_make(context.arena);
-    
-    // Script description
     {
-        Global* global = GlobalFromIdentifier("script_description");
+        ScriptArg* help_arg = InputFindScriptArg(input, "-help");
         
-        if (global != NULL) {
-            InvalidCodepath();
-#if 0 // TODO(Jose): 
-            Value value = def->initialize_ir.value;
-            Reference ref = ref_from_value(yov->inter->global_scope, value);
-            String description = string_from_ref(context.arena, ref, true);
-            
-            append(&builder, description);
-            append(&builder, "\n\n");
-#endif
+        if (help_arg != NULL && !StrEquals(help_arg->value, "")) {
+            report_arg_wrong_value(help_arg->name, help_arg->value);
         }
     }
     
-    Array<String> headers = array_make<String>(context.arena, yov->arg_count);
-    
-    U32 index = 0;
-    U32 longest_header = 0;
-    foreach(i, yov->definitions.count)
-    {
-        ArgDefinition* arg = &yov->definitions[i].arg;
-        if (arg->type != DefinitionType_Arg) continue;
-        
-        B32 show_type = arg->vtype != VType_Bool && VTypeValid(arg->vtype);
-        
-        String space = "    ";
-        
-        String header;
-        if (show_type)
-        {
-            VType type = arg->vtype;
-            
-            String type_str;
-            if (type.kind == VKind_Enum) {
-                type_str = "enum";
-            }
-            else {
-                type_str = VTypeGetName(arg->vtype);
-            }
-            header = StrFormat(context.arena, "%S%S -> %S", space, arg->name, type_str);
-        }
-        else {
-            header = StrFormat(context.arena, "%S%S", space, arg->name);
-        }
-        
-        headers[index++] = header;
-        
-        U32 char_count = string_calculate_char_count(header);
-        longest_header = Max(longest_header, char_count);
-    }
-    
-    U32 chars_to_description = longest_header + 4;
-    
-    index = 0;
-    appendf(&builder, "Script Arguments:\n");
-    foreach(i, yov->definitions.count)
-    {
-        ArgDefinition* arg = &yov->definitions[i].arg;
-        if (arg->type != DefinitionType_Arg) continue;
-        
-        String header = headers[index++];
-        
-        append(&builder, header);
-        
-        if (arg->description.size != 0)
-        {
-            U32 char_count = string_calculate_char_count(header);
-            for (U32 i = char_count; i < chars_to_description; ++i) {
-                append(&builder, " ");
-            }
-            
-            appendf(&builder, "%S", arg->description);
-        }
-        appendf(&builder, "\n");
-    }
-    
-    String log = string_from_builder(context.arena, &builder);
-    PrintF(log);
+    return input;
 }
 
-YovScript* GetScript(I32 script_id)
-{
-    if (script_id < 0) return NULL;
-    
-    if (script_id >= yov->scripts.count) {
-        Assert(0);
-        return NULL;
-    }
-    
-    return &yov->scripts[script_id];
-}
-
-String yov_get_line_sample(Arena* arena, Location location)
-{
-    if (location.script_id < 0) return {};
-    
-    LocationInfo info = LocationInfoMake(location.script_id, location.range.min);
-    
-    String text = GetScript(location.script_id)->text;
-    U64 starting_cursor = info.start_line_cursor;
-    
-    U64 cursor = starting_cursor;
-    while (cursor < text.size) {
-        U64 next_cursor = cursor;
-        U32 codepoint = string_get_codepoint(text, &next_cursor);
-        if (codepoint == '\r') break;
-        if (codepoint == '\n') break;
-        if (cursor == starting_cursor && (codepoint == '\t' || codepoint == ' ')) starting_cursor = next_cursor;
-        cursor = next_cursor;
-    }
-    
-    String sample = StrSub(text, starting_cursor, cursor - starting_cursor);
-    return StrFormat(arena, "'%S'", sample);
-}
-
-ScriptArg* yov_find_script_arg(String name) {
-    foreach(i, yov->script_args.count) {
-        ScriptArg* arg = &yov->script_args[i];
+ScriptArg* InputFindScriptArg(Input* input, String name) {
+    foreach(i, input->script_args.count) {
+        ScriptArg* arg = &input->script_args[i];
         if (StrEquals(arg->name, name)) return arg;
     }
     return NULL;
 }
-
-String yov_get_inherited_args(Arena* arena)
-{
-    StringBuilder builder = string_builder_make(context.arena);
-    
-    if (yov->settings.analyze_only) appendf(&builder, "%S ", YOV_ARG_ANALYZE);
-    if (yov->settings.user_assert) appendf(&builder, "%S ", YOV_ARG_USER_ASSERT);
-    if (yov->settings.no_user) appendf(&builder, "%S ", YOV_ARG_NO_USER);
-    
-    return string_from_builder(arena, &builder);
-}
-
-B32 yov_ask_yesno(String title, String message)
-{
-    if (yov->settings.no_user) return true;
-    return os_ask_yesno(title, message);
-}
-
-void report_error_ex(Location location, String text, ...)
-{
-    va_list args;
-    va_start(args, text);
-    String formatted_text = string_format_with_args(context.arena, text, args);
-    va_end(args);
-    
-    String line_sample = yov_get_line_sample(context.arena, location);
-    formatted_text = StrReplace(context.arena, formatted_text, "{line}", line_sample);
-    
-    Report report;
-    report.text = StrCopy(yov->arena, formatted_text);
-    report.location = location;
-    
-    mutex_lock_hot(&yov->reports_mutex);
-    array_add(&yov->reports, report);
-    yov->exit_requested = true;
-    mutex_unlock(&yov->reports_mutex);
-}
-
-internal_fn I32 report_compare(const void* _0, const void* _1)
-{
-    const Report* r0 = (const Report*)_0;
-    const Report* r1 = (const Report*)_1;
-    
-    if (r0->location.range.min == r1->location.range.min) return 0;
-    return (r0->location.range.min < r1->location.range.min) ? -1 : 1;
-}
-
-void yov_print_reports()
-{
-    Array<Report> reports = array_from_pooled_array(context.arena, yov->reports);
-    array_sort(reports, report_compare);
-    
-    foreach(i, reports.count) {
-        print_report(reports[i]);
-    }
-}
-
-String string_from_report(Arena* arena, Report report)
-{
-    YovScript* script = GetScript(report.location.script_id);
-    if (script == NULL) return StrFormat(arena, "%S", report.text);
-    else {
-        LocationInfo info = LocationInfoMake(report.location.script_id, report.location.range.min);
-        return StrFormat(arena, "%S(%u): %S", script->path, (U32)info.line, report.text);
-    }
-}
-
-void print_report(Report report)
-{
-    String str = string_from_report(context.arena, report);
-    PrintEx(PrintLevel_ErrorReport, "%S\n", str);
-}
-

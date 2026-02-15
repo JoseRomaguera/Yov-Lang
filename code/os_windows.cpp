@@ -1,4 +1,4 @@
-#include "inc.h"
+#include "common.h"
 
 #if OS_WINDOWS
 
@@ -42,7 +42,7 @@ internal_fn void SetConsoleTextColor(HANDLE std, PrintLevel level)
     SetConsoleTextAttribute(std, (WORD)att);
 }
 
-void OsSetupSystemInfo()
+void SetupGlobals()
 {
     SYSTEM_INFO info;
     GetSystemInfo(&info);
@@ -54,20 +54,40 @@ void OsSetupSystemInfo()
     system_info.timer_frequency = _windows_clock_frequency.QuadPart;
     
     system_info.timer_start = OsTimerGet();
+    
+    InitializeThread();
+    
+    // Working path
+    {
+        U32 buffer_size = GetCurrentDirectory(0, NULL) + 1;
+        char* dst = (char*)ArenaPush(context.arena, buffer_size);
+        GetCurrentDirectory(buffer_size, dst);
+        
+        system_info.working_path = PathResolve(context.arena, dst);
+        system_info.working_path = StrHeapCopy(system_info.working_path);
+    }
+    
+    // Executable Path
+    {
+        char buffer[MAX_PATH];
+        U32 size = GetModuleFileNameA(NULL, buffer, MAX_PATH);
+        char* dst = (char*)ArenaPush(context.arena, size + 1);
+        MemoryCopy(dst, buffer, size);
+        system_info.executable_path = PathResolve(context.arena, StrMake(dst, size));
+        system_info.executable_path = StrHeapCopy(system_info.executable_path);
+    }
+    
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 }
 
 internal_fn HANDLE get_std_handle() {
     return GetStdHandle(STD_OUTPUT_HANDLE);
 }
 
-void OsInitialize()
+void ShutdownGlobals()
 {
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-}
-
-void OsShutdown()
-{
+    ShutdownThread();
     SetConsoleTextColor(get_std_handle(), PrintLevel_UserCode);
 }
 
@@ -138,8 +158,8 @@ void OsProtectVirtualMemory(void* address, U32 pages)
 
 DWORD WINAPI win_thread_main(LPVOID param)
 {
-    yov_initialize_thread();
-    defer(yov_shutdown_thread());
+    InitializeThread();
+    defer(ShutdownThread());
     
     defer(OsHeapFree(param));
     ThreadFn* fn = *(ThreadFn**)param;
@@ -318,7 +338,7 @@ Result OsDeleteFile(String path)
 
 internal_fn Result CreateRecursivePath(String path)
 {
-    Array<String> splits = string_split(context.arena, path, "/");
+    Array<String> splits = StrSplit(context.arena, path, "/");
     Array<String> folders = array_make(splits.data, splits.count - 1);
     
     String last_folder = "";
@@ -593,7 +613,7 @@ Result OsDirGetFilesInfo(Arena* arena, String path, Array<FileInfo>* ret)
     {
         StringBuilder builder = string_builder_make(context.arena);
         
-        if (!os_path_is_absolute(path)) {
+        if (!OsPathIsAbsolute(path)) {
             append(&builder, ".\\");
         }
         
@@ -629,14 +649,14 @@ Result OsDirGetFilesInfo(Arena* arena, String path, Array<FileInfo>* ret)
 }
 
 
-B32 os_ask_yesno(String title, String content)
+B32 OsAskYesNo(String title, String content)
 {
     String title0 = StrCopy(context.arena, title);
     String content0 = StrCopy(context.arena, content);
     return MessageBox(0, content0.data, title0.data, MB_YESNO | MB_ICONQUESTION) == IDYES;
 }
 
-CallOutput os_call(Arena* arena, String working_dir, String command, RedirectStdout redirect_stdout)
+CallOutput OsCall(Arena* arena, String working_dir, String command, RedirectStdout redirect_stdout)
 {
     if (working_dir.size == 0) working_dir = ".";
     
@@ -768,13 +788,13 @@ CallOutput os_call(Arena* arena, String working_dir, String command, RedirectStd
     // Import env
     if (res.result.code == 0 && redirect_stdout == RedirectStdout_ImportEnv)
     {
-        Array<String> split = string_split(context.arena, res.stdout, env_separator);
+        Array<String> split = StrSplit(context.arena, res.stdout, env_separator);
         if (split.count != 2) {
             res.result = ResultMakeFailed("Wrong environment format");
             return res;
         }
         
-        Array<String> envs = string_split(context.arena, split[1], "\r\n");
+        Array<String> envs = StrSplit(context.arena, split[1], "\r\n");
         foreach(i, envs.count)
         {
             String env = envs[i];
@@ -806,39 +826,13 @@ CallOutput os_call(Arena* arena, String working_dir, String command, RedirectStd
     return res;
 }
 
-CallOutput os_call_exe(Arena* arena, String working_dir, String exe, String args, RedirectStdout redirect_stdout)
+CallOutput OsCallExe(Arena* arena, String working_dir, String exe, String args, RedirectStdout redirect_stdout)
 {
     String command = StrFormat(context.arena, "\"%S.exe\" %S", exe, args);
-    return os_call(arena, working_dir, command, redirect_stdout);
+    return OsCall(arena, working_dir, command, redirect_stdout);
 }
 
-CallOutput os_call_script(Arena* arena, String working_dir, String script, String args, String yov_args, RedirectStdout redirect_stdout)
-{
-    String inherited_yov_args = yov_get_inherited_args(context.arena);
-    String yov_path = os_get_executable_path(context.arena);
-    String command = StrFormat(context.arena, "\"%S\" %S %S %S %S", yov_path, inherited_yov_args, yov_args, script, args);
-    return os_call(arena, working_dir, command, redirect_stdout);
-}
-
-String os_get_working_path(Arena* arena)
-{
-    U32 buffer_size = GetCurrentDirectory(0, NULL) + 1;
-    char* dst = (char*)ArenaPush(context.arena, buffer_size);
-    GetCurrentDirectory(buffer_size, dst);
-    
-    return path_resolve(arena, dst);
-}
-
-String os_get_executable_path(Arena* arena)
-{
-    char buffer[MAX_PATH];
-    U32 size = GetModuleFileNameA(NULL, buffer, MAX_PATH);
-    char* dst = (char*)ArenaPush(context.arena, size + 1);
-    MemoryCopy(dst, buffer, size);
-    return path_resolve(arena, StrMake(dst, size));
-}
-
-B32 os_path_is_absolute(String path)
+B32 OsPathIsAbsolute(String path)
 {
     if (path.size < 3) return false;
     if (path[1] != ':') return false;
@@ -846,9 +840,9 @@ B32 os_path_is_absolute(String path)
     return true;
 }
 
-B32 os_path_is_directory(String path)
+B32 OsPathIsDirectory(String path)
 {
-    String last_element = path_get_last_element(path);
+    String last_element = PathGetLastElement(path);
     foreach(i, last_element.size) {
         if (last_element[i] == '.') return false;
     }
@@ -860,7 +854,7 @@ B32 os_path_is_directory(String path)
     return (att & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
-Array<String> os_get_args(Arena* arena)
+Array<String> OsGetArgs(Arena* arena)
 {
     String line = GetCommandLineA();
     
@@ -895,7 +889,7 @@ Array<String> os_get_args(Arena* arena)
     return array_from_pooled_array(arena, list);
 }
 
-Result os_env_get(Arena* arena, String* out, String name)
+Result OsEnvGet(Arena* arena, String* out, String name)
 {
     *out = "";
     String name0 = StrCopy(context.arena, name);
@@ -915,11 +909,11 @@ Result os_env_get(Arena* arena, String* out, String name)
     return RESULT_SUCCESS;
 }
 
-void os_thread_sleep(U64 millis) {
+void OsThreadSleep(U64 millis) {
     Sleep((DWORD)millis);
 }
 
-void os_console_wait()
+void OsConsoleWait()
 {
     PrintF("\nPress RETURN to continue...\n");
     
@@ -929,12 +923,12 @@ void os_console_wait()
         if (GetAsyncKeyState(VK_RETURN) & 0x8000) {
             return;
         }
-        os_thread_sleep(50);
+        OsThreadSleep(50);
     }
 }
 
 U32 MSVCGetEnvImported() {
-    CallOutput res = os_call(context.arena, {}, "cl", RedirectStdout_Script);
+    CallOutput res = OsCall(context.arena, {}, "cl", RedirectStdout_Script);
     if (res.result.code != 0) return MSVC_Env_None;
     
     String out = res.stdout;
@@ -959,14 +953,14 @@ Result MSVCFindPath(Arena* arena, String* out)
         return ResultMakeFailed(string_from_last_error());
     }
     
-    String program_files_path = path_resolve(context.arena, program_files_path_buffer);
+    String program_files_path = PathResolve(context.arena, program_files_path_buffer);
     String vs_where_path = StrFormat(context.arena, "%S/Microsoft Visual Studio/Installer/vswhere.exe", program_files_path);
     String vs_where_command = StrFormat(context.arena, "\"%S\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath", vs_where_path);
     
-    CallOutput call_res = os_call(context.arena, {}, vs_where_command, RedirectStdout_Script);
+    CallOutput call_res = OsCall(context.arena, {}, vs_where_command, RedirectStdout_Script);
     if (call_res.result.failed) return call_res.result;
     
-    *out = path_resolve(arena, call_res.stdout);
+    *out = PathResolve(arena, call_res.stdout);
     return RESULT_SUCCESS;
 }
 
@@ -992,7 +986,7 @@ Result MSVCImportEnv(U32 mode)
     }
     
     // Execute
-    CallOutput call_res = os_call(context.arena, {}, batch_path, RedirectStdout_ImportEnv);
+    CallOutput call_res = OsCall(context.arena, {}, batch_path, RedirectStdout_ImportEnv);
     if (call_res.result.failed) return call_res.result;
     
     if (MSVCGetEnvImported() != mode) {
@@ -1011,29 +1005,39 @@ U64 OsTimerGet()
     return now.QuadPart;
 }
 
-static_assert(sizeof(U32) == sizeof(LONG));
+U32 _AtomicIncrement32(volatile U32* dst)
+{
+    return InterlockedIncrement((volatile LONG*)dst);
+}
 
-U32 AtomicIncrementU32(volatile U32* n) {
-    return InterlockedIncrement((volatile LONG*)n);
+U32 _AtomicDecrement32(volatile U32* dst)
+{
+    return InterlockedDecrement((volatile LONG*)dst);
 }
-U32 AtomicDecrementU32(volatile U32* n) {
-    return InterlockedDecrement((volatile LONG*)n);
-}
-U32 AtomicExchangeU32(volatile U32* dst, U32 compare, U32 exchange) {
-    return InterlockedCompareExchange(dst, exchange, compare);
-}
-U32 AtomicAddU32(volatile U32* dst, U32 add) {
+
+U32 _AtomicAdd32(volatile U32* dst, U32 add)
+{
     return InterlockedAdd((volatile LONG*)dst, add);
 }
 
-I32 AtomicIncrementI32(volatile I32* n) {
-    return InterlockedIncrement((volatile LONG*)n);
-}
-I32 AtomicDecrementI32(volatile I32* n) {
-    return InterlockedDecrement((volatile LONG*)n);
-}
-I32 AtomicExchangeI32(volatile I32* dst, I32 compare, I32 exchange) {
+U32 _AtomicCompareExchange32_Full(volatile U32* dst, U32 compare, U32 exchange)
+{
     return InterlockedCompareExchange((volatile LONG*)dst, exchange, compare);
+}
+
+U32 _AtomicCompareExchange32_Acquire(volatile U32* dst, U32 compare, U32 exchange)
+{
+    return InterlockedCompareExchangeAcquire((volatile LONG*)dst, exchange, compare);
+}
+
+U32 _AtomicCompareExchange32_Release(volatile U32* dst, U32 compare, U32 exchange)
+{
+    return InterlockedCompareExchangeRelease((volatile LONG*)dst, exchange, compare);
+}
+
+U32 _AtomicStore32(volatile U32* dst, U32 src)
+{
+    return InterlockedExchange((volatile LONG*)dst, src);
 }
 
 #endif

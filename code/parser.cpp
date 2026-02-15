@@ -1,47 +1,46 @@
-#include "inc.h"
+#include "front.h"
 
-Parser* ParserAlloc(String text, RangeU64 range, I32 script_id)
+Parser* ParserAlloc(YovScript* script, RangeU64 range)
 {
     Parser* parser = ArenaPushStruct<Parser>(context.arena);
-    parser->script_id = script_id;
-    parser->text = text;
+    parser->script = script;
+    parser->text = (script != NULL) ? script->text : String{};
+    parser->script_id = (script != NULL) ? script->id : -1;
     parser->cursor = range.min;
     parser->range = range;
     
     return parser;
 }
 
-Parser* ParserFromLocation(Location location)
+Parser* ParserSub(Parser* parser, Location location)
 {
-    YovScript* script = GetScript(location.script_id);
-    if (script == NULL) {
-        InvalidCodepath();
-        return ParserAlloc("", {}, -1);
-    }
-    
-    return ParserAlloc(script->text, location.range, location.script_id);
+    if (parser->script == NULL) return ParserAlloc(NULL, {});
+    Assert(parser->script->id == location.script_id);
+    return ParserAlloc(parser->script, location.range);
 }
 
 Location LocationFromParser(Parser* parser, U64 end) {
+    if (end == U64_MAX) end = parser->range.max;
+    SkipInvalidTokens(parser);
     return LocationMake(parser->cursor, end, parser->script_id);
 }
 
-Token peek_token(Parser* parser, I64 cursor_offset)
+Token PeekToken(Parser* parser, I64 cursor_offset)
 {
     Token token = read_valid_token(parser->text, parser->cursor + cursor_offset, parser->range.max, parser->script_id);
     return token;
 }
 
-void skip_token(Parser* parser, Token token)
+void SkipToken(Parser* parser, Token token)
 {
     Assert(parser->cursor == token.cursor);
     parser->cursor += token.skip_size;
-    Assert(parser->cursor <= parser->range.max);
+    Assert(parser->range.max == 0 || parser->cursor <= parser->range.max);
 }
 
-void assume_token(Parser* parser, TokenKind kind)
+void AssumeToken(Parser* parser, TokenKind kind)
 {
-    Token token = consume_token(parser);
+    Token token = ConsumeToken(parser);
     Assert(token.kind == kind);
 }
 
@@ -60,10 +59,10 @@ void MoveCursor(Parser* parser, U64 cursor)
     parser->cursor = cursor;
 }
 
-Token consume_token(Parser* parser)
+Token ConsumeToken(Parser* parser)
 {
-    Token token = peek_token(parser);
-    skip_token(parser, token);
+    Token token = PeekToken(parser);
+    SkipToken(parser, token);
     return token;
 }
 
@@ -73,12 +72,22 @@ Array<Token> ConsumeAllTokens(Parser* parser)
     
     while (true)
     {
-        Token token = consume_token(parser);
+        Token token = ConsumeToken(parser);
         if (token.kind == TokenKind_None) break;
         array_add(&tokens, token);
     }
     
     return array_from_pooled_array(context.arena, tokens);
+}
+
+void SkipInvalidTokens(Parser* parser)
+{
+    while (1)
+    {
+        Token token = read_token(parser->text, parser->cursor, parser->script_id);
+        if (TokenIsValid(token.kind)) break;
+        parser->cursor += token.skip_size;
+    }
 }
 
 Location FindUntil(Parser* parser, B32 include_match, TokenKind match0, TokenKind match1)
@@ -88,7 +97,7 @@ Location FindUntil(Parser* parser, B32 include_match, TokenKind match0, TokenKin
     Token token;
     while (true)
     {
-        token = peek_token(parser, offset);
+        token = PeekToken(parser, offset);
         if (token.kind == TokenKind_None) return NO_CODE;
         
         if (token.kind == match0) break;
@@ -100,7 +109,7 @@ Location FindUntil(Parser* parser, B32 include_match, TokenKind match0, TokenKin
         offset += token.skip_size;
     }
     
-    return LocationMake(parser->cursor, parser->cursor + offset, parser->script_id);
+    return LocationFromParser(parser, parser->cursor + offset);
 }
 
 U64 find_token_with_depth_check(Parser* parser, B32 parenthesis, B32 braces, B32 brackets, TokenKind match0, TokenKind match1)
@@ -111,7 +120,7 @@ U64 find_token_with_depth_check(Parser* parser, B32 parenthesis, B32 braces, B32
     
     while (true)
     {
-        Token token = peek_token(parser, offset);
+        Token token = PeekToken(parser, offset);
         if (token.kind == TokenKind_None) return parser->cursor;
         
         if (parenthesis && token.kind == TokenKind_OpenParenthesis) depth++;
@@ -138,7 +147,7 @@ Location FindScope(Parser* parser, TokenKind open_token, B32 include_delimiters)
     U64 offset = 0;
     I32 depth = 0;
     
-    Token token = peek_token(parser);
+    Token token = PeekToken(parser);
     
     if (token.kind != open_token) {
         return NO_CODE;
@@ -155,12 +164,12 @@ Location FindScope(Parser* parser, TokenKind open_token, B32 include_delimiters)
         }
         
         offset += token.skip_size;
-        token = peek_token(parser, offset);
+        token = PeekToken(parser, offset);
     }
     
     U64 begin = parser->cursor;
     if (!include_delimiters) {
-        begin += peek_token(parser).skip_size;
+        begin += PeekToken(parser).skip_size;
     }
     
     U64 end = parser->cursor + offset;
@@ -173,7 +182,7 @@ Location FindScope(Parser* parser, TokenKind open_token, B32 include_delimiters)
 
 Location FindCode(Parser* parser)
 {
-    Token first = peek_token(parser);
+    Token first = PeekToken(parser);
     
     if (first.kind == TokenKind_OpenBrace) {
         return FindScope(parser, TokenKind_OpenBrace, true);
@@ -184,7 +193,7 @@ Location FindCode(Parser* parser)
         U64 start_cursor = parser->cursor;
         defer(MoveCursor(parser, start_cursor));
         
-        consume_token(parser); // Modifier keyword
+        ConsumeToken(parser); // Modifier keyword
         
         Location optional_parenthesis_location = FetchScope(parser, TokenKind_OpenParenthesis, true);
         Location body_location = FetchCode(parser);
@@ -193,8 +202,8 @@ Location FindCode(Parser* parser)
             return NO_CODE;
         }
         
-        if (first.kind == TokenKind_IfKeyword && peek_token(parser).kind == TokenKind_ElseKeyword) {
-            consume_token(parser);
+        if (first.kind == TokenKind_IfKeyword && PeekToken(parser).kind == TokenKind_ElseKeyword) {
+            ConsumeToken(parser);
             body_location = FetchCode(parser);
             
             if (!LocationIsValid(body_location)) {
@@ -226,7 +235,7 @@ Location FetchScope(Parser* parser, TokenKind open_token, B32 include_delimiters
         
         if (!include_delimiters) {
             TokenKind close_token = TokenKindFromOpenScope(open_token);
-            assume_token(parser, close_token);
+            AssumeToken(parser, close_token);
         }
     }
     
@@ -242,7 +251,7 @@ Location FetchCode(Parser* parser)
     return location;
 }
 
-SentenceKind find_sentence_kind(Parser* parser)
+SentenceKind GuessSentenceKind(Parser* parser)
 {
     U64 start_cursor = parser->cursor;
     defer(MoveCursor(parser, start_cursor));
@@ -255,7 +264,7 @@ SentenceKind find_sentence_kind(Parser* parser)
     
     U32 index = 0;
     while (true) {
-        Token token = consume_token(parser);
+        Token token = ConsumeToken(parser);
         
         if (index < countof(tokens)) {
             tokens[index++] = token;
@@ -313,488 +322,43 @@ SentenceKind find_sentence_kind(Parser* parser)
     return SentenceKind_Unknown;
 }
 
-void ReadEnumDefinition(CodeDefinition* code)
-{
-    EnumDefinition* def = EnumFromIndex(code->index);
-    if (def == NULL) {
-        InvalidCodepath();
-        return;
-    }
-    
-    Parser* parser = ParserFromLocation(code->enum_or_struct.body_location);
-    
-    Location starting_location = peek_token(parser).location;
-    
-    assume_token(parser, TokenKind_OpenBrace);
-    
-    PooledArray<String> names = pooled_array_make<String>(context.arena, 16);
-    PooledArray<Location> expression_locations = pooled_array_make<Location>(context.arena, 16);
-    
-    while (true)
-    {
-        Token name_token = consume_token(parser);
-        if (name_token.kind == TokenKind_CloseBrace) break;
-        if (name_token.kind != TokenKind_Identifier) {
-            report_enumdef_expecting_comma_separated_identifier(name_token.location);
-            return;
-        }
-        
-        Token assignment_token = peek_token(parser);
-        
-        Location expression_location = NO_CODE;
-        
-        if (assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None) {
-            skip_token(parser, assignment_token);
-            
-            expression_location = FetchUntil(parser, false, TokenKind_CloseBrace, TokenKind_Comma);
-            
-            if (!LocationIsValid(expression_location)) {
-                report_error(assignment_token.location, "Expecting expression for enum value");
-                return;
-            }
-        }
-        
-        array_add(&names, name_token.value);
-        array_add(&expression_locations, expression_location);
-        
-        Token comma_token = consume_token(parser);
-        if (comma_token.kind == TokenKind_CloseBrace) break;
-        if (comma_token.kind != TokenKind_Comma) {
-            report_enumdef_expecting_comma_separated_identifier(comma_token.location);
-            return;
-        }
-    }
-    
-    EnumDefine(def, array_from_pooled_array(context.arena, names), array_from_pooled_array(context.arena, expression_locations));
+ExpresionContext ExpresionContext_from_void() {
+    ExpresionContext ctx{};
+    ctx.vtype = VType_Void;
+    ctx.assignment_count = 0;
+    return ctx;
 }
 
-void ResolveEnumDefinition(EnumDefinition* def)
-{
-    if (def->stage == DefinitionStage_Ready) {
-        return;
-    }
-    
-    if (def->stage != DefinitionStage_Defined) {
-        InvalidCodepath();
-        return;
-    }
-    
-    IR_Context* ir_context = ir_context_alloc();
-    
-    Array<I64> values = array_make<I64>(context.arena, def->names.count);
-    
-    for (U32 i = 0; i < values.count; i++)
-    {
-        values[i] = i;
-        
-        if (i < def->expression_locations.count)
-        {
-            Location expression_location = def->expression_locations[i];
-            
-            if (!LocationIsValid(expression_location)) continue;
-            
-            IR ir = ir_generate_from_value(ValueFromInt(values[i]));
-            
-            ExpresionContext expr_context = ExpresionContext_from_vtype(VType_Int, 1);
-            IR_Group group = ReadExpression(ir_context, expression_location, expr_context);
-            ir = MakeIR(context.arena, array_from_pooled_array(context.arena, ir_context->local_registers), group);
-            if (!ir.success) return;
-            
-            if (ir.value.kind != ValueKind_Literal || ir.value.vtype != VType_Int) {
-                report_error(expression_location, "Enum value expects an Int literal");
-                return;
-            }
-            
-            values[i] = ir.value.literal_int;
-        }
-    }
-    
-    EnumResolve(def, values);
+ExpresionContext ExpresionContext_from_inference(U32 assignment_count) {
+    ExpresionContext ctx{};
+    ctx.vtype = VType_Any;
+    ctx.assignment_count = assignment_count;
+    return ctx;
 }
 
-void ReadStructDefinition(CodeDefinition* code)
-{
-    StructDefinition* def = StructFromIndex(code->index);
-    if (def == NULL) {
-        InvalidCodepath();
-        return;
-    }
-    
-    Parser* parser = ParserFromLocation(code->enum_or_struct.body_location);
-    
-    Location starting_location = peek_token(parser).location;
-    assume_token(parser, TokenKind_OpenBrace);
-    
-    U32 member_index = 0;
-    
-    PooledArray<ObjectDefinition> members = pooled_array_make<ObjectDefinition>(context.arena, 16);
-    
-    while (peek_token(parser).kind != TokenKind_CloseBrace)
-    {
-        Location member_location = FetchUntil(parser, false, TokenKind_NextSentence);
-        if (!LocationIsValid(member_location)) {
-            report_expecting_semicolon(LocationFromParser(parser, parser->cursor));
-            return;
-        }
-        
-        ObjectDefinitionResult read_result = ReadObjectDefinition(context.arena, member_location, false, RegisterKind_Local, NULL);
-        if (!read_result.success) return;
-        
-        foreach(i, read_result.objects.count) {
-            ObjectDefinition member = read_result.objects[i];
-            array_add(&members, member);
-            
-            //out = ir_append(out, ir_from_child(ir_context, ret, value_from_int(member_index), true, member.vtype, member.location));
-            //Value dst = out.value;
-            //out = ir_append(out, ir_from_assignment(ir_context, true, dst, member.value, BinaryOperator_None, member.location));
-            
-            member_index++;
-        }
-        
-        assume_token(parser, TokenKind_NextSentence);
-    }
-    
-    consume_token(parser);
-    
-    VType struct_vtype = vtype_from_name(def->identifier);
-    Assert(struct_vtype.kind == VKind_Struct);
-    
-    B32 valid = true;
-    
-    for(auto it = pooled_array_make_iterator(&members); it.valid; ++it)
-    {
-        ObjectDefinition* def = it.value;
-        
-        VType vtype = def->vtype;
-        if (vtype == VType_Nil) {
-            valid = false;
-            continue;
-        }
-        
-        if (vtype.kind == VKind_Any) {
-            report_error(def->location, "Any is not a valid member for a struct");
-            valid = false;
-            continue;
-        }
-        
-        if (vtype == struct_vtype) {
-            report_struct_recursive(def->location);
-            valid = false;
-            continue;
-        }
-    }
-    
-    if (!valid) return;
-    
-    StructDefine(def, array_from_pooled_array(context.arena, members));
+ExpresionContext ExpresionContext_from_vtype(VType vtype, U32 assignment_count) {
+    ExpresionContext ctx{};
+    ctx.vtype = vtype;
+    ctx.assignment_count = assignment_count;
+    return ctx;
 }
 
-B32 ResolveStructDefinition(StructDefinition* def)
+IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_context)
 {
-    if (def->stage == DefinitionStage_Ready) {
-        return true;
-    }
-    
-    if (def->stage != DefinitionStage_Defined) {
-        InvalidCodepath();
-        return false;
-    }
-    
-    // Check for dependencies
-    foreach(i, def->vtypes.count)
-    {
-        VType vtype = def->vtypes[i];
-        
-        if (!VTypeIsSizeReady(vtype)) {
-            return false;
-        }
-    }
-    
-    StructResolve(def);
-    return true;
-}
-
-void ReadFunctionDefinition(CodeDefinition* code)
-{
-    FunctionDefinition* def = FunctionFromIndex(code->index);
-    if (def == NULL) {
-        InvalidCodepath();
-        return;
-    }
-    
-    Array<ObjectDefinition> parameters = {};
-    Array<ObjectDefinition> returns = {};
-    
-    if (LocationIsValid(code->function.parameters_location)) {
-        ObjectDefinitionResult res = ReadDefinitionList(context.arena, code->function.parameters_location, RegisterKind_Parameter, NULL);
-        if (!res.success) return;
-        parameters = res.objects;
-    }
-    
-    if (LocationIsValid(code->function.returns_location)) {
-        if (code->function.return_is_list) {
-            ObjectDefinitionResult res = ReadDefinitionList(context.arena, code->function.returns_location, RegisterKind_Return, NULL);
-            if (!res.success) return;
-            returns = res.objects;
-        }
-        else {
-            VType vtype = ReadObjectType(code->function.returns_location);
-            
-            if (vtype != VType_Nil) {
-                returns = array_make<ObjectDefinition>(context.arena, 1);
-                returns[0] = ObjDefMake("return", vtype, code->function.returns_location, false, ValueFromZero(vtype));
-            }
-        }
-        
-        if (returns.count == 0) return;
-    }
-    
-    FunctionDefine(def, parameters, returns);
-}
-
-void ResolveFunctionDefinition(FunctionDefinition* def, CodeDefinition* code)
-{
-    if (def->stage == DefinitionStage_Ready) {
-        return;
-    }
-    
-    if (def->stage != DefinitionStage_Defined) {
-        InvalidCodepath();
-        return;
-    }
-    
-    B32 is_intrinsic = !LocationIsValid(code->function.body_location);
-    
-    if (is_intrinsic)
-    {
-        IntrinsicFunction* fn = IntrinsicFromIdentifier(def->identifier);
-        
-        if (fn == NULL) {
-            report_intrinsic_not_resolved(code->entire_location, def->identifier);
-            return;
-        }
-        
-        FunctionResolveIntrinsic(def, fn);
-    }
-    else
-    {
-        Location block_location = code->function.body_location;
-        
-        IR_Context* ir = ir_context_alloc();
-        IR_Group out = ir_from_none();
-        
-        if (LocationIsValid(code->function.parameters_location)) {
-            ObjectDefinitionResult params = ReadDefinitionList(context.arena, code->function.parameters_location, RegisterKind_Parameter, ir);
-            if (!params.success) return;
-            
-            out = ir_append(out, params.out);
-        }
-        
-        // Define returns
-        foreach(i, def->returns.count)
-        {
-            ObjectDefinition obj = def->returns[i];
-            out = ir_append(out, IRFromDefineObject(ir, RegisterKind_Return, obj.name, obj.vtype, false, obj.location));
-            out = ir_append(out, ir_from_store(ir, out.value, ValueFromZero(obj.vtype), obj.location));
-        }
-        
-        out = ir_append(out, ReadCode(ir, block_location));
-        
-        IR res = MakeIR(yov->arena, array_from_pooled_array(context.arena, ir->local_registers), out);
-        
-        // Validation
-        if (res.success)
-        {
-            Array<Unit> units = res.instructions;
-            
-            // TODO(Jose): Check for infinite loops
-            
-            // Check all paths have a return
-            B32 expects_return = def->returns.count == 1 && StrEquals(def->returns[0].name, "return");
-            if (expects_return && !ir_validate_return_path(units)) {
-                report_function_no_return(block_location, def->identifier);
-            }
-        }
-        
-        FunctionResolve(def, res);
-    }
-}
-
-internal_fn B32 ValidateArgName(String name, Location location)
-{
-    B32 valid_chars = true;
-    
-    U64 cursor = 0;
-    while (cursor < name.size) {
-        U32 codepoint = string_get_codepoint(name, &cursor);
-        
-        B32 valid = false;
-        if (codepoint_is_text(codepoint)) valid = true;
-        if (codepoint_is_number(codepoint)) valid = true;
-        if (codepoint == '-') valid = true;
-        if (codepoint == '_') valid = true;
-        
-        if (!valid) {
-            valid_chars = false;
-            break;
-        }
-    }
-    
-    if (!valid_chars || name.size == 0) {
-        report_arg_invalid_name(location, name);
-        return false;
-    }
-    
-    return true;
-}
-
-void ReadArgDefinition(CodeDefinition* code)
-{
-    ArgDefinition* def = ArgFromIndex(code->index);
-    if (def == NULL) {
-        InvalidCodepath();
-        return;
-    }
-    
-    VType vtype = VType_Bool;
-    
-    if (LocationIsValid(code->arg.type_location))
-    {
-        vtype = ReadObjectType(code->arg.type_location);
-        
-        if (vtype == VType_Nil) return;
-        
-        if (!VTypeValid(vtype)) {
-            report_error(code->arg.type_location, "Invalid type '%S' for an argument", VTypeGetName(vtype));
-            return;
-        }
-    }
-    
-    ArgDefine(def, vtype);
-}
-
-void ResolveArgDefinition(CodeDefinition* code)
-{
-    ArgDefinition* def = ArgFromIndex(code->index);
-    
-    if (def == NULL) {
-        InvalidCodepath();
-        return;
-    }
-    
-    if (def->stage == DefinitionStage_Ready) {
-        return;
-    }
-    
-    String name = StrFormat(context.arena, "-%S", code->identifier);
-    String description = {};
-    B32 required = false;
-    Value default_value = ValueFromZero(def->vtype);
-    
-    Parser* parser = ParserFromLocation(code->arg.body_location);
-    
-    assume_token(parser, TokenKind_OpenBrace);
-    
-    while (true)
-    {
-        Token identifier_token = consume_token(parser);
-        
-        if (identifier_token.kind == TokenKind_CloseBrace) break;
-        if (identifier_token.kind == TokenKind_None) {
-            report_error(identifier_token.location, "Missing close brace for arg definition");
-            return;
-        }
-        
-        if (identifier_token.kind != TokenKind_Identifier) {
-            report_error(identifier_token.location, "Expecting property list");
-            return;
-        }
-        
-        Token assignment_token = consume_token(parser);
-        if (assignment_token.kind != TokenKind_Assignment || assignment_token.assignment_binary_operator != BinaryOperator_None)
-        {
-            report_error(assignment_token.location, "Expecting a property assignment");
-            return;
-        }
-        
-        Location expression_location = FetchUntil(parser, false, TokenKind_NextSentence);
-        if (!LocationIsValid(expression_location)) {
-            report_error(identifier_token.location, "Missing semicolon");
-            return;
-        }
-        
-        assume_token(parser, TokenKind_NextSentence);
-        
-        String identifier = identifier_token.value;
-        
-        ExpresionContext expr_context = ExpresionContext_from_inference(1);
-        
-        if (identifier == "name") expr_context = ExpresionContext_from_vtype(VType_String, 1);
-        else if (identifier == "description") expr_context = ExpresionContext_from_vtype(VType_String, 1);
-        else if (identifier == "required") expr_context = ExpresionContext_from_vtype(VType_Bool, 1);
-        else if (identifier == "default") expr_context = ExpresionContext_from_vtype(def->vtype, 1);
-        else {
-            report_error(identifier_token.location, "Unknown property '%S'", identifier);
-            return;
-        }
-        
-        IR_Context* ir_context = ir_context_alloc();
-        IR_Group group = ReadExpression(ir_context, expression_location, expr_context);
-        
-        IR ir = MakeIR(context.arena, array_from_pooled_array(context.arena, ir_context->local_registers), group);
-        if (!ir.success) {
-            return;
-        }
-        
-        Value value = ir.value;
-        
-        if (value.vtype != expr_context.vtype) {
-            report_type_missmatch_assign(expression_location, value.vtype, expr_context.vtype);
-            return;
-        }
-        
-        if (!ValueIsCompiletime(value)) {
-            report_error(expression_location, "Expecting a compile-time value");
-            return;
-        }
-        
-        if (identifier == "name") {
-            name = StringFromCompiletime(context.arena, value);
-        }
-        else if (identifier == "description") {
-            description = StringFromCompiletime(context.arena, value);
-        }
-        else if (identifier == "required") {
-            required = B32FromCompiletime(value);
-        }
-        else if (identifier == "default") {
-            default_value = value;
-        }
-    }
-    
-    if (!ValidateArgName(name, code->entire_location)) return;
-    
-    ArgResolve(def, name, description, required, default_value);
-}
-
-IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr_context)
-{
-    if (location.range.min == location.range.max) {
-        return ir_from_none();
-    }
-    
-    Parser* parser = ParserFromLocation(location);
+    Program* program = ir->program;
+    Reporter* reporter = ir->reporter;
+    Location location = LocationFromParser(parser);
     
     Array<Token> tokens = ConsumeAllTokens(parser);
     
-    if (tokens.count == 0) return {};
+    if (tokens.count == 0) return IRFromNone();
     
     Token starting_token = tokens[0];
     
     // Remove parentheses around
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
     {
-        B32 couple = check_tokens_are_couple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        B32 couple = CheckTokensAreCouple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
         if (couple) tokens = array_subarray(tokens, 1, tokens.count - 2);
     }
     
@@ -809,19 +373,19 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
         
         if (token.kind == TokenKind_IntLiteral) {
             U32 v;
-            if (u32_from_string(&v, token.value)) {
-                return ir_from_none(ValueFromInt(v));
+            if (U32FromString(&v, token.value)) {
+                return IRFromNone(ValueFromInt(v));
             }
             else {
                 InvalidCodepath();
             }
         }
         else if (token.kind == TokenKind_BoolLiteral) {
-            return ir_from_none(ValueFromBool(StrEquals(token.value, "true")));
+            return IRFromNone(ValueFromBool(StrEquals(token.value, "true")));
         }
         else if (token.kind == TokenKind_StringLiteral)
         {
-            IR_Group out = ir_from_none();
+            IR_Group out = IRFromNone();
             PooledArray<Value> values = pooled_array_make<Value>(context.arena, 8);
             
             String raw = token.value;
@@ -830,13 +394,13 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
             U64 cursor = 0;
             while (cursor < raw.size)
             {
-                U32 codepoint = string_get_codepoint(raw, &cursor);
+                U32 codepoint = StrGetCodepoint(raw, &cursor);
                 
                 if (codepoint == '\\')
                 {
                     codepoint = 0;
                     if (cursor < raw.size) {
-                        codepoint = string_get_codepoint(raw, &cursor);
+                        codepoint = StrGetCodepoint(raw, &cursor);
                     }
                     
                     if (codepoint == '\\') append(&builder, "\\");
@@ -847,7 +411,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                     else if (codepoint == '{') append(&builder, "{");
                     else if (codepoint == '}') append(&builder, "}");
                     else {
-                        String sequence = string_from_codepoint(context.arena, codepoint);
+                        String sequence = StringFromCodepoint(context.arena, codepoint);
                         report_invalid_escape_sequence(token.location, sequence);
                     }
                     
@@ -860,7 +424,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                     I32 depth = 1;
                     
                     while (cursor < raw.size) {
-                        U32 codepoint = string_get_codepoint(raw, &cursor);
+                        U32 codepoint = StrGetCodepoint(raw, &cursor);
                         if (codepoint == '{') depth++;
                         else if (codepoint == '}') {
                             depth--;
@@ -871,15 +435,15 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                     U64 state_cursor = (raw.data + start_identifier) - parser->text.data;
                     U64 state_count = cursor - start_identifier - 1;
                     
-                    Location subexpression_code = LocationMake(state_cursor, state_cursor + state_count, token.location.script_id);
+                    Location subexpression_location = LocationMake(state_cursor, state_cursor + state_count, token.location.script_id);
                     
-                    IR_Group sub = ReadExpression(ir, subexpression_code, ExpresionContext_from_vtype(VType_String, 1));
-                    if (!sub.success) return ir_failed();
+                    IR_Group sub = ReadExpression(ir, ParserSub(parser, subexpression_location), ExpresionContext_from_vtype(VType_String, 1));
+                    if (!sub.success) return IRFailed();
                     
                     Value value = sub.value;
                     
                     if (ValueIsCompiletime(value)) {
-                        String ct_str = StringFromCompiletime(context.arena, value);
+                        String ct_str = StringFromCompiletime(context.arena, program, value);
                         append(&builder, ct_str);
                     }
                     else
@@ -890,7 +454,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                             array_add(&values, ValueFromString(ir->arena, literal));
                         }
                         
-                        out = ir_append(out, sub);
+                        out = IRAppend(out, sub);
                         array_add(&values, value);
                     }
                     
@@ -905,7 +469,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                 array_add(&values, ValueFromString(ir->arena, literal));
             }
             
-            out.value = ValueFromStringArray(ir->arena, array_from_pooled_array(context.arena, values));
+            out.value = ValueFromStringArray(ir->arena, program, array_from_pooled_array(context.arena, values));
             return out;
         }
         else if (token.kind == TokenKind_CodepointLiteral)
@@ -928,7 +492,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
             else
             {
                 U64 cursor = 0;
-                v = string_get_codepoint(raw, &cursor);
+                v = StrGetCodepoint(raw, &cursor);
                 
                 if (v == 0xFFFD || cursor != raw.size) {
                     report_invalid_codepoint_literal(token.location, raw);
@@ -936,10 +500,10 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                 }
             }
             
-            return ir_from_none(ValueFromInt(v));
+            return IRFromNone(ValueFromInt(v));
         }
         else if (token.kind == TokenKind_NullKeyword) {
-            return ir_from_none(ValueNull());
+            return IRFromNone(ValueNull());
         }
     }
     
@@ -960,7 +524,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
         
         if (valid)
         {
-            return ir_from_symbol(ir, string_from_tokens(context.arena, tokens), location);
+            return IRFromSymbol(ir, StringFromTokens(context.arena, tokens), location);
         }
     }
     
@@ -968,12 +532,12 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
     // Function call
     if (tokens.count >= 3 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
     {
-        B32 couple = check_tokens_are_couple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        B32 couple = CheckTokensAreCouple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
         
         if (couple)
         {
             Location call_code = LocationFromTokens(tokens);
-            return ReadFunctionCall(ir, expr_context, call_code);
+            return ReadFunctionCall(ir, expr_context, ParserSub(parser, call_code));
         }
     }
     
@@ -1012,7 +576,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                 parenthesis_depth--;
                 if (parenthesis_depth < 0) {
                     report_common_missing_closing_parenthesis(token.location);
-                    return ir_failed();
+                    return IRFailed();
                 }
                 continue;
             }
@@ -1025,7 +589,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                 braces_depth--;
                 if (braces_depth < 0) {
                     report_common_missing_closing_brace(token.location);
-                    return ir_failed();
+                    return IRFailed();
                 }
                 continue;
             }
@@ -1038,7 +602,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                 brackets_depth--;
                 if (brackets_depth < 0) {
                     report_common_missing_closing_bracket(token.location);
-                    return ir_failed();
+                    return IRFailed();
                 }
                 continue;
             }
@@ -1094,11 +658,11 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
         
         if (parenthesis_depth > 0) {
             report_common_missing_opening_parenthesis(tokens[0].location);
-            return ir_failed();
+            return IRFailed();
         }
         if (braces_depth > 0) {
             report_common_missing_opening_brace(tokens[0].location);
-            return ir_failed();
+            return IRFailed();
         }
         
         if (min_preference != I32_MAX)
@@ -1116,18 +680,18 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                     
                     Array<Token> subexpr_tokens = array_subarray(tokens, 1, tokens.count - 1);
                     
-                    IR_Group out = ReadExpression(ir, LocationFromTokens(subexpr_tokens), expr_context);
-                    if (!out.success) return ir_failed();
+                    IR_Group out = ReadExpression(ir, ParserSub(parser, LocationFromTokens(subexpr_tokens)), expr_context);
+                    if (!out.success) return IRFailed();
                     
                     Value src = out.value;
                     
                     if (op_token.kind == TokenKind_Ampersand)
                     {
-                        out = ir_append(out, ir_from_reference(ir, true, src, location));
+                        out = IRAppend(out, IRFromReference(ir, true, src, location));
                     }
                     else
                     {
-                        out = ir_append(out, ir_from_sign_operator(ir, src, op, location));
+                        out = IRAppend(out, IRFromSignOperator(ir, src, op, location));
                     }
                     
                     return out;
@@ -1135,9 +699,9 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                 else
                 {
                     if (preferent_operator_index <= 0 || preferent_operator_index >= tokens.count - 1) {
-                        String op_string = string_from_tokens(context.arena, tokens);
+                        String op_string = StringFromTokens(context.arena, tokens);
                         report_expr_invalid_binary_operation(op_token.location, op_string);
-                        return ir_failed();
+                        return IRFailed();
                     }
                     else
                     {
@@ -1145,15 +709,15 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                         Array<Token> right_expr_tokens = array_subarray(tokens, preferent_operator_index + 1, tokens.count - (preferent_operator_index + 1));
                         
                         ExpresionContext left_context = expr_context;
-                        IR_Group left = ReadExpression(ir, LocationFromTokens(left_expr_tokens), left_context);
+                        IR_Group left = ReadExpression(ir, ParserSub(parser, LocationFromTokens(left_expr_tokens)), left_context);
                         
                         ExpresionContext right_context = VTypeValid(left.value.vtype) ? ExpresionContext_from_vtype(left.value.vtype, 1) : expr_context;
-                        IR_Group right = ReadExpression(ir, LocationFromTokens(right_expr_tokens), right_context);
+                        IR_Group right = ReadExpression(ir, ParserSub(parser, LocationFromTokens(right_expr_tokens)), right_context);
                         
-                        IR_Group out = ir_append(left, right);
-                        if (!out.success) return ir_failed();
+                        IR_Group out = IRAppend(left, right);
+                        if (!out.success) return IRFailed();
                         
-                        out = ir_append(out, ir_from_binary_operator(ir, left.value, right.value, op, false, location));
+                        out = IRAppend(out, IRFromBinaryOperator(ir, left.value, right.value, op, false, location));
                         return out;
                     }
                 }
@@ -1167,16 +731,21 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                 
                 if (member_value.size == 0) {
                     report_expr_empty_member(tokens[0].location);
-                    return ir_failed();
+                    return IRFailed();
                 }
                 
                 Array<Token> expr_tokens = array_subarray(tokens, 0, tokens.count - 2);
+                Location expr_location = LocationFromTokens(expr_tokens);
                 
-                IR_Group out = ReadExpression(ir, LocationFromTokens(expr_tokens), ExpresionContext_from_inference(1));
-                if (!out.success) return ir_failed();
+                IR_Group out = IRFromNone();
+                
+                if (LocationIsValid(expr_location)) {
+                    out = ReadExpression(ir, ParserSub(parser, expr_location), ExpresionContext_from_inference(1));
+                    if (!out.success) return IRFailed();
+                }
                 
                 Value src = out.value;
-                out = ir_append(out, ir_from_child_access(ir, src, member_value, expr_context, location));
+                out = IRAppend(out, IRFromChildAccess(ir, src, member_value, expr_context, location));
                 return out;
             }
         }
@@ -1203,13 +772,13 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
             close_index = arrow_index - 1;
         }
         
-        if (check_tokens_are_couple(tokens, 0, close_index, open_token_kind, close_token_kind))
+        if (CheckTokensAreCouple(tokens, 0, close_index, open_token_kind, close_token_kind))
         {
             VType element_vtype = VType_Any;
-            if (expr_context.vtype != VType_Void) {
+            if (!TypeIsVoid(expr_context.vtype)) {
                 element_vtype = expr_context.vtype;
-                if (vtype_is_array(element_vtype)) {
-                    element_vtype = VTypeNext(element_vtype);
+                if (TypeIsArray(element_vtype)) {
+                    element_vtype = VTypeNext(program, element_vtype);
                 }
             }
             
@@ -1217,40 +786,40 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
             {
                 Array<Token> type_tokens = array_subarray(tokens, arrow_index + 1, tokens.count - (arrow_index + 1));
                 Location type_code = LocationFromTokens(type_tokens);
-                element_vtype = ReadObjectType(type_code);
-                if (element_vtype == VType_Nil) return ir_failed();
+                element_vtype = ReadObjectType(ParserSub(parser, type_code), reporter, program);
+                if (TypeIsNil(element_vtype)) return IRFailed();
                 
-                if (element_vtype == VType_Void || element_vtype == VType_Any) {
-                    report_error(type_code, "Invalid type for array expression");
-                    return ir_failed();
+                if (TypeIsVoid(element_vtype) || TypeIsAny(element_vtype)) {
+                    ReportErrorFront(type_code, "Invalid type for array expression");
+                    return IRFailed();
                 }
             }
             
             VType expr_vtype = is_empty ? VType_Int : element_vtype;
             
             Array<Token> expr_tokens = array_subarray(tokens, 1, close_index - 1);
-            IR_Group out = ReadExpressionList(context.arena, ir, expr_vtype, {}, LocationFromTokens(expr_tokens));
+            IR_Group out = ReadExpressionList(context.arena, ir, expr_vtype, {}, ParserSub(parser, LocationFromTokens(expr_tokens)));
             Array<Value> values = ValuesFromReturn(context.arena, out.value, true);
             
-            if (!is_empty && values.count > 0 && element_vtype == VType_Any) {
+            if (!is_empty && values.count > 0 && TypeIsAny(element_vtype)) {
                 element_vtype = values[0].vtype;
                 expr_vtype = element_vtype;
             }
             
-            if (element_vtype == VType_Any || element_vtype == VType_Void) {
-                report_error(location, "Unknown array type");
-                return ir_failed();
+            if (TypeIsAny(element_vtype) || TypeIsVoid(element_vtype)) {
+                ReportErrorFront(location, "Unknown array type");
+                return IRFailed();
             }
             
             foreach(i, values.count) {
-                if (values[i].vtype != expr_vtype) {
+                if (!TypeEquals(program, values[i].vtype, expr_vtype)) {
                     if (is_empty) {
-                        report_error(location, "Expecting an integer for empty array expression but found a '%S'", VTypeGetName(values[i].vtype));
-                        return ir_failed();
+                        ReportErrorFront(location, "Expecting an integer for empty array expression but found a '%S'", VTypeGetName(program, values[i].vtype));
+                        return IRFailed();
                     }
                     else {
-                        report_error(location, "Expecting an array of '%S' but found an '%S'", VTypeGetName(expr_vtype), VTypeGetName(values[i].vtype));
-                        return ir_failed();
+                        ReportErrorFront(location, "Expecting an array of '%S' but found an '%S'", VTypeGetName(program, expr_vtype), VTypeGetName(program, values[i].vtype));
+                        return IRFailed();
                     }
                 }
             }
@@ -1265,7 +834,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                     else dimensions[i] = ValueFromInt(0);
                 }
                 
-                out.value = ValueFromEmptyArray(ir->arena, vtype_from_index(array_vtype.base_index), dimensions);
+                out.value = ValueFromEmptyArray(ir->arena, TypeFromIndex(ir->program, array_vtype.base_index), dimensions);
             }
             else {
                 VType array_vtype = vtype_from_dimension(element_vtype, 1);
@@ -1285,7 +854,7 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
         
         if (starting_token < tokens.count)
         {
-            B32 couple = check_tokens_are_couple(tokens, starting_token, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
+            B32 couple = CheckTokensAreCouple(tokens, starting_token, tokens.count - 1, TokenKind_OpenBracket, TokenKind_CloseBracket);
             
             if (couple)
             {
@@ -1297,36 +866,36 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
                     Location src_location = LocationFromTokens(src_tokens);
                     Location index_location = LocationFromTokens(index_tokens);
                     
-                    IR_Group src = ReadExpression(ir, src_location, ExpresionContext_from_void());
-                    IR_Group index = ReadExpression(ir, index_location, ExpresionContext_from_vtype(VType_Int, 1));
+                    IR_Group src = ReadExpression(ir, ParserSub(parser, src_location), ExpresionContext_from_void());
+                    IR_Group index = ReadExpression(ir, ParserSub(parser, index_location), ExpresionContext_from_vtype(VType_Int, 1));
                     
                     if (!src.success || !index.success) {
-                        return ir_failed();
+                        return IRFailed();
                     }
                     
                     if (src.value.kind == ValueKind_None) {
                         report_array_indexing_expects_expresion(tokens[0].location);
-                        return ir_failed();
+                        return IRFailed();
                     }
                     
-                    if (index.value.vtype != VType_Int) {
+                    if (!TypeIsInt(index.value.vtype)) {
                         report_indexing_expects_an_int(location);
-                        return ir_failed();
+                        return IRFailed();
                     }
                     
                     VType vtype = src.value.vtype;
                     
-                    IR_Group out = ir_append(src, index);
+                    IR_Group out = IRAppend(src, index);
                     
-                    if (vtype_is_array(vtype))
+                    if (TypeIsArray(vtype))
                     {
-                        VType element_vtype = VTypeNext(vtype);
-                        out = ir_append(out, ir_from_child(ir, src.value, index.value, true, element_vtype, location));
+                        VType element_vtype = VTypeNext(program, vtype);
+                        out = IRAppend(out, IRFromChild(ir, src.value, index.value, true, element_vtype, location));
                     }
                     else
                     {
-                        report_indexing_not_allowed(location, VTypeGetName(vtype));
-                        return ir_failed();
+                        report_indexing_not_allowed(location, VTypeGetName(program, vtype));
+                        return IRFailed();
                     }
                     
                     return out;
@@ -1335,13 +904,14 @@ IR_Group ReadExpression(IR_Context* ir, Location location, ExpresionContext expr
         }
     }
     
-    String expresion_string = string_from_tokens(context.arena, tokens);
+    String expresion_string = StringFromTokens(context.arena, tokens);
     report_expr_syntactic_unknown(tokens[0].location, expresion_string);
     return {};
 }
 
 void CheckForAnyAssumptions(IR_Context* ir, IR_Unit* unit, Value value)
 {
+    Program* program = ir->program;
     I32 reg_index = ValueGetRegister(value);
     
     if (reg_index < 0 || unit == NULL || unit->dst_index != reg_index) {
@@ -1349,34 +919,35 @@ void CheckForAnyAssumptions(IR_Context* ir, IR_Unit* unit, Value value)
     }
     
     if (unit->kind == UnitKind_BinaryOperation && unit->binary_op.op == BinaryOperator_Is) {
-        if (unit->src.vtype == VType_Any)
+        if (!TypeIsArray(unit->src.vtype))
         {
             IR_Object* obj = ir_find_object_from_value(ir, unit->src);
-            VType vtype = TypeFromCompiletime(unit->binary_op.src1);
+            VType vtype = TypeFromCompiletime(program, unit->binary_op.src1);
             
-            if (obj != NULL && vtype != VType_Nil) {
+            if (obj != NULL && !TypeIsNil(vtype)) {
                 ir_assume_object(ir, obj, vtype);
             }
         }
     }
 }
 
-IR_Group ReadCode(IR_Context* ir, Location location)
+IR_Group ReadCode(IR_Context* ir, Parser* parser)
 {
-    Parser* parser = ParserFromLocation(location);
+    Program* program = ir->program;
+    Reporter* reporter = ir->reporter;
     
     ir_scope_push(ir);
     defer(ir_scope_pop(ir));
     
-    if (peek_token(parser).kind == TokenKind_OpenBrace) {
-        assume_token(parser, TokenKind_OpenBrace);
+    if (PeekToken(parser).kind == TokenKind_OpenBrace) {
+        AssumeToken(parser, TokenKind_OpenBrace);
     }
     
-    IR_Group out = ir_from_none();
+    IR_Group out = IRFromNone();
     
     while (true)
     {
-        Token first_token = peek_token(parser);
+        Token first_token = PeekToken(parser);
         
         if (first_token.kind == TokenKind_None) {
             break;
@@ -1384,10 +955,10 @@ IR_Group ReadCode(IR_Context* ir, Location location)
         
         if (first_token.kind == TokenKind_CloseBrace)
         {
-            assume_token(parser, TokenKind_CloseBrace);
-            if (peek_token(parser).kind != TokenKind_None) {
-                report_error(first_token.location, "Invalid closing brace");
-                return ir_failed();
+            AssumeToken(parser, TokenKind_CloseBrace);
+            if (PeekToken(parser).kind != TokenKind_None) {
+                ReportErrorFront(first_token.location, "Invalid closing brace");
+                return IRFailed();
             }
             break;
         }
@@ -1395,7 +966,7 @@ IR_Group ReadCode(IR_Context* ir, Location location)
         // Control flow
         if (first_token.kind == TokenKind_IfKeyword)
         {
-            assume_token(parser, TokenKind_IfKeyword);
+            AssumeToken(parser, TokenKind_IfKeyword);
             
             ir_scope_push(ir);
             defer(ir_scope_pop(ir));
@@ -1404,55 +975,55 @@ IR_Group ReadCode(IR_Context* ir, Location location)
             Location expression_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
             
             if (!LocationIsValid(expression_location)) {
-                report_error(first_token.location, "Expecting parenthesis for if statement");
-                return ir_failed();
+                ReportErrorFront(first_token.location, "Expecting parenthesis for if statement");
+                return IRFailed();
             }
             
-            IR_Group expression = ReadExpression(ir, expression_location, ExpresionContext_from_vtype(VType_Bool, 1));
-            if (!expression.success) return ir_failed();
+            IR_Group expression = ReadExpression(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+            if (!expression.success) return IRFailed();
             
             CheckForAnyAssumptions(ir, expression.last, expression.value);
             
-            out = ir_append(out, expression);
+            out = IRAppend(out, expression);
             
             // Read success code
             Location success_location = FetchCode(parser);
             
             if (!LocationIsValid(success_location)) {
-                report_error(first_token.location, "Expecting code for if statement");
-                return ir_failed();
+                ReportErrorFront(first_token.location, "Expecting code for if statement");
+                return IRFailed();
             }
             
-            IR_Group success = ReadCode(ir, success_location);
-            if (!success.success) return ir_failed();
+            IR_Group success = ReadCode(ir, ParserSub(parser, success_location));
+            if (!success.success) return IRFailed();
             
-            IR_Group failure = ir_from_none();
+            IR_Group failure = IRFromNone();
             
             // Failure code
-            if (peek_token(parser).kind == TokenKind_ElseKeyword)
+            if (PeekToken(parser).kind == TokenKind_ElseKeyword)
             {
-                Token else_token = consume_token(parser);
+                Token else_token = ConsumeToken(parser);
                 
                 Location failure_location = FetchCode(parser);
                 
                 if (!LocationIsValid(failure_location)) {
-                    report_error(else_token.location, "Expecting code for else statement");
-                    return ir_failed();
+                    ReportErrorFront(else_token.location, "Expecting code for else statement");
+                    return IRFailed();
                 }
                 
-                failure = ReadCode(ir, failure_location);
-                if (!failure.success) return ir_failed();
+                failure = ReadCode(ir, ParserSub(parser, failure_location));
+                if (!failure.success) return IRFailed();
             }
             
-            out = ir_append(out, IRFromIfStatement(ir, expression.value, success, failure, first_token.location));
+            out = IRAppend(out, IRFromIfStatement(ir, expression.value, success, failure, first_token.location));
         }
         else if (first_token.kind == TokenKind_ElseKeyword) {
-            report_error(first_token.location, "No if statement found");
-            return ir_failed();
+            ReportErrorFront(first_token.location, "No if statement found");
+            return IRFailed();
         }
         else if (first_token.kind == TokenKind_WhileKeyword)
         {
-            assume_token(parser, TokenKind_WhileKeyword);
+            AssumeToken(parser, TokenKind_WhileKeyword);
             
             ir_looping_scope_push(ir, first_token.location);
             defer(ir_looping_scope_pop(ir));
@@ -1461,43 +1032,43 @@ IR_Group ReadCode(IR_Context* ir, Location location)
             Location expression_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
             
             if (!LocationIsValid(expression_location)) {
-                report_error(first_token.location, "Expecting parenthesis for while statement");
-                return ir_failed();
+                ReportErrorFront(first_token.location, "Expecting parenthesis for while statement");
+                return IRFailed();
             }
             
-            IR_Group condition = ReadExpression(ir, expression_location, ExpresionContext_from_vtype(VType_Bool, 1));
-            if (!condition.success) return ir_failed();
+            IR_Group condition = ReadExpression(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+            if (!condition.success) return IRFailed();
             
             // Read code
             Location code_location = FetchCode(parser);
             
             if (!LocationIsValid(code_location)) {
-                report_error(first_token.location, "Expecting code for while statement");
-                return ir_failed();
+                ReportErrorFront(first_token.location, "Expecting code for while statement");
+                return IRFailed();
             }
             
-            IR_Group code = ReadCode(ir, code_location);
-            if (!code.success) return ir_failed();
+            IR_Group code = ReadCode(ir, ParserSub(parser, code_location));
+            if (!code.success) return IRFailed();
             
-            out = ir_append(out, IRFromLoop(ir, ir_from_none(), condition, code, ir_from_none(), first_token.location));
+            out = IRAppend(out, IRFromLoop(ir, IRFromNone(), condition, code, IRFromNone(), first_token.location));
         }
         else if (first_token.kind == TokenKind_ForKeyword)
         {
-            assume_token(parser, TokenKind_ForKeyword);
+            AssumeToken(parser, TokenKind_ForKeyword);
             
             ir_looping_scope_push(ir, first_token.location);
             defer(ir_looping_scope_pop(ir));
             
             Location parenthesis_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
             if (!LocationIsValid(parenthesis_location)) {
-                report_error(first_token.location, "Expecting parenthesis for for");
-                return ir_failed();
+                ReportErrorFront(first_token.location, "Expecting parenthesis for for");
+                return IRFailed();
             }
             
             Location content_location = FetchCode(parser);
             if (!LocationIsValid(content_location)) {
-                report_error(first_token.location, "Expecting code for for statement");
-                return ir_failed();
+                ReportErrorFront(first_token.location, "Expecting code for for statement");
+                return IRFailed();
             }
             
             Array<Location> splits = array_make<Location>(context.arena, 8);
@@ -1506,7 +1077,9 @@ IR_Group ReadCode(IR_Context* ir, Location location)
             {
                 U32 split_count = 0;
                 
-                Parser* parser = ParserFromLocation(parenthesis_location);
+                Parser* last_parser = parser;
+                defer(parser = last_parser);
+                parser = ParserSub(parser, parenthesis_location);
                 
                 while (1)
                 {
@@ -1526,7 +1099,7 @@ IR_Group ReadCode(IR_Context* ir, Location location)
                     
                     if (last_split) break;
                     
-                    assume_token(parser, TokenKind_NextSentence);
+                    AssumeToken(parser, TokenKind_NextSentence);
                 }
                 
                 splits.count = split_count;
@@ -1536,90 +1109,93 @@ IR_Group ReadCode(IR_Context* ir, Location location)
             if (splits.count == 1)
             {
                 Location location = splits[0];
-                Parser* parser = ParserFromLocation(location);
                 
-                Token element_token = consume_token(parser);
+                Parser* last_parser = parser;
+                defer(parser = last_parser);
+                parser = ParserSub(parser, location);
+                
+                Token element_token = ConsumeToken(parser);
                 if (element_token.kind != TokenKind_Identifier) {
-                    report_error(location, "Expecting element identifier of the for each statement");
-                    return ir_failed();
+                    ReportErrorFront(location, "Expecting element identifier of the for each statement");
+                    return IRFailed();
                 }
                 
                 String element_identifier = element_token.value;
                 String index_identifier = {};
                 
-                if (peek_token(parser).kind == TokenKind_Comma)
+                if (PeekToken(parser).kind == TokenKind_Comma)
                 {
-                    assume_token(parser, TokenKind_Comma);
-                    Token index_token = consume_token(parser);
+                    AssumeToken(parser, TokenKind_Comma);
+                    Token index_token = ConsumeToken(parser);
                     
                     if (index_token.kind != TokenKind_Identifier) {
-                        report_error(location, "Expecting index identifier for the for each statement");
-                        return ir_failed();
+                        ReportErrorFront(location, "Expecting index identifier for the for each statement");
+                        return IRFailed();
                     }
                     
                     index_identifier = index_token.value;
                 }
                 
-                if (peek_token(parser).kind != TokenKind_Colon) {
-                    report_error(location, "Expecting colon after for each identifiers");
-                    return ir_failed();
+                if (PeekToken(parser).kind != TokenKind_Colon) {
+                    ReportErrorFront(location, "Expecting colon after for each identifiers");
+                    return IRFailed();
                 }
-                assume_token(parser, TokenKind_Colon);
+                AssumeToken(parser, TokenKind_Colon);
                 
                 Location iterator_location = LocationFromParser(parser, parser->range.max);
                 
-                IR_Group iterator = ReadExpression(ir, iterator_location, ExpresionContext_from_inference(1));
+                IR_Group iterator = ReadExpression(ir, ParserSub(parser, iterator_location), ExpresionContext_from_inference(1));
                 
-                if (!vtype_is_array(iterator.value.vtype)) {
-                    report_error(location, "Invalid iterator for a for each statement");
-                    return ir_failed();
+                if (!TypeIsArray(iterator.value.vtype)) {
+                    ReportErrorFront(location, "Invalid iterator for a for each statement");
+                    return IRFailed();
                 }
                 
-                VType element_vtype = VTypeNext(iterator.value.vtype);
+                VType element_vtype = VTypeNext(program, iterator.value.vtype);
                 
                 // Init code
                 IR_Group init = IRFromDefineObject(ir, RegisterKind_Local, element_identifier, element_vtype, false, location);
                 Value element_value = init.value;
                 
                 if (index_identifier.size > 0) {
-                    init = ir_append(init, IRFromDefineObject(ir, RegisterKind_Local, index_identifier, VType_Int, false, location));
+                    init = IRAppend(init, IRFromDefineObject(ir, RegisterKind_Local, index_identifier, VType_Int, false, location));
                 }
                 else {
-                    init = ir_append(init, IRFromDefineTemporal(ir, VType_Int, location));
+                    init = IRAppend(init, IRFromDefineTemporal(ir, VType_Int, location));
                 }
                 Value index_value = init.value;
-                init = ir_append(init, ir_from_store(ir, index_value, ValueFromInt(0), location));
+                init = IRAppend(init, IRFromStore(ir, index_value, ValueFromInt(0), location));
                 
                 // Condition code
-                VariableTypeChild count_info = VTypeGetProperty(iterator.value.vtype, "count");
-                IR_Group condition = ir_from_child(ir, iterator.value, ValueFromInt(count_info.index), count_info.is_member, count_info.vtype, location);
+                VariableTypeChild count_info = VTypeGetProperty(program, iterator.value.vtype, "count");
+                IR_Group condition = IRFromChild(ir, iterator.value, ValueFromInt(count_info.index), count_info.is_member, count_info.vtype, location);
                 Value count_value = condition.value;
-                condition = ir_append(condition, ir_from_binary_operator(ir, index_value, count_value, BinaryOperator_LessThan, false, location));
+                condition = IRAppend(condition, IRFromBinaryOperator(ir, index_value, count_value, BinaryOperator_LessThan, false, location));
                 
                 // Content code
-                IR_Group content = ir_from_child(ir, iterator.value, index_value, true, element_vtype, location);
-                content = ir_append(content, ir_from_store(ir, element_value, content.value, location));
-                content = ir_append(content, ReadCode(ir, content_location));
+                IR_Group content = IRFromChild(ir, iterator.value, index_value, true, element_vtype, location);
+                content = IRAppend(content, IRFromStore(ir, element_value, content.value, location));
+                content = IRAppend(content, ReadCode(ir, ParserSub(parser, content_location)));
                 
                 // Update code
-                IR_Group update = ir_from_assignment(ir, false, index_value, ValueFromInt(1), BinaryOperator_Addition, location);
+                IR_Group update = IRFromAssignment(ir, false, index_value, ValueFromInt(1), BinaryOperator_Addition, location);
                 
-                out = ir_append(out, IRFromLoop(ir, init, condition, content, update, first_token.location));
+                out = IRAppend(out, IRFromLoop(ir, init, condition, content, update, first_token.location));
             }
             // Traditional C for
             else if (splits.count == 3)
             {
-                IR_Group init = ReadSentence(ir, splits[0]);
-                IR_Group condition = ReadExpression(ir, splits[1], ExpresionContext_from_vtype(VType_Bool, 1));
-                IR_Group update = ReadSentence(ir, splits[2]);
-                IR_Group content = ReadCode(ir, content_location);
+                IR_Group init = ReadSentence(ir, ParserSub(parser, splits[0]));
+                IR_Group condition = ReadExpression(ir, ParserSub(parser, splits[1]), ExpresionContext_from_vtype(VType_Bool, 1));
+                IR_Group update = ReadSentence(ir, ParserSub(parser, splits[2]));
+                IR_Group content = ReadCode(ir, ParserSub(parser, content_location));
                 
-                out = ir_append(out, IRFromLoop(ir, init, condition, content, update, first_token.location));
+                out = IRAppend(out, IRFromLoop(ir, init, condition, content, update, first_token.location));
             }
             else
             {
-                report_error(first_token.location, "Unknown for format");
-                return ir_failed();
+                ReportErrorFront(first_token.location, "Unknown for format");
+                return IRFailed();
             }
         }
         else if (first_token.kind == TokenKind_OpenBrace)
@@ -1628,13 +1204,13 @@ IR_Group ReadCode(IR_Context* ir, Location location)
             
             if (!LocationIsValid(block_location)) {
                 report_common_missing_closing_brace(first_token.location);
-                return ir_failed();
+                return IRFailed();
             }
             
-            IR_Group block = ReadCode(ir, block_location);
-            if (!block.success) return ir_failed();
+            IR_Group block = ReadCode(ir, ParserSub(parser, block_location));
+            if (!block.success) return IRFailed();
             
-            out = ir_append(out, block);
+            out = IRAppend(out, block);
         }
         
         // Sentence
@@ -1644,80 +1220,80 @@ IR_Group ReadCode(IR_Context* ir, Location location)
             
             if (!LocationIsValid(sentence_location)) {
                 report_expecting_semicolon(first_token.location);
-                return ir_failed();
+                return IRFailed();
             }
             
-            out = ir_append(out, ReadSentence(ir, sentence_location));
+            out = IRAppend(out, ReadSentence(ir, ParserSub(parser, sentence_location)));
             
-            assume_token(parser, TokenKind_NextSentence);
+            AssumeToken(parser, TokenKind_NextSentence);
         }
     }
     
     return out;
 }
 
-IR_Group ReadSentence(IR_Context* ir, Location location)
+IR_Group ReadSentence(IR_Context* ir, Parser* parser)
 {
-    Parser* parser = ParserFromLocation(location);
-    
-    SentenceKind kind = find_sentence_kind(parser);
+    Reporter* reporter = ir->reporter;
+    Location location = LocationFromParser(parser);
+    SentenceKind kind = GuessSentenceKind(parser);
     
     if (kind == SentenceKind_ObjectDef)
     {
-        ObjectDefinitionResult res = ReadObjectDefinition(context.arena, location, false, RegisterKind_Local, ir);
-        if (!res.success) return ir_failed();
+        ObjectDefinitionResult res = ReadObjectDefinitionWithIr(context.arena, parser, ir, false, RegisterKind_Local);
+        if (!res.success) return IRFailed();
         return res.out;
     }
     
     if (kind == SentenceKind_FunctionCall)
     {
-        return ReadFunctionCall(ir, ExpresionContext_from_void(), location);
+        return ReadFunctionCall(ir, ExpresionContext_from_void(), parser);
     }
     
     if (kind == SentenceKind_Assignment)
     {
         PooledArray<String> identifiers = pooled_array_make<String>(context.arena, 4);
-        IR_Group out = ir_from_none();
+        IR_Group out = IRFromNone();
         
         U64 dst_end_cursor = find_token_with_depth_check(parser, true, true, true, TokenKind_Assignment);
         
         if (dst_end_cursor == parser->cursor) {
             InvalidCodepath();
-            return ir_failed();
+            return IRFailed();
         }
         
         Location dst_code = LocationMake(parser->cursor, dst_end_cursor, parser->script_id);
-        out = ir_append(out, ReadExpressionList(context.arena, ir, VType_Any, {}, dst_code));
+        out = IRAppend(out, ReadExpressionList(context.arena, ir, VType_Any, {}, ParserSub(parser, dst_code)));
         
         MoveCursor(parser, dst_end_cursor);
-        Token assignment_token = consume_token(parser);
+        Token assignment_token = ConsumeToken(parser);
         Assert(assignment_token.kind == TokenKind_Assignment);
         
         Array<Value> values = ValuesFromReturn(context.arena, out.value, true);
         
         if (values.count == 0) {
-            report_error(location, "Empty assignment");
-            return ir_failed();
+            ReportErrorFront(location, "Empty assignment");
+            return IRFailed();
         }
         
         foreach(i, values.count)
         {
             Register reg = IRRegisterGet(ir, ValueGetRegister(values[i]));
             if (RegisterIsValid(reg) && reg.is_constant) {
-                report_error(location, "Can't modify a constant: {line}");
+                ReportErrorFront(location, "Can't modify a constant: {line}");
             }
         }
         
         Location src_code = LocationMake(parser->cursor, parser->range.max, parser->script_id);
         
-        IR_Group src = ReadExpression(ir, src_code, ExpresionContext_from_vtype(values[0].vtype, values.count));
-        out = ir_append(out, src);
+        IR_Group src = ReadExpression(ir, ParserSub(parser, src_code), ExpresionContext_from_vtype(values[0].vtype, values.count));
+        out = IRAppend(out, src);
         
-        if (!out.success) return ir_failed();
+        if (!out.success) return IRFailed();
         
         BinaryOperator op = assignment_token.assignment_binary_operator;
-        IR_Group assignment = ir_from_multiple_assignment(ir, true, values, src.value, op, location);
-        return ir_append(out, assignment);
+        IR_Group assignment = IRFromMultipleAssignment(ir, true, values, src.value, op, location);
+        return IRAppend(out, assignment);
     }
     else if (kind == SentenceKind_Continue || kind == SentenceKind_Break)
     {
@@ -1725,36 +1301,38 @@ IR_Group ReadSentence(IR_Context* ir, Location location)
     }
     else if (kind == SentenceKind_Return)
     {
-        assume_token(parser, TokenKind_ReturnKeyword);
+        AssumeToken(parser, TokenKind_ReturnKeyword);
         
         Array<VType> returns = ReturnsFromRegisters(context.arena, array_from_pooled_array(context.arena, ir->local_registers));
         
         VType expected_vtype = VType_Void;
         if (returns.count == 1) expected_vtype = returns[0];
         
-        ExpresionContext context = (expected_vtype == VType_Void) ? ExpresionContext_from_void() : ExpresionContext_from_vtype(expected_vtype, 1);
+        ExpresionContext context = (TypeIsVoid(expected_vtype)) ? ExpresionContext_from_void() : ExpresionContext_from_vtype(expected_vtype, 1);
         
         Location expression_location = LocationFromParser(parser, parser->range.max);
-        IR_Group expression = ReadExpression(ir, expression_location, context);
-        if (!expression.success) return ir_failed();
+        IR_Group expression = ReadExpression(ir, ParserSub(parser, expression_location), context);
+        if (!expression.success) return IRFailed();
         return IRFromReturn(ir, expression, location);
     }
     
     if (kind == SentenceKind_Unknown) {
-        report_error(location, "Unknown sentence: {line}");
-        return ir_failed();
+        ReportErrorFront(location, "Unknown sentence: {line}");
+        return IRFailed();
     }
     else {
-        report_error(location, "Invalid sentence: {line}");
-        return ir_failed();
+        ReportErrorFront(location, "Invalid sentence: {line}");
+        return IRFailed();
     }
 }
 
-IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Location location)
+IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser* parser)
 {
-    Parser* parser = ParserFromLocation(location);
+    Program* program = ir->program;
+    Reporter* reporter = ir->reporter;
+    Location location = LocationFromParser(parser);
     
-    Token identifier_token = consume_token(parser);
+    Token identifier_token = ConsumeToken(parser);
     Assert(identifier_token.kind == TokenKind_Identifier);
     String identifier = identifier_token.value;
     
@@ -1762,13 +1340,13 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Locatio
     
     if (!LocationIsValid(expressions_location)) {
         report_common_missing_closing_parenthesis(location);
-        return ir_failed();
+        return IRFailed();
     }
     
     Array<VType> expected_vtypes = {};
     
     {
-        FunctionDefinition* fn = FunctionFromIdentifier(identifier);
+        FunctionDefinition* fn = FunctionFromIdentifier(program, identifier);
         if (fn != NULL)
         {
             expected_vtypes = array_make<VType>(context.arena, fn->parameters.count);
@@ -1778,38 +1356,32 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Locatio
         }
     }
     
-    IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, expected_vtypes, expressions_location);
+    IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, expected_vtypes, ParserSub(parser, expressions_location));
     Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
     
-    IR_Group call = ir_from_function_call(ir, identifier, params, expr_context, location);
-    return ir_append(out, call);
+    IR_Group call = IRFromFunctionCall(ir, identifier, params, expr_context, location);
+    return IRAppend(out, call);
 }
 
-ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Location location, B32 require_single, RegisterKind register_kind, IR_Context* ir)
+internal_fn PooledArray<String> ExtractObjectIdentifiers(Parser* parser, Reporter* reporter, B32 require_single)
 {
-    Parser* parser = ParserFromLocation(location);
-    
-    ObjectDefinitionResult res = {};
-    res.out = ir_from_none();
-    res.success = false;
-    
-    Token starting_token = peek_token(parser);
+    Token starting_token = PeekToken(parser);
     
     PooledArray<String> identifiers = pooled_array_make<String>(context.arena, 4);
     
     // Extract identifiers
     while (true)
     {
-        Token token = consume_token(parser);
+        Token token = ConsumeToken(parser);
         
         if (token.kind != TokenKind_Identifier) {
-            report_error(token.location, "Expecting an identifier\n");
-            return res;
+            ReportErrorFront(token.location, "Expecting an identifier\n");
+            return {};
         }
         
         array_add(&identifiers, token.value);
         
-        token = consume_token(parser);
+        token = ConsumeToken(parser);
         
         if (token.kind == TokenKind_Colon) {
             break;
@@ -1817,27 +1389,31 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Location location, B32
         
         if (require_single || token.kind != TokenKind_Comma) {
             report_objdef_expecting_colon(starting_token.location);
-            return res;
+            return {};
         }
     }
     
-    // Validation for duplicated symbols
-    if (ir != NULL)
-    {
-        foreach(i, identifiers.count) {
-            String identifier = identifiers[i];
-            if (ir_find_object(ir, identifier, false) != NULL) {
-                report_symbol_duplicated(location, identifier);
-                return res;
-            }
-        }
-    }
+    return identifiers;
+}
+
+ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Reporter* reporter, Program* program, B32 require_single, RegisterKind register_kind)
+{
+    Location location = LocationFromParser(parser);
+    
+    ObjectDefinitionResult res = {};
+    res.out = IRFromNone();
+    res.success = false;
+    
+    Token starting_token = PeekToken(parser);
+    
+    PooledArray<String> identifiers = ExtractObjectIdentifiers(parser, reporter, require_single);
+    if (identifiers.count == 0) return res;
     
     // Explicit type
     VType definition_vtype = VType_Void;
     
     {
-        Token type_or_assignment_token = peek_token(parser);
+        Token type_or_assignment_token = PeekToken(parser);
         
         if (type_or_assignment_token.kind == TokenKind_Assignment) {}
         else if (type_or_assignment_token.kind == TokenKind_Colon) {}
@@ -1850,13 +1426,13 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Location location, B32
                 MoveCursor(parser, type_location.range.max);
             }
             
-            definition_vtype = ReadObjectType(type_location);
-            if (definition_vtype == VType_Nil) {
+            definition_vtype = ReadObjectType(ParserSub(parser, type_location), reporter, program);
+            if (TypeIsNil(definition_vtype)) {
                 return res;
             }
             
-            if (definition_vtype == VType_Void) {
-                report_error(starting_token.location, "Void is not a valid object: {line}");
+            if (TypeIsVoid(definition_vtype)) {
+                ReportErrorFront(starting_token.location, "Void is not a valid object: {line}");
                 return res;
             }
         }
@@ -1869,149 +1445,210 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Location location, B32
     res.objects = array_make<ObjectDefinition>(arena, identifiers.count);
     
     B32 is_constant = false;
-    B32 inference_type = definition_vtype == VType_Void;
+    B32 inference_type = TypeIsVoid(definition_vtype);
     
-    if (ir == NULL)
+    if (inference_type) {
+        ReportErrorFront(starting_token.location, "Unsupported inference type");
+        return res;
+    }
+    
+    Token assignment_token = PeekToken(parser);
+    is_constant = assignment_token.kind == TokenKind_Colon;
+    
+    for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
     {
-        if (inference_type) {
-            report_error(starting_token.location, "Unsupported inference type");
+        String identifier = StrCopy(arena, *it.value);
+        Value value = ValueFromZero(definition_vtype);
+        
+        res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+    }
+    
+    res.success = true;
+    return res;
+}
+
+ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, IR_Context* ir, B32 require_single, RegisterKind register_kind)
+{
+    Program* program = ir->program;
+    Reporter* reporter = ir->reporter;
+    Location location = LocationFromParser(parser);
+    
+    ObjectDefinitionResult res = {};
+    res.out = IRFromNone();
+    res.success = false;
+    
+    Token starting_token = PeekToken(parser);
+    
+    PooledArray<String> identifiers = ExtractObjectIdentifiers(parser, reporter, require_single);
+    if (identifiers.count == 0) return res;
+    
+    // Validation for duplicated symbols
+    foreach(i, identifiers.count) {
+        String identifier = identifiers[i];
+        if (ir_find_object(ir, identifier, false) != NULL) {
+            report_symbol_duplicated(location, identifier);
+            return res;
+        }
+    }
+    
+    // Explicit type
+    VType definition_vtype = VType_Void;
+    
+    {
+        Token type_or_assignment_token = PeekToken(parser);
+        
+        if (type_or_assignment_token.kind == TokenKind_Assignment) {}
+        else if (type_or_assignment_token.kind == TokenKind_Colon) {}
+        else if (type_or_assignment_token.kind == TokenKind_Identifier)
+        {
+            Location type_location = FetchUntil(parser, false, TokenKind_Assignment, TokenKind_Colon);
+            
+            if (!LocationIsValid(type_location)) {
+                type_location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+                MoveCursor(parser, type_location.range.max);
+            }
+            
+            definition_vtype = ReadObjectType(ParserSub(parser, type_location), reporter, program);
+            if (TypeIsNil(definition_vtype)) {
+                return res;
+            }
+            
+            if (TypeIsVoid(definition_vtype)) {
+                ReportErrorFront(starting_token.location, "Void is not a valid object: {line}");
+                return res;
+            }
+        }
+        else {
+            report_objdef_expecting_type_identifier(starting_token.location);
+            return res;
+        }
+    }
+    
+    res.objects = array_make<ObjectDefinition>(arena, identifiers.count);
+    
+    B32 is_constant = false;
+    B32 inference_type = TypeIsVoid(definition_vtype);
+    
+    Token assignment_token = ConsumeToken(parser);
+    
+    if (assignment_token.kind != TokenKind_None)
+    {
+        B32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None;
+        B32 constant_assignment = assignment_token.kind == TokenKind_Colon;
+        
+        if (!variable_assignment && !constant_assignment) {
+            report_objdef_expecting_assignment(starting_token.location);
             return res;
         }
         
-        Token assignment_token = peek_token(parser);
-        is_constant = assignment_token.kind == TokenKind_Colon;
+        is_constant = constant_assignment;
         
-        for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
-        {
-            String identifier = StrCopy(yov->arena, *it.value);
-            Value value = ValueFromZero(definition_vtype);
+        U64 assignment_end_cursor = parser->range.max;
+        
+        Location expression_code = LocationFromParser(parser, assignment_end_cursor);
+        ExpresionContext expression_context = inference_type ? ExpresionContext_from_inference(identifiers.count) : ExpresionContext_from_vtype(definition_vtype, identifiers.count);
+        IR_Group src = ReadExpression(ir, ParserSub(parser, expression_code), expression_context);
+        if (!src.success) return res;
+        
+        Array<VType> vtypes = {};
+        
+        // Inference
+        if (inference_type) {
+            Array<Value> returns = ValuesFromReturn(context.arena, src.value, true);
             
-            res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+            if (returns.count == 1) {
+                vtypes = array_make<VType>(context.arena, identifiers.count);
+                foreach(i, vtypes.count) vtypes[i] = returns[0].vtype;
+            }
+            else if (returns.count > 1) {
+                vtypes = array_make<VType>(context.arena, returns.count);
+                foreach(i, vtypes.count) vtypes[i] = returns[i].vtype;
+            }
+            definition_vtype = src.value.vtype;
+        }
+        else {
+            vtypes = array_make<VType>(context.arena, identifiers.count);
+            foreach(i, vtypes.count) vtypes[i] = definition_vtype;
+        }
+        
+        B32 is_any = TypeIsAny(definition_vtype);
+        
+        if (!is_any && vtypes.count < identifiers.count) {
+            ReportErrorFront(location, "Unresolved object type for definition");
+            return res;
+        }
+        
+        Array<Value> values = array_make<Value>(context.arena, identifiers.count);
+        foreach(i, values.count) {
+            VType vtype = vtypes[i];
+            
+            if (register_kind == RegisterKind_Global)
+            {
+                I32 global_index = GlobalIndexFromIdentifier(program, identifiers[i]);
+                if (global_index < 0) {
+                    ReportErrorFront(location, "Global '%S' not found", identifiers[i]);
+                    continue;
+                }
+                
+                res.out = IRAppend(res.out, IRFromStore(ir, ValueFromGlobal(program, global_index), ValueFromZero(vtype), location));
+            }
+            else
+            {
+                res.out = IRAppend(res.out, IRFromDefineObject(ir, register_kind, identifiers[i], vtype, is_constant, location));
+                res.out = IRAppend(res.out, IRFromStore(ir, res.out.value, ValueFromZero(vtype), location));
+            }
+            values[i] = res.out.value;
+        }
+        
+        // Default src
+        if (src.value.kind == ValueKind_None && !is_any) {
+            src = IRFromDefaultInitializer(ir, definition_vtype, location);
+        }
+        
+        res.out = IRAppend(res.out, src);
+        
+        if (src.value.kind != ValueKind_None) {
+            IR_Group assignment = IRFromMultipleAssignment(ir, true, values, src.value, BinaryOperator_None, location);
+            res.out = IRAppend(res.out, assignment);
+        }
+        
+        for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it) {
+            res.objects[it.index] = ObjDefMake(StrCopy(arena, *it.value), vtypes[it.index], location, is_constant, values[it.index]);
         }
     }
     else
     {
-        Token assignment_token = consume_token(parser);
-        
-        if (assignment_token.kind != TokenKind_None)
-        {
-            B32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None;
-            B32 constant_assignment = assignment_token.kind == TokenKind_Colon;
-            
-            if (!variable_assignment && !constant_assignment) {
-                report_objdef_expecting_assignment(starting_token.location);
-                return res;
-            }
-            
-            is_constant = constant_assignment;
-            
-            U64 assignment_end_cursor = parser->range.max;
-            
-            Location expression_code = LocationFromParser(parser, assignment_end_cursor);
-            ExpresionContext expression_context = inference_type ? ExpresionContext_from_inference(identifiers.count) : ExpresionContext_from_vtype(definition_vtype, identifiers.count);
-            IR_Group src = ReadExpression(ir, expression_code, expression_context);
-            if (!src.success) return res;
-            
-            Array<VType> vtypes = {};
-            
-            // Inference
-            if (inference_type) {
-                Array<Value> returns = ValuesFromReturn(context.arena, src.value, true);
-                
-                if (returns.count == 1) {
-                    vtypes = array_make<VType>(context.arena, identifiers.count);
-                    foreach(i, vtypes.count) vtypes[i] = returns[0].vtype;
-                }
-                else if (returns.count > 1) {
-                    vtypes = array_make<VType>(context.arena, returns.count);
-                    foreach(i, vtypes.count) vtypes[i] = returns[i].vtype;
-                }
-                definition_vtype = src.value.vtype;
-            }
-            else {
-                vtypes = array_make<VType>(context.arena, identifiers.count);
-                foreach(i, vtypes.count) vtypes[i] = definition_vtype;
-            }
-            
-            B32 is_any = definition_vtype == VType_Any;
-            
-            if (!is_any && vtypes.count < identifiers.count) {
-                report_error(location, "Unresolved object type for definition");
-                return res;
-            }
-            
-            Array<Value> values = array_make<Value>(context.arena, identifiers.count);
-            foreach(i, values.count) {
-                VType vtype = vtypes[i];
-                
-                if (register_kind == RegisterKind_Global)
-                {
-                    I32 global_index = GlobalIndexFromIdentifier(identifiers[i]);
-                    if (global_index < 0) {
-                        report_error(location, "Global '%S' not found", identifiers[i]);
-                        continue;
-                    }
-                    
-                    res.out = ir_append(res.out, ir_from_store(ir, ValueFromGlobal(global_index), ValueFromZero(vtype), location));
-                }
-                else
-                {
-                    res.out = ir_append(res.out, IRFromDefineObject(ir, register_kind, identifiers[i], vtype, is_constant, location));
-                    res.out = ir_append(res.out, ir_from_store(ir, res.out.value, ValueFromZero(vtype), location));
-                }
-                values[i] = res.out.value;
-            }
-            
-            // Default src
-            if (src.value.kind == ValueKind_None && !is_any) {
-                src = ir_from_default_initializer(ir, definition_vtype, location);
-            }
-            
-            res.out = ir_append(res.out, src);
-            
-            if (src.value.kind != ValueKind_None) {
-                IR_Group assignment = ir_from_multiple_assignment(ir, true, values, src.value, BinaryOperator_None, location);
-                res.out = ir_append(res.out, assignment);
-            }
-            
-            for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it) {
-                res.objects[it.index] = ObjDefMake(StrCopy(yov->arena, *it.value), vtypes[it.index], location, is_constant, values[it.index]);
-            }
+        if (inference_type) {
+            ReportErrorFront(location, "Unspecified type");
+            return res;
         }
-        else
+        
+        res.out = IRFromNone(ValueFromZero(definition_vtype));
+        
+        for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
         {
-            if (inference_type) {
-                report_error(location, "Unspecified type");
-                return res;
-            }
+            String identifier = StrCopy(arena, *it.value);
             
-            res.out = ir_from_none(ValueFromZero(definition_vtype));
-            
-            for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
+            if (register_kind == RegisterKind_Global)
             {
-                String identifier = StrCopy(yov->arena, *it.value);
+                I32 global_index = GlobalIndexFromIdentifier(program, identifier);
+                if (global_index < 0) {
+                    ReportErrorFront(location, "Global '%S' not found", identifier);
+                    continue;
+                }
                 
-                if (register_kind == RegisterKind_Global)
-                {
-                    I32 global_index = GlobalIndexFromIdentifier(identifier);
-                    if (global_index < 0) {
-                        report_error(location, "Global '%S' not found", identifier);
-                        continue;
-                    }
-                    
-                    res.out = ir_append(res.out, ir_from_store(ir, ValueFromGlobal(global_index), ValueFromZero(definition_vtype), location));
-                    Value value = res.out.value;
-                    res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+                res.out = IRAppend(res.out, IRFromStore(ir, ValueFromGlobal(program, global_index), ValueFromZero(definition_vtype), location));
+                Value value = res.out.value;
+                res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+            }
+            else
+            {
+                res.out = IRAppend(res.out, IRFromDefineObject(ir, register_kind, identifier, definition_vtype, is_constant, location));
+                Value value = res.out.value;
+                if (register_kind != RegisterKind_Parameter) {
+                    res.out = IRAppend(res.out, IRFromStore(ir, value, ValueFromZero(definition_vtype), location));
                 }
-                else
-                {
-                    res.out = ir_append(res.out, IRFromDefineObject(ir, register_kind, identifier, definition_vtype, is_constant, location));
-                    Value value = res.out.value;
-                    if (register_kind != RegisterKind_Parameter) {
-                        res.out = ir_append(res.out, ir_from_store(ir, value, ValueFromZero(definition_vtype), location));
-                    }
-                    res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
-                }
+                res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
             }
         }
     }
@@ -2020,15 +1657,13 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Location location, B32
     return res;
 }
 
-ObjectDefinitionResult ReadDefinitionList(Arena* arena, Location location, RegisterKind register_kind, IR_Context* ir)
+ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter* reporter, Program* program, RegisterKind register_kind)
 {
-    Parser* parser = ParserFromLocation(location);
-    
     ObjectDefinitionResult res = {};
-    res.out = ir_from_none();
+    res.out = IRFromNone();
     
     // Empty list
-    if (peek_token(parser).kind == TokenKind_None)
+    if (PeekToken(parser).kind == TokenKind_None)
     {
         res.success = true;
         return res;
@@ -2045,16 +1680,16 @@ ObjectDefinitionResult ReadDefinitionList(Arena* arena, Location location, Regis
             MoveCursor(parser, parameter_location.range.max);
         }
         
-        ObjectDefinitionResult res0 = ReadObjectDefinition(context.arena, parameter_location, false, register_kind, ir);
+        ObjectDefinitionResult res0 = ReadObjectDefinition(context.arena, ParserSub(parser, parameter_location), reporter, program, false, register_kind);
         if (!res0.success) return {};
         
         foreach(i, res0.objects.count) {
             array_add(&list, res0.objects[i]);
         }
         
-        res.out = ir_append(res.out, res0.out);
+        res.out = IRAppend(res.out, res0.out);
         
-        consume_token(parser);
+        ConsumeToken(parser);
     }
     
     res.objects = array_from_pooled_array(arena, list);
@@ -2062,11 +1697,49 @@ ObjectDefinitionResult ReadDefinitionList(Arena* arena, Location location, Regis
     return res;
 }
 
-IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VType> expected_vtypes, Location location)
+ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR_Context* ir, RegisterKind register_kind)
 {
-    Parser* parser = ParserFromLocation(location);
+    ObjectDefinitionResult res = {};
+    res.out = IRFromNone();
     
-    IR_Group out = ir_from_none();
+    // Empty list
+    if (PeekToken(parser).kind == TokenKind_None)
+    {
+        res.success = true;
+        return res;
+    }
+    
+    PooledArray<ObjectDefinition> list = pooled_array_make<ObjectDefinition>(context.arena, 8);
+    
+    while (parser->cursor < parser->range.max)
+    {
+        Location parameter_location = FetchUntil(parser, false, TokenKind_Comma);
+        
+        if (!LocationIsValid(parameter_location)) {
+            parameter_location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+            MoveCursor(parser, parameter_location.range.max);
+        }
+        
+        ObjectDefinitionResult res0 = ReadObjectDefinitionWithIr(context.arena, ParserSub(parser, parameter_location), ir, false, register_kind);
+        if (!res0.success) return {};
+        
+        foreach(i, res0.objects.count) {
+            array_add(&list, res0.objects[i]);
+        }
+        
+        res.out = IRAppend(res.out, res0.out);
+        
+        ConsumeToken(parser);
+    }
+    
+    res.objects = array_from_pooled_array(arena, list);
+    res.success = true;
+    return res;
+}
+
+IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VType> expected_vtypes, Parser* parser)
+{
+    IR_Group out = IRFromNone();
     PooledArray<Value> list = pooled_array_make<Value>(context.arena, 8);
     
     while (parser->cursor < parser->range.max)
@@ -2081,15 +1754,15 @@ IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VTy
         VType expected_vtype = vtype;
         if (index < expected_vtypes.count) expected_vtype = expected_vtypes[index];
         
-        Location expression_code = LocationMake(parser->cursor, expression_end_cursor, parser->script_id);
+        Location expression_location = LocationMake(parser->cursor, expression_end_cursor, parser->script_id);
         
-        out = ir_append(out, ReadExpression(ir, expression_code, ExpresionContext_from_vtype(expected_vtype, 1)));
-        if (!out.success) return ir_failed();
+        out = IRAppend(out, ReadExpression(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(expected_vtype, 1)));
+        if (!out.success) return IRFailed();
         
         array_add(&list, out.value);
         
         MoveCursor(parser, expression_end_cursor);
-        consume_token(parser);
+        ConsumeToken(parser);
     }
     
     out.value = value_from_return(arena, array_from_pooled_array(context.arena, list));
@@ -2097,14 +1770,14 @@ IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VTy
     return out;
 }
 
-VType ReadObjectType(Location location)
+VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program)
 {
-    Parser* parser = ParserFromLocation(location);
+    Location location = LocationFromParser(parser);
     Array<Token> tokens = ConsumeAllTokens(parser);
     
     if (tokens.count == 0)
     {
-        report_error(location, "Expecting a type");
+        ReportErrorFront(location, "Expecting a type");
         return VType_Nil;
     }
     
@@ -2127,7 +1800,7 @@ VType ReadObjectType(Location location)
     if (tokens.count > 0)
     {
         if (tokens.count % 2 != 0) {
-            report_error(location, "Invalid type format");
+            ReportErrorFront(location, "Invalid type format");
             return VType_Nil;
         }
         
@@ -2135,7 +1808,7 @@ VType ReadObjectType(Location location)
         {
             TokenKind kind = (i % 2 == 0) ? TokenKind_OpenBracket : TokenKind_CloseBracket;
             if (tokens[i].kind != kind) {
-                report_error(location, "Invalid type format");
+                ReportErrorFront(location, "Invalid type format");
                 return VType_Nil;
             }
         }
@@ -2143,9 +1816,9 @@ VType ReadObjectType(Location location)
         array_dimensions = tokens.count / 2;
     }
     
-    VType vtype = vtype_from_name(identifier_token.value);
-    if (vtype == VType_Nil) {
-        report_error(location, "Unknown type");
+    VType vtype = TypeFromName(program, identifier_token.value);
+    if (TypeIsNil(vtype)) {
+        ReportErrorFront(location, "Unknown type");
         return VType_Nil;
     }
     
@@ -2153,6 +1826,167 @@ VType ReadObjectType(Location location)
     if (is_reference) vtype = vtype_from_reference(vtype);
     return vtype;
 }
+
+
+String StringFromTokens(Arena* arena, Array<Token> tokens)
+{
+    StringBuilder builder = string_builder_make(context.arena);
+    
+    foreach(i, tokens.count) {
+        append(&builder, tokens[i].value);
+    }
+    
+    String res = string_from_builder(context.arena, &builder);
+    res = StrReplace(context.arena, res, "\n", "\\n");
+    res = StrReplace(context.arena, res, "\r", "");
+    res = StrReplace(context.arena, res, "\t", " ");
+    
+    return StrCopy(arena, res);
+}
+
+String DebugInfoFromToken(Arena* arena, Token token)
+{
+    TokenKind k = token.kind;
+    
+    if (k == TokenKind_Separator) return "separator";
+    if (k == TokenKind_Identifier) return StrFormat(arena, "identifier: %S", token.value);
+    if (k == TokenKind_IfKeyword) return "if";
+    if (k == TokenKind_ElseKeyword) return "else";
+    if (k == TokenKind_WhileKeyword) return "while";
+    if (k == TokenKind_ForKeyword) return "for";
+    if (k == TokenKind_EnumKeyword) return "enum";
+    if (k == TokenKind_IntLiteral) return StrFormat(arena, "Int Literal: %S", token.value);
+    if (k == TokenKind_BoolLiteral) { return StrFormat(arena, "Bool Literal: %S", token.value); }
+    if (k == TokenKind_StringLiteral) { return StrFormat(arena, "String Literal: %S", token.value); }
+    if (k == TokenKind_Comment) { return StrFormat(arena, "Comment: %S", token.value); }
+    if (k == TokenKind_Comma) return ",";
+    if (k == TokenKind_Dot) return ".";
+    if (k == TokenKind_Colon) return ":";
+    if (k == TokenKind_OpenBrace) return "{";
+    if (k == TokenKind_CloseBrace) return "}";
+    if (k == TokenKind_OpenBracket) return "[";
+    if (k == TokenKind_CloseBracket) return "]";
+    if (k == TokenKind_OpenParenthesis) return "(";
+    if (k == TokenKind_CloseParenthesis) return ")";
+    if (k == TokenKind_Assignment) {
+        if (token.assignment_binary_operator == BinaryOperator_None) return "=";
+        return StrFormat(arena, "%S=", StringFromBinaryOperator(token.assignment_binary_operator));
+    }
+    if (k == TokenKind_PlusSign) return "+";
+    if (k == TokenKind_MinusSign) return "-";
+    if (k == TokenKind_Asterisk) return "*";
+    if (k == TokenKind_Slash) return "/";
+    if (k == TokenKind_Modulo) return "%";
+    if (k == TokenKind_Ampersand) return "&";
+    if (k == TokenKind_Exclamation) return "!";
+    if (k == TokenKind_LogicalOr) return "||";
+    if (k == TokenKind_LogicalAnd) return "&&";
+    if (k == TokenKind_CompEquals) return "==";
+    if (k == TokenKind_CompNotEquals) return "!=";
+    if (k == TokenKind_CompLess) return "<";
+    if (k == TokenKind_CompLessEquals) return "<=";
+    if (k == TokenKind_CompGreater) return ">";
+    if (k == TokenKind_CompGreaterEquals) return ">=";
+    if (k == TokenKind_OpenString) return "Open String";
+    if (k == TokenKind_NextLine) return "Next Line";
+    if (k == TokenKind_CloseString) return "Close String";
+    if (k == TokenKind_NextSentence) return ";";
+    if (k == TokenKind_Error) return "Error";
+    if (k == TokenKind_None) return "None";
+    
+    return "?";
+}
+
+BinaryOperator binary_operator_from_token(TokenKind token)
+{
+    if (token == TokenKind_PlusSign) return BinaryOperator_Addition;
+    if (token == TokenKind_MinusSign) return BinaryOperator_Substraction;
+    if (token == TokenKind_Asterisk) return BinaryOperator_Multiplication;
+    if (token == TokenKind_Slash) return BinaryOperator_Division;
+    if (token == TokenKind_Modulo) return BinaryOperator_Modulo;
+    if (token == TokenKind_Ampersand) return BinaryOperator_None;
+    if (token == TokenKind_Exclamation) return BinaryOperator_LogicalNot;
+    if (token == TokenKind_LogicalOr) return BinaryOperator_LogicalOr;
+    if (token == TokenKind_LogicalAnd) return BinaryOperator_LogicalAnd;
+    if (token == TokenKind_CompEquals) return BinaryOperator_Equals;
+    if (token == TokenKind_CompNotEquals) return BinaryOperator_NotEquals;
+    if (token == TokenKind_CompLess) return BinaryOperator_LessThan;
+    if (token == TokenKind_CompLessEquals) return BinaryOperator_LessEqualsThan;
+    if (token == TokenKind_CompGreater) return BinaryOperator_GreaterThan;
+    if (token == TokenKind_CompGreaterEquals) return BinaryOperator_GreaterEqualsThan;
+    if (token == TokenKind_IsKeyword) return BinaryOperator_Is;
+    return BinaryOperator_None;
+};
+
+B32 token_is_sign_or_binary_op(TokenKind token)
+{
+    TokenKind tokens[] = {
+        TokenKind_PlusSign,
+        TokenKind_MinusSign,
+        TokenKind_Asterisk,
+        TokenKind_Slash,
+        TokenKind_Modulo,
+        TokenKind_Ampersand,
+        TokenKind_Exclamation,
+        
+        TokenKind_LogicalOr,
+        TokenKind_LogicalAnd,
+        
+        TokenKind_CompEquals,
+        TokenKind_CompNotEquals,
+        TokenKind_CompLess,
+        TokenKind_CompLessEquals,
+        TokenKind_CompGreater,
+        TokenKind_CompGreaterEquals,
+        
+        TokenKind_IsKeyword,
+    };
+    
+    foreach(i, countof(tokens)) {
+        if (tokens[i] == token) return true;
+    }
+    return false;
+}
+
+B32 TokenIsFlowModifier(TokenKind token) {
+    if (token == TokenKind_IfKeyword) return true;
+    if (token == TokenKind_ElseKeyword) return true;
+    if (token == TokenKind_WhileKeyword) return true;
+    if (token == TokenKind_ForKeyword) return true;
+    return false;
+}
+
+TokenKind TokenKindFromOpenScope(TokenKind open_token)
+{
+    if (open_token == TokenKind_OpenParenthesis) return TokenKind_CloseParenthesis;
+    if (open_token == TokenKind_OpenBracket) return TokenKind_CloseBracket;
+    if (open_token == TokenKind_OpenBrace) return TokenKind_CloseBrace;
+    
+    InvalidCodepath();
+    return TokenKind_Error;
+}
+
+Location LocationFromTokens(Array<Token> tokens)
+{
+    if (tokens.count == 0) return {};
+    
+#if DEV
+    foreach(i, tokens.count - 1)
+    {
+        Token t0 = tokens[i + 0];
+        Token t1 = tokens[i + 1];
+        Assert(t0.cursor + t0.skip_size == t1.cursor);
+        Assert(t0.location.script_id == t1.location.script_id);
+    }
+#endif
+    
+    Token first_token = tokens[0];
+    Token last_token = tokens[tokens.count - 1];
+    
+    I32 script_id = first_token.location.script_id;
+    return LocationMake(first_token.cursor, last_token.cursor + last_token.skip_size, script_id);
+}
+
 
 internal_fn Token token_make_dynamic(String text, U64 cursor, TokenKind kind, U64 size, I32 script_id)
 {
@@ -2206,7 +2040,7 @@ internal_fn Token token_make_fixed(String text, U64 cursor, TokenKind kind, U32 
     U32 index = 0;
     while (index < codepoint_length && cursor < text.size) {
         index++;
-        string_get_codepoint(text, &cursor);
+        StrGetCodepoint(text, &cursor);
     }
     
     return token_make_dynamic(text, start_cursor, kind, cursor - start_cursor, script_id);
@@ -2225,8 +2059,8 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
     
     {
         U64 cursor = start_cursor;
-        c0 = (cursor < text.size) ? string_get_codepoint(text, &cursor) : 0;
-        c1 = (cursor < text.size) ? string_get_codepoint(text, &cursor) : 0;
+        c0 = (cursor < text.size) ? StrGetCodepoint(text, &cursor) : 0;
+        c1 = (cursor < text.size) ? StrGetCodepoint(text, &cursor) : 0;
     }
     
     if (c0 == 0) {
@@ -2238,7 +2072,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
         U64 cursor = start_cursor;
         while (cursor < text.size) {
             U64 next_cursor = cursor;
-            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            U32 codepoint = StrGetCodepoint(text, &next_cursor);
             if (!codepoint_is_separator(codepoint)) {
                 break;
             }
@@ -2252,7 +2086,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
         U64 cursor = start_cursor;
         while (cursor < text.size) {
             U64 next_cursor = cursor;
-            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            U32 codepoint = StrGetCodepoint(text, &next_cursor);
             if (codepoint == '\n') break;
             cursor = next_cursor;
         }
@@ -2266,7 +2100,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
         I32 depth = 0;
         while (cursor < text.size) 
         {
-            U32 codepoint = string_get_codepoint(text, &cursor);
+            U32 codepoint = StrGetCodepoint(text, &cursor);
             if (last_codepoint == '*' && codepoint == '/') {
                 depth--;
                 if (depth == 0) {
@@ -2285,7 +2119,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
         B32 ignore_next = false;
         U64 cursor = start_cursor + 1;
         while (cursor < text.size) {
-            U32 codepoint = string_get_codepoint(text, &cursor);
+            U32 codepoint = StrGetCodepoint(text, &cursor);
             
             if (ignore_next) {
                 ignore_next = false;
@@ -2302,7 +2136,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
         B32 ignore_next = false;
         U64 cursor = start_cursor + 1;
         while (cursor < text.size) {
-            U32 codepoint = string_get_codepoint(text, &cursor);
+            U32 codepoint = StrGetCodepoint(text, &cursor);
             
             if (ignore_next) {
                 ignore_next = false;
@@ -2364,7 +2198,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
         U64 cursor = start_cursor;
         while (cursor < text.size) {
             U64 next_cursor = cursor;
-            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            U32 codepoint = StrGetCodepoint(text, &next_cursor);
             if (!codepoint_is_number(codepoint)) {
                 break;
             }
@@ -2378,7 +2212,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
         U64 cursor = start_cursor;
         while (cursor < text.size) {
             U64 next_cursor = cursor;
-            U32 codepoint = string_get_codepoint(text, &next_cursor);
+            U32 codepoint = StrGetCodepoint(text, &next_cursor);
             if (!codepoint_is_text(codepoint) && !codepoint_is_number(codepoint) && codepoint != '_') {
                 break;
             }
@@ -2404,14 +2238,9 @@ Token read_valid_token(String text, U64 start_cursor, U64 end_cursor, I32 script
         
         token = read_token(text, cursor, script_id);
         
-        B32 discard = false;
-        if (token.kind == TokenKind_Separator) discard = true;
-        if (token.kind == TokenKind_Comment) discard = true;
-        if (token.kind == TokenKind_NextLine) discard = true;
-        
         total_skip_size += token.skip_size;
         
-        if (!discard) break;
+        if (TokenIsValid(token.kind)) break;
     }
     
     token.cursor = start_cursor;
@@ -2420,7 +2249,15 @@ Token read_valid_token(String text, U64 start_cursor, U64 end_cursor, I32 script
     return token;
 }
 
-B32 check_tokens_are_couple(Array<Token> tokens, U32 open_index, U32 close_index, TokenKind open_token, TokenKind close_token)
+B32 TokenIsValid(TokenKind token)
+{
+    if (token == TokenKind_Separator) return false;
+    if (token == TokenKind_Comment) return false;
+    if (token == TokenKind_NextLine) return false;
+    return true;
+}
+
+B32 CheckTokensAreCouple(Array<Token> tokens, U32 open_index, U32 close_index, TokenKind open_token, TokenKind close_token)
 {
     Assert(open_index < tokens.count && close_index < tokens.count);
     Assert(tokens[open_index].kind == open_token && tokens[close_index].kind == close_token);
@@ -2440,34 +2277,4 @@ B32 check_tokens_are_couple(Array<Token> tokens, U32 open_index, U32 close_index
     }
     
     return true;
-}
-
-Array<Array<Token>> split_tokens_in_parameters(Arena* arena, Array<Token> tokens)
-{
-    PooledArray<Array<Token>> params = pooled_array_make<Array<Token>>(context.arena, 8);
-    
-    U32 cursor = 0;
-    U32 last_cursor = 0;
-    I32 depth = 0;
-    
-    while (cursor < tokens.count) {
-        Token t = tokens[cursor];
-        if (t.kind == TokenKind_Comma && depth <= 0) {
-            Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
-            array_add(&params, param);
-            last_cursor = cursor + 1;
-        }
-        if (t.kind == TokenKind_OpenParenthesis) depth++;
-        else if (t.kind == TokenKind_CloseParenthesis) depth--;
-        else if (t.kind == TokenKind_OpenBrace) depth++;
-        else if (t.kind == TokenKind_CloseBrace) depth--;
-        else if (t.kind == TokenKind_OpenBracket) depth++;
-        else if (t.kind == TokenKind_CloseBracket) depth--;
-        cursor++;
-    }
-    
-    Array<Token> param = array_subarray(tokens, last_cursor, cursor - last_cursor);
-    array_add(&params, param);
-    
-    return array_from_pooled_array(arena, params);
 }

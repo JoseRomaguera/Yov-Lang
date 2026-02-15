@@ -64,12 +64,13 @@ main :: func
         // Units
         {
             sources += {
-                "code/main.cpp", 
+                "code/main.cpp",
+                "code/program.cpp",
+                "code/front.cpp",
                 "code/parser.cpp",
                 "code/common.cpp",
-                "code/types.cpp",
                 "code/ir.cpp",
-                "code/interpreter.cpp",
+                "code/runtime.cpp",
                 "code/intrinsics.cpp",
                 "code/os_windows.cpp"
             };

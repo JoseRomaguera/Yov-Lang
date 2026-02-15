@@ -1,6 +1,35 @@
-#include "inc.h"
+#include "program.h"
 
-Object _make_object(VType vtype) {
+String StringFromBinaryOperator(BinaryOperator op) {
+    if (op == BinaryOperator_Addition) return "+";
+    if (op == BinaryOperator_Substraction) return "-";
+    if (op == BinaryOperator_Multiplication) return "*";
+    if (op == BinaryOperator_Division) return "/";
+    if (op == BinaryOperator_Modulo) return "%";
+    if (op == BinaryOperator_LogicalNot) return "!";
+    if (op == BinaryOperator_LogicalOr) return "||";
+    if (op == BinaryOperator_LogicalAnd) return "&&";
+    if (op == BinaryOperator_Equals) return "==";
+    if (op == BinaryOperator_NotEquals) return "!=";
+    if (op == BinaryOperator_LessThan) return "<";
+    if (op == BinaryOperator_LessEqualsThan) return "<=";
+    if (op == BinaryOperator_GreaterThan) return ">";
+    if (op == BinaryOperator_GreaterEqualsThan) return ">=";
+    if (op == BinaryOperator_Is) return "is";
+    Assert(0);
+    return "?";
+}
+
+B32 BinaryOperatorIsArithmetic(BinaryOperator op) {
+    if (op == BinaryOperator_Addition) return true;
+    if (op == BinaryOperator_Substraction) return true;
+    if (op == BinaryOperator_Multiplication) return true;
+    if (op == BinaryOperator_Division) return true;
+    if (op == BinaryOperator_Modulo) return true;
+    return false;
+}
+
+internal_fn Object _make_object(VType vtype) {
     Object obj{};
     obj.vtype = vtype;
     return obj;
@@ -12,7 +41,43 @@ read_only Object _null_obj = _make_object(VType_Void);
 Object* nil_obj = &_nil_obj;
 Object* null_obj = &_null_obj;
 
-void YovInitializeTypesTable()
+ObjectDefinition ObjDefMake(String name, VType vtype, Location location, B32 is_constant, Value value) {
+    ObjectDefinition d{};
+    d.name = name;
+    d.vtype = vtype;
+    d.is_constant = is_constant;
+    d.value = value;
+    d.location = location;
+    return d;
+}
+
+ObjectDefinition ObjectDefinitionCopy(Arena* arena, ObjectDefinition src)
+{
+    ObjectDefinition dst = src;
+    dst.name = StrCopy(arena, src.name);
+    return dst;
+}
+
+Array<ObjectDefinition> ObjectDefinitionArrayCopy(Arena* arena, Array<ObjectDefinition> src)
+{
+    Array<ObjectDefinition> dst = array_make<ObjectDefinition>(arena, src.count);
+    foreach(i, src.count) {
+        dst[i] = ObjectDefinitionCopy(arena, src[i]);
+    }
+    return dst;
+}
+
+String StringFromDefinitionType(DefinitionType type)
+{
+    if (type == DefinitionType_Function) return "Function";
+    if (type == DefinitionType_Struct) return "Struct";
+    if (type == DefinitionType_Enum) return "Enum";
+    if (type == DefinitionType_Arg) return "Arg";
+    InvalidCodepath();
+    return "?";
+}
+
+void ProgramInitializeTypesTable(Program* program)
 {
     VType primitives[] = {
         VType_Int,
@@ -23,25 +88,25 @@ void YovInitializeTypesTable()
     };
     
     U32 vtype_count = countof(primitives);
-    vtype_count += yov->struct_count;
-    vtype_count += yov->enum_count;
+    vtype_count += program->struct_count;
+    vtype_count += program->enum_count;
     
-    yov->vtypes = array_make<VType>(yov->arena, vtype_count);
+    program->vtypes = array_make<VType>(program->arena, vtype_count);
     
     U32 index = 0;
     foreach(i, countof(primitives)) {
-        yov->vtypes[index] = primitives[i];
-        yov->vtypes[index].base_index = index;
+        program->vtypes[index] = primitives[i];
+        program->vtypes[index].base_index = index;
         index++;
     }
     
-    foreach(i, yov->definitions.count)
+    foreach(i, program->definitions.count)
     {
-        DefinitionHeader* header = &yov->definitions[i].header;
+        DefinitionHeader* header = &program->definitions[i].header;
         
         if (header->type == DefinitionType_Struct)
         {
-            StructDefinition* def = &yov->definitions[i]._struct;
+            StructDefinition* def = &program->definitions[i]._struct;
             
             VType vtype = {};
             vtype.base_name = def->identifier;
@@ -49,11 +114,11 @@ void YovInitializeTypesTable()
             vtype._struct = def;
             vtype.base_index = index;
             
-            yov->vtypes[index++] = vtype;
+            program->vtypes[index++] = vtype;
         }
         else if (header->type == DefinitionType_Enum)
         {
-            EnumDefinition* def = &yov->definitions[i]._enum;
+            EnumDefinition* def = &program->definitions[i]._enum;
             
             VType vtype = {};
             vtype.base_name = def->identifier;
@@ -61,7 +126,7 @@ void YovInitializeTypesTable()
             vtype._enum = def;
             vtype.base_index = index;
             
-            yov->vtypes[index++] = vtype;
+            program->vtypes[index++] = vtype;
         }
     }
 }
@@ -92,12 +157,18 @@ VType vtype_from_reference(VType base_type)
     return vtype;
 }
 
-B32 vtype_is_enum(VType vtype) { return vtype.kind == VKind_Enum; }
-B32 vtype_is_array(VType vtype) { return vtype.kind == VKind_Array; }
-B32 vtype_is_struct(VType vtype) { return vtype.kind == VKind_Struct; }
-B32 vtype_is_reference(VType vtype) { return vtype.kind == VKind_Reference; }
+B32 TypeIsEnum(VType vtype) { return vtype.kind == VKind_Enum; }
+B32 TypeIsArray(VType vtype) { return vtype.kind == VKind_Array; }
+B32 TypeIsStruct(VType vtype) { return vtype.kind == VKind_Struct; }
+B32 TypeIsReference(VType vtype) { return vtype.kind == VKind_Reference; }
+B32 TypeIsString(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_String; }
+B32 TypeIsInt(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_I64; }
+B32 TypeIsBool(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_B32; }
+B32 TypeIsAny(VType type) { return type.kind == VKind_Any; }
+B32 TypeIsVoid(VType type) { return type.kind == VKind_Void; }
+B32 TypeIsNil(VType type) { return type.kind == VKind_Nil; }
 
-B32 vtype_equals(VType v0, VType v1) {
+B32 TypeEquals(Program* program, VType v0, VType v1) {
     if (v0.kind != v1.kind) return false;
     
     if (v0.kind <= VKind_Any) {
@@ -117,11 +188,11 @@ B32 vtype_equals(VType v0, VType v1) {
     }
     
     if (v0.kind == VKind_Array) {
-        return v0.array_dimensions == v1.array_dimensions && vtype_equals(vtype_from_index(v0.base_index), vtype_from_index(v1.base_index));
+        return v0.array_dimensions == v1.array_dimensions && TypeEquals(program, TypeFromIndex(program, v0.base_index), TypeFromIndex(program, v1.base_index));
     }
     
     if (v0.kind == VKind_Reference) {
-        return v0.array_dimensions == v1.array_dimensions && vtype_equals(vtype_from_index(v0.base_index), vtype_from_index(v1.base_index));;
+        return v0.array_dimensions == v1.array_dimensions && TypeEquals(program, TypeFromIndex(program, v0.base_index), TypeFromIndex(program, v1.base_index));;
     }
     
     InvalidCodepath();
@@ -132,16 +203,16 @@ B32 VTypeValid(VType vtype) {
     return vtype.kind > VKind_Any;
 }
 
-VType VTypeNext(VType vtype)
+VType VTypeNext(Program* program, VType vtype)
 {
     if (vtype.kind == VKind_Array) {
-        if (vtype.array_dimensions == 1) return vtype_from_index(vtype.base_index);
+        if (vtype.array_dimensions == 1) return TypeFromIndex(program, vtype.base_index);
         vtype.array_dimensions--;
         return vtype;
     }
     
     if (vtype.kind == VKind_Reference) {
-        VType base_vtype = vtype_from_index(vtype.base_index);
+        VType base_vtype = TypeFromIndex(program, vtype.base_index);
         return vtype_from_dimension(base_vtype, vtype.array_dimensions);
     }
     
@@ -191,13 +262,13 @@ U32 VTypeGetSize(VType vtype)
     return 0;
 }
 
-B32 VTypeNeedsInternalRelease(VType vtype)
+B32 VTypeNeedsInternalRelease(Program* program, VType vtype)
 {
-    if (vtype_is_array(vtype)) return true;
-    if (vtype_is_reference(vtype)) return true;
-    if (vtype == VType_String) return true;
+    if (TypeIsArray(vtype)) return true;
+    if (TypeIsReference(vtype)) return true;
+    if (TypeEquals(program, vtype, VType_String)) return true;
     
-    if (vtype_is_struct(vtype)) {
+    if (TypeIsStruct(vtype)) {
         Assert(vtype._struct->stage == DefinitionStage_Ready);
         return vtype._struct->needs_internal_release;
     }
@@ -205,12 +276,12 @@ B32 VTypeNeedsInternalRelease(VType vtype)
     return false;
 }
 
-String VTypeGetName(VType vtype)
+String VTypeGetName(Program* program, VType vtype)
 {
     if (vtype.kind == VKind_Array)
     {
         U64 needed_size = vtype.base_name.size + (vtype.array_dimensions * 2);
-        String name = StringAlloc(context.arena, needed_size);
+        String name = StrAlloc(context.arena, needed_size);
         MemoryCopy(name.data, vtype.base_name.data, vtype.base_name.size);
         
         foreach(i, vtype.array_dimensions) {
@@ -220,19 +291,19 @@ String VTypeGetName(VType vtype)
         }
     }
     if (vtype.kind == VKind_Reference) {
-        String next = VTypeGetName(VTypeNext(vtype));
+        String next = VTypeGetName(program, VTypeNext(program, vtype));
         return StrFormat(context.arena, "%S&", next);
     }
     
     return vtype.base_name;
 }
 
-VType vtype_from_index(U32 index) {
-    if (index >= yov->vtypes.count) return VType_Nil;
-    return yov->vtypes[index];
+VType TypeFromIndex(Program* program, U32 index) {
+    if (index >= program->vtypes.count) return VType_Nil;
+    return program->vtypes[index];
 }
 
-VType vtype_from_name(String name)
+VType TypeFromName(Program* program, String name)
 {
     if (name == "Any") return VType_Any;
     if (name == "void") return VType_Void;
@@ -243,20 +314,20 @@ VType vtype_from_name(String name)
         dimensions++;
     }
     
-    foreach(i, yov->vtypes.count) {
-        if (yov->vtypes[i].base_name == name) {
-            return vtype_from_dimension(yov->vtypes[i], dimensions);
+    foreach(i, program->vtypes.count) {
+        if (program->vtypes[i].base_name == name) {
+            return vtype_from_dimension(program->vtypes[i], dimensions);
         }
     }
     return VType_Nil;
 }
 
-VType vtype_get_child_at(VType vtype, U32 index, B32 is_member)
+VType TypeGetChildAt(Program* program, VType vtype, U32 index, B32 is_member)
 {
     if (is_member)
     {
         if (vtype.kind == VKind_Array) {
-            return VTypeNext(vtype);
+            return VTypeNext(program, vtype);
         }
         else if (vtype.kind == VKind_Struct) {
             Array<VType> vtypes = vtype._struct->vtypes;
@@ -273,11 +344,11 @@ VType vtype_get_child_at(VType vtype, U32 index, B32 is_member)
     return VType_Nil;
 }
 
-VariableTypeChild vtype_get_child(VType vtype, String name)
+VariableTypeChild TypeGetChild(Program* program, VType vtype, String name)
 {
     VariableTypeChild info = vtype_get_member(vtype, name);
     if (info.index >= 0) return info;
-    return VTypeGetProperty(vtype, name);
+    return VTypeGetProperty(program, vtype, name);
 }
 
 VariableTypeChild vtype_get_member(VType vtype, String member)
@@ -294,9 +365,9 @@ VariableTypeChild vtype_get_member(VType vtype, String member)
     return { true, "", -1, VType_Nil };
 }
 
-VariableTypeChild VTypeGetProperty(VType vtype, String property)
+VariableTypeChild VTypeGetProperty(Program* program, VType vtype, String property)
 {
-    Array<VariableTypeChild> props = VTypeGetProperties(vtype);
+    Array<VariableTypeChild> props = VTypeGetProperties(program, vtype);
     foreach(i, props.count) {
         if (props[i].name == property) return props[i];
     }
@@ -317,33 +388,33 @@ VariableTypeChild enum_properties[] = {
     VariableTypeChild{ false, "name", 2, VType_String }
 };
 
-Array<VariableTypeChild> VTypeGetProperties(VType vtype)
+Array<VariableTypeChild> VTypeGetProperties(Program* program, VType vtype)
 {
-    if (vtype == VType_String) {
+    if (TypeEquals(program, vtype, VType_String)) {
         return arrayof(string_properties);
     }
     
-    if (vtype_is_array(vtype)) {
+    if (TypeIsArray(vtype)) {
         return arrayof(array_properties);
     }
     
-    if (vtype_is_enum(vtype)) {
+    if (TypeIsEnum(vtype)) {
         return arrayof(enum_properties);
     }
     
     return {};
 }
 
-VType vtype_from_binary_operation(VType left, VType right, BinaryOperator op)
+VType TypeFromBinaryOperation(Program* program, VType left, VType right, BinaryOperator op)
 {
-    if (left.kind == VKind_Reference && left == right)
+    if (left.kind == VKind_Reference && TypeEquals(program, left, right))
     {
         if (op == BinaryOperator_Equals) return VType_Bool;
         if (op == BinaryOperator_NotEquals) return VType_Bool;
     }
     
-    if (left == VType_Int && right == VType_Int) {
-        if (binary_operator_is_arithmetic(op)) return VType_Int;
+    if (TypeEquals(program, left, VType_Int) && TypeEquals(program, right, VType_Int)) {
+        if (BinaryOperatorIsArithmetic(op)) return VType_Int;
         
         if (op == BinaryOperator_Equals) return VType_Bool;
         if (op == BinaryOperator_NotEquals) return VType_Bool;
@@ -353,14 +424,14 @@ VType vtype_from_binary_operation(VType left, VType right, BinaryOperator op)
         if (op == BinaryOperator_GreaterEqualsThan) return VType_Bool;
     }
     
-    if (left == VType_Bool && right == VType_Bool) {
+    if (TypeEquals(program, left, VType_Bool) && TypeEquals(program, right, VType_Bool)) {
         if (op == BinaryOperator_LogicalOr) return VType_Bool;
         if (op == BinaryOperator_LogicalAnd) return VType_Bool;
         if (op == BinaryOperator_Equals) return VType_Bool;
         if (op == BinaryOperator_NotEquals) return VType_Bool;
     }
     
-    if (left == VType_String && right == VType_String)
+    if (TypeEquals(program, left, VType_String) && TypeEquals(program, right, VType_String))
     {
         if (op == BinaryOperator_Addition) return VType_String;
         if (op == BinaryOperator_Division) return VType_String;
@@ -368,17 +439,17 @@ VType vtype_from_binary_operation(VType left, VType right, BinaryOperator op)
         if (op == BinaryOperator_NotEquals) return VType_Bool;
     }
     
-    if (left == VType_Type && right == VType_Type)
+    if (TypeEquals(program, left, VType_Type) && TypeEquals(program, right, VType_Type))
     {
         if (op == BinaryOperator_Equals) return VType_Bool;
         else if (op == BinaryOperator_NotEquals) return VType_Bool;
     }
     
-    if (right == VType_Type) {
+    if (TypeEquals(program, right, VType_Type)) {
         if (op == BinaryOperator_Is) return VType_Bool;
     }
     
-    if ((left == VType_String && right == VType_Int) || (left == VType_Int && right == VType_String))
+    if ((TypeEquals(program, left, VType_String) && TypeEquals(program, right, VType_Int)) || (TypeEquals(program, left, VType_Int) && TypeEquals(program, right, VType_String)))
     {
         if (op == BinaryOperator_Addition) return VType_String;
     }
@@ -388,7 +459,7 @@ VType vtype_from_binary_operation(VType left, VType right, BinaryOperator op)
         else if (op == BinaryOperator_NotEquals) return VType_Bool;
     }
     
-    if (left.kind == VKind_Array && right.kind == VKind_Array && VTypeNext(left) == VTypeNext(right)) {
+    if (left.kind == VKind_Array && right.kind == VKind_Array && TypeEquals(program, VTypeNext(program, left), VTypeNext(program, right))) {
         if (op == BinaryOperator_Addition) return left;
     }
     
@@ -397,7 +468,7 @@ VType vtype_from_binary_operation(VType left, VType right, BinaryOperator op)
         VType array_type = (left.kind == VKind_Array) ? left : right;
         VType element_type = (left.kind == VKind_Array) ? right : left;
         
-        if (VTypeNext(array_type) == element_type) {
+        if (TypeEquals(program, VTypeNext(program, array_type), element_type)) {
             if (op == BinaryOperator_Addition) return array_type;
         }
     }
@@ -405,14 +476,14 @@ VType vtype_from_binary_operation(VType left, VType right, BinaryOperator op)
     return VType_Nil;
 }
 
-VType vtype_from_sign_operation(VType src, BinaryOperator op)
+VType TypeFromSignOperation(Program* program, VType src, BinaryOperator op)
 {
-    if (src == VType_Int) {
+    if (TypeEquals(program, src, VType_Int)) {
         if (op == BinaryOperator_Addition) return VType_Int;
         if (op == BinaryOperator_Substraction) return VType_Int;
     }
     
-    if (src == VType_Bool) {
+    if (TypeEquals(program, src, VType_Bool)) {
         if (op == BinaryOperator_LogicalNot) return VType_Bool;
     }
     
@@ -426,14 +497,14 @@ Array<VType> vtypes_from_definitions(Arena* arena, Array<ObjectDefinition> defs)
     return types;
 }
 
-void DefinitionIdentify(U32 index, DefinitionType type, String identifier, Location location)
+void DefinitionIdentify(Program* program, U32 index, DefinitionType type, String identifier, Location location)
 {
-    if (index >= yov->definitions.count) {
+    if (index >= program->definitions.count) {
         InvalidCodepath();
         return;
     }
     
-    DefinitionHeader* def = &yov->definitions[index].header;
+    DefinitionHeader* def = &program->definitions[index].header;
     
     if (def->stage != DefinitionStage_None) {
         InvalidCodepath();
@@ -441,22 +512,22 @@ void DefinitionIdentify(U32 index, DefinitionType type, String identifier, Locat
     }
     
     def->type = type;
-    def->identifier = StrCopy(yov->arena, identifier);
+    def->identifier = StrCopy(program->arena, identifier);
     def->location = location;
     def->stage = DefinitionStage_Identified;
     
     LogType("%S Identify: %S", StringFromDefinitionType(type), identifier);
 }
 
-void EnumDefine(EnumDefinition* def, Array<String> names, Array<Location> expression_locations)
+void EnumDefine(Program* program, EnumDefinition* def, Array<String> names, Array<Location> expression_locations)
 {
     if (def->stage != DefinitionStage_Identified) {
         InvalidCodepath();
         return;
     }
     
-    def->names = array_copy(yov->arena, names);
-    def->expression_locations = array_copy(yov->arena, expression_locations);
+    def->names = StrArrayCopy(program->arena, names);
+    def->expression_locations = array_copy(program->arena, expression_locations);
     def->stage = DefinitionStage_Defined;
     
     foreach(i, names.count) {
@@ -464,7 +535,7 @@ void EnumDefine(EnumDefinition* def, Array<String> names, Array<Location> expres
     }
 }
 
-void EnumResolve(EnumDefinition* def, Array<I64> values)
+void EnumResolve(Program* program, EnumDefinition* def, Array<I64> values)
 {
     if (def->stage != DefinitionStage_Defined) {
         InvalidCodepath();
@@ -476,7 +547,7 @@ void EnumResolve(EnumDefinition* def, Array<I64> values)
         foreach(i, values.count) values[i] = i;
     }
     
-    def->values = array_copy(yov->arena, values);
+    def->values = array_copy(program->arena, values);
     Assert(def->names.count == def->values.count);
     def->stage = DefinitionStage_Ready;
     
@@ -485,21 +556,21 @@ void EnumResolve(EnumDefinition* def, Array<I64> values)
     }
 }
 
-void StructDefine(StructDefinition* def, Array<ObjectDefinition> members)
+void StructDefine(Program* program, StructDefinition* def, Array<ObjectDefinition> members)
 {
     if (def->stage != DefinitionStage_Identified) {
         InvalidCodepath();
         return;
     }
     
-    Array<String> names = array_make<String>(yov->arena, members.count);
-    Array<VType> vtypes = array_make<VType>(yov->arena, members.count);
+    Array<String> names = array_make<String>(program->arena, members.count);
+    Array<VType> vtypes = array_make<VType>(program->arena, members.count);
     
     foreach(i, members.count)
     {
         ObjectDefinition member = members[i];
         
-        names[i] = StrCopy(yov->arena, member.name);
+        names[i] = StrCopy(program->arena, member.name);
         vtypes[i] = member.vtype;
         
         if (!VTypeValid(member.vtype)) {
@@ -515,11 +586,11 @@ void StructDefine(StructDefinition* def, Array<ObjectDefinition> members)
     def->stage = DefinitionStage_Defined;
     
     foreach(i, members.count) {
-        LogType("Struct Define: %S -> %S: %S", def->identifier, def->names[i], VTypeGetName(def->vtypes[i]));
+        LogType("Struct Define: %S -> %S: %S", def->identifier, def->names[i], VTypeGetName(program, def->vtypes[i]));
     }
 }
 
-void StructResolve(StructDefinition* def)
+void StructResolve(Program* program, StructDefinition* def)
 {
     if (def->stage != DefinitionStage_Defined) {
         InvalidCodepath();
@@ -528,7 +599,7 @@ void StructResolve(StructDefinition* def)
     
     // TODO(Jose): Memory alignment
     
-    Array<U32> offsets = array_make<U32>(yov->arena, def->vtypes.count);
+    Array<U32> offsets = array_make<U32>(program->arena, def->vtypes.count);
     
     U32 size = 0;
     B32 needs_internal_release = false;
@@ -545,7 +616,7 @@ void StructResolve(StructDefinition* def)
         }
         
         size += VTypeGetSize(vtype);
-        needs_internal_release |= VTypeNeedsInternalRelease(vtype);
+        needs_internal_release |= VTypeNeedsInternalRelease(program, vtype);
     }
     
     def->needs_internal_release = needs_internal_release;
@@ -556,22 +627,22 @@ void StructResolve(StructDefinition* def)
     LogType("Struct Resolve: %S -> %u bytes", def->identifier, def->size);
 }
 
-void FunctionDefine(FunctionDefinition* def, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns)
+void FunctionDefine(Program* program, FunctionDefinition* def, Array<ObjectDefinition> parameters, Array<ObjectDefinition> returns)
 {
     if (def->stage != DefinitionStage_Identified) {
         InvalidCodepath();
         return;
     }
     
-    def->parameters = array_copy(yov->arena, parameters);
-    def->returns = array_copy(yov->arena, returns);
+    def->parameters = ObjectDefinitionArrayCopy(program->arena, parameters);
+    def->returns = ObjectDefinitionArrayCopy(program->arena, returns);
     def->stage = DefinitionStage_Defined;
     
     StringBuilder builder = string_builder_make(context.arena);
     appendf(&builder, "Function Define: %S (", def->identifier);
     
     foreach(i, parameters.count) {
-        appendf(&builder, "%S: %S", parameters[i].name, VTypeGetName(parameters[i].vtype));
+        appendf(&builder, "%S: %S", parameters[i].name, VTypeGetName(program, parameters[i].vtype));
         if (i + 1 < parameters.count)
             append(&builder, ", ");
     }
@@ -579,7 +650,7 @@ void FunctionDefine(FunctionDefinition* def, Array<ObjectDefinition> parameters,
     append(&builder, ") -> (");
     
     foreach(i, returns.count) {
-        appendf(&builder, "%S: %S", returns[i].name, VTypeGetName(returns[i].vtype));
+        appendf(&builder, "%S: %S", returns[i].name, VTypeGetName(program, returns[i].vtype));
         if (i + 1 < returns.count)
             append(&builder, ", ");
     }
@@ -589,7 +660,7 @@ void FunctionDefine(FunctionDefinition* def, Array<ObjectDefinition> parameters,
     LogType(string_from_builder(context.arena, &builder));
 }
 
-void FunctionResolveIntrinsic(FunctionDefinition* def, IntrinsicFunction* fn)
+void FunctionResolveIntrinsic(Program* program, FunctionDefinition* def, IntrinsicFunction* fn)
 {
     if (def->stage != DefinitionStage_Defined) {
         InvalidCodepath();
@@ -603,7 +674,7 @@ void FunctionResolveIntrinsic(FunctionDefinition* def, IntrinsicFunction* fn)
     LogType("Function Resolve Instrinsic: %S", def->identifier);
 }
 
-void FunctionResolve(FunctionDefinition* def, IR ir)
+void FunctionResolve(Program* program, FunctionDefinition* def, IR ir)
 {
     if (def->stage != DefinitionStage_Defined) {
         InvalidCodepath();
@@ -616,7 +687,7 @@ void FunctionResolve(FunctionDefinition* def, IR ir)
     LogType("Function Resolve: %S", def->identifier);
 }
 
-void ArgDefine(ArgDefinition* def, VType vtype)
+void ArgDefine(Program* program, ArgDefinition* def, VType vtype)
 {
     if (def->stage != DefinitionStage_Identified) {
         InvalidCodepath();
@@ -629,15 +700,15 @@ void ArgDefine(ArgDefinition* def, VType vtype)
     LogType("Arg Define: %S", def->identifier);
 }
 
-void ArgResolve(ArgDefinition* def, String name, String description, B32 required, Value default_value)
+void ArgResolve(Program* program, ArgDefinition* def, String name, String description, B32 required, Value default_value)
 {
     if (def->stage != DefinitionStage_Defined) {
         InvalidCodepath();
         return;
     }
     
-    def->name = StrCopy(yov->arena, name);
-    def->description = StrCopy(yov->arena, description);
+    def->name = StrCopy(program->arena, name);
+    def->description = StrCopy(program->arena, description);
     def->required = required;
     def->default_value = default_value;
     def->stage = DefinitionStage_Ready;
@@ -645,10 +716,10 @@ void ArgResolve(ArgDefinition* def, String name, String description, B32 require
     LogType("Arg Resolve: %S", def->identifier);
 }
 
-Definition* DefinitionFromIdentifier(String identifier)
+Definition* DefinitionFromIdentifier(Program* program, String identifier)
 {
-    foreach(i, yov->definitions.count) {
-        Definition* def = &yov->definitions[i];
+    foreach(i, program->definitions.count) {
+        Definition* def = &program->definitions[i];
         if (StrEquals(def->header.identifier, identifier)) {
             return def;
         }
@@ -656,136 +727,115 @@ Definition* DefinitionFromIdentifier(String identifier)
     return NULL;
 }
 
-Definition* DefinitionFromIndex(U32 index)
+Definition* DefinitionFromIndex(Program* program, U32 index)
 {
-    if (index >= yov->definitions.count) return NULL;
-    return &yov->definitions[index];
+    if (index >= program->definitions.count) return NULL;
+    return &program->definitions[index];
 }
 
-B32 DefinitionExists(String identifier)
+B32 DefinitionExists(Program* program, String identifier)
 {
-    return DefinitionFromIdentifier(identifier) != NULL;
+    return DefinitionFromIdentifier(program, identifier) != NULL;
 }
 
-StructDefinition* StructFromIdentifier(String identifier)
+StructDefinition* StructFromIdentifier(Program* program, String identifier)
 {
-    Definition* def = DefinitionFromIdentifier(identifier);
+    Definition* def = DefinitionFromIdentifier(program, identifier);
     if (def == NULL || def->header.type != DefinitionType_Struct) return NULL;
     return &def->_struct;
 }
 
-StructDefinition* StructFromIndex(U32 index)
+StructDefinition* StructFromIndex(Program* program, U32 index)
 {
-    Definition* def = DefinitionFromIndex(index);
+    Definition* def = DefinitionFromIndex(program, index);
     if (def == NULL || def->header.type != DefinitionType_Struct) return NULL;
     return &def->_struct;
 }
 
-EnumDefinition* EnumFromIdentifier(String identifier)
+EnumDefinition* EnumFromIdentifier(Program* program, String identifier)
 {
-    Definition* def = DefinitionFromIdentifier(identifier);
+    Definition* def = DefinitionFromIdentifier(program, identifier);
     if (def == NULL || def->header.type != DefinitionType_Enum) return NULL;
     return &def->_enum;
 }
 
-EnumDefinition* EnumFromIndex(U32 index)
+EnumDefinition* EnumFromIndex(Program* program, U32 index)
 {
-    Definition* def = DefinitionFromIndex(index);
+    Definition* def = DefinitionFromIndex(program, index);
     if (def == NULL || def->header.type != DefinitionType_Enum) return NULL;
     return &def->_enum;
 }
 
-FunctionDefinition* FunctionFromIdentifier(String identifier)
+FunctionDefinition* FunctionFromIdentifier(Program* program, String identifier)
 {
-    Definition* def = DefinitionFromIdentifier(identifier);
+    Definition* def = DefinitionFromIdentifier(program, identifier);
     if (def == NULL || def->header.type != DefinitionType_Function) return NULL;
     return &def->function;
 }
 
-FunctionDefinition* FunctionFromIndex(U32 index)
+FunctionDefinition* FunctionFromIndex(Program* program, U32 index)
 {
-    Definition* def = DefinitionFromIndex(index);
+    Definition* def = DefinitionFromIndex(program, index);
     if (def == NULL || def->header.type != DefinitionType_Function) return NULL;
     return &def->function;
 }
 
-ArgDefinition* ArgFromIndex(U32 index)
+ArgDefinition* ArgFromIndex(Program* program, U32 index)
 {
-    Definition* def = DefinitionFromIndex(index);
+    Definition* def = DefinitionFromIndex(program, index);
     if (def == NULL || def->header.type != DefinitionType_Arg) return NULL;
     return &def->arg;
 }
 
-ArgDefinition* ArgFromName(String name)
+ArgDefinition* ArgFromName(Program* program, String name)
 {
-    foreach(i, yov->definitions.count) {
-        ArgDefinition* def = &yov->definitions[i].arg;
+    foreach(i, program->definitions.count) {
+        ArgDefinition* def = &program->definitions[i].arg;
         if (def->type != DefinitionType_Arg) continue;
         if (StrEquals(def->name, name)) return def;
     }
     return NULL;
 }
 
-void GlobalDefine(U32 index, VType vtype, B32 is_constant)
+void GlobalDefine(Program* program, U32 index, VType vtype, B32 is_constant)
 {
-    Global* global = GlobalFromIndex(index);
-    Assert(global->vtype == VType_Void);
+    Global* global = GlobalFromIndex(program, index);
+    Assert(TypeEquals(program, global->vtype, VType_Void));
     Assert(VTypeValid(vtype));
     global->vtype = vtype;
     global->is_constant = is_constant;
 }
 
-I32 GlobalIndexFromIdentifier(String identifier)
+I32 GlobalIndexFromIdentifier(Program* program, String identifier)
 {
-    foreach(i, yov->globals.count) {
-        Global* global = &yov->globals[i];
+    foreach(i, program->globals.count) {
+        Global* global = &program->globals[i];
         if (global->identifier == identifier) return i;
     }
     return -1;
 }
 
-Global* GlobalFromIdentifier(String identifier)
+Global* GlobalFromIdentifier(Program* program, String identifier)
 {
-    I32 index = GlobalIndexFromIdentifier(identifier);
+    I32 index = GlobalIndexFromIdentifier(program, identifier);
     if (index < 0) return NULL;
-    return GlobalFromIndex(index);
+    return GlobalFromIndex(program, index);
 }
 
-Global* GlobalFromIndex(U32 index) {
-    if (index >= yov->globals.count) {
+Global* GlobalFromIndex(Program* program, U32 index) {
+    if (index >= program->globals.count) {
         InvalidCodepath();
         return NULL;
     }
-    return &yov->globals[index];
+    return &program->globals[index];
 }
 
-Global* GlobalFromRegisterIndex(I32 index) {
+Global* GlobalFromRegisterIndex(Program* program, I32 index) {
     U32 global_index = index;
-    if (global_index >= yov->globals.count) {
+    if (global_index >= program->globals.count) {
         return NULL;
     }
-    return &yov->globals[global_index];
-}
-
-ExpresionContext ExpresionContext_from_void() {
-    ExpresionContext ctx{};
-    ctx.vtype = VType_Void;
-    ctx.assignment_count = 0;
-    return ctx;
-}
-
-ExpresionContext ExpresionContext_from_inference(U32 assignment_count) {
-    ExpresionContext ctx{};
-    ctx.vtype = VType_Any;
-    ctx.assignment_count = assignment_count;
-    return ctx;
-}
-
-ExpresionContext ExpresionContext_from_vtype(VType vtype, U32 assignment_count) {
-    ExpresionContext ctx{};
-    ctx.vtype = vtype;
-    ctx.assignment_count = assignment_count;
-    return ctx;
+    return &program->globals[global_index];
 }
 
 B32 ValueIsCompiletime(Value value)
@@ -809,7 +859,7 @@ I32 ValueGetRegister(Value value) {
 B32 ValueIsRValue(Value value) { return value.kind != ValueKind_None && value.kind != ValueKind_LValue; }
 
 B32 ValueIsNull(Value value) {
-    return value.kind == ValueKind_Literal && value.vtype == VType_Void;
+    return value.kind == ValueKind_Literal && value.vtype.kind == VKind_Void;
 }
 
 B32 ValueEquals(Value v0, Value v1)
@@ -827,7 +877,7 @@ Value ValueCopy(Arena* arena, Value src)
 {
     Value dst = src;
     
-    if (src.kind == ValueKind_Literal && src.vtype == VType_String) {
+    if (src.kind == ValueKind_Literal && TypeIsString(src.vtype)) {
         dst.literal_string = StrCopy(arena, src.literal_string);
     }
     else if (src.kind == ValueKind_Array) {
@@ -866,12 +916,6 @@ Value ValueNull() {
     return v;
 }
 
-Value ValueFromIrObject(IR_Object* object)
-{
-    if (object->register_index < 0) return ValueNone();
-    return ValueFromRegister(object->register_index, object->vtype, true);
-}
-
 Value ValueFromRegister(I32 index, VType vtype, B32 is_lvalue) {
     Assert(index >= 0);
     Value v{};
@@ -895,13 +939,13 @@ Value ValueFromReference(Value value)
     return v;
 }
 
-Value ValueFromDereference(Value value)
+Value ValueFromDereference(Program* program, Value value)
 {
     Assert(value.kind == ValueKind_LValue || value.kind == ValueKind_Register);
     Assert(value.vtype.kind == VKind_Reference);
     
     Value v{};
-    v.vtype = VTypeNext(value.vtype);
+    v.vtype = VTypeNext(program, value.vtype);
     v.reg.index = value.reg.index;
     v.reg.reference_op = value.reg.reference_op - 1;
     v.kind = value.kind;
@@ -940,12 +984,12 @@ Value ValueFromString(Arena* arena, String value) {
     return v;
 }
 
-Value ValueFromStringArray(Arena* arena, Array<Value> values)
+Value ValueFromStringArray(Arena* arena, Program* program, Array<Value> values)
 {
     B32 is_compiletime = true;
     
     foreach(i, values.count) {
-        if (values[i].vtype != VType_String || !ValueIsCompiletime(values[i])) {
+        if (!TypeIsString(values[i].vtype) || !ValueIsCompiletime(values[i])) {
             is_compiletime = false;
             break;
         }
@@ -955,7 +999,7 @@ Value ValueFromStringArray(Arena* arena, Array<Value> values)
     {
         StringBuilder builder = string_builder_make(context.arena);
         foreach(i, values.count) {
-            String str = StringFromCompiletime(context.arena, values[i]);
+            String str = StringFromCompiletime(context.arena, program, values[i]);
             append(&builder, str);
         }
         
@@ -971,7 +1015,7 @@ Value ValueFromStringArray(Arena* arena, Array<Value> values)
     }
 }
 
-Value ValueFromType(VType type) {
+Value ValueFromType(Program* program, VType type) {
     Value v{};
     v.vtype = VType_Type;
     v.kind = ValueKind_Literal;
@@ -1003,15 +1047,15 @@ Value ValueFromEmptyArray(Arena* arena, VType base_vtype, Array<Value> dimension
 
 Value ValueFromZero(VType vtype)
 {
-    if (vtype == VType_Int) {
+    if (TypeIsInt(vtype)) {
         return ValueFromInt(0);
     }
     
-    if (vtype == VType_Bool) {
+    if (TypeIsBool(vtype)) {
         return ValueFromBool(false);
     }
     
-    if (vtype == VType_Any) {
+    if (TypeIsAny(vtype)) {
         return ValueNull();
     }
     
@@ -1021,9 +1065,9 @@ Value ValueFromZero(VType vtype)
     return v;
 }
 
-Value ValueFromGlobal(U32 global_index)
+Value ValueFromGlobal(Program* program, U32 global_index)
 {
-    Global* global = GlobalFromIndex(RegIndexFromGlobal(global_index));
+    Global* global = GlobalFromIndex(program, RegIndexFromGlobal(global_index));
     return ValueFromRegister(global_index, global->vtype, true);
 }
 
@@ -1032,13 +1076,13 @@ Value ValueFromStringExpression(Arena* arena, String str, VType vtype)
     if (str.size <= 0) return ValueNone();
     // TODO(Jose): if (StrEquals(str, "null")) return value_null();
     
-    if (vtype == VType_Int) {
+    if (TypeIsInt(vtype)) {
         I64 value;
-        if (!i64_from_string(str, &value)) return ValueNone();
+        if (!I64FromString(str, &value)) return ValueNone();
         return ValueFromInt(value);
     }
     
-    if (vtype == VType_Bool) {
+    if (TypeIsBool(vtype)) {
         if (StrEquals(str, "true")) return ValueFromBool(true);
         if (StrEquals(str, "false")) return ValueFromBool(false);
         if (StrEquals(str, "1")) return ValueFromBool(true);
@@ -1046,17 +1090,17 @@ Value ValueFromStringExpression(Arena* arena, String str, VType vtype)
         return ValueNone();
     }
     
-    if (vtype == VType_String) {
+    if (TypeIsString(vtype)) {
         return ValueFromString(arena, str);
     }
     
-    if (vtype_is_enum(vtype))
+    if (TypeIsEnum(vtype))
     {
         U64 start_name = 0;
         if (str[0] == '.') {
             start_name = 1;
         }
-        else if (string_starts(str, StrFormat(context.arena, "%S.", vtype.base_name))) {
+        else if (StrStarts(str, StrFormat(context.arena, "%S.", vtype.base_name))) {
             start_name = vtype.base_name.size + 1;
         }
         
@@ -1086,7 +1130,7 @@ Array<Value> ValuesFromReturn(Arena* arena, Value value, B32 empty_on_void)
 {
     if (value.kind == ValueKind_MultipleReturn) return value.multiple_return;
     
-    if (value.vtype == VType_Void) {
+    if (value.kind == ValueKind_None) {
         return {};
     }
     
@@ -1095,21 +1139,21 @@ Array<Value> ValuesFromReturn(Arena* arena, Value value, B32 empty_on_void)
     return values;
 }
 
-String StrFromValue(Arena* arena, Value value, B32 raw)
+String StrFromValue(Arena* arena, Program* program, Value value, B32 raw)
 {
     if (value.kind == ValueKind_None) return "E";
     
     if (value.kind == ValueKind_Literal) {
-        if (value.vtype == VType_Int) return StrFormat(arena, "%l", value.literal_int);
-        if (value.vtype == VType_Bool) return value.literal_bool ? "true" : "false";
-        if (value.vtype == VType_String) {
+        if (TypeIsInt(value.vtype)) return StrFormat(arena, "%l", value.literal_int);
+        if (TypeIsBool(value.vtype)) return value.literal_bool ? "true" : "false";
+        if (TypeIsString(value.vtype)) {
             if (raw) return value.literal_string;
             String escape = escape_string_from_raw_string(context.arena, value.literal_string);
             return StrFormat(arena, "\"%S\"", escape);
         }
-        if (value.vtype == VType_Void) return "null";
-        if (value.vtype == VType_Type) return VTypeGetName(value.literal_type);
-        if (vtype_is_enum(value.vtype)) {
+        if (TypeIsVoid(value.vtype)) return "null";
+        if (TypeEquals(program, value.vtype, VType_Type)) return VTypeGetName(program, value.literal_type);
+        if (TypeIsEnum(value.vtype)) {
             I32 index = (I32)value.literal_int;
             if (index < 0 || index >= value.vtype._enum->names.count) return "?";
             return value.vtype._enum->names[index];
@@ -1130,16 +1174,16 @@ String StrFromValue(Arena* arena, Value value, B32 raw)
         {
             append(&builder, "[");
             foreach(i, values.count) {
-                append(&builder, StrFromValue(context.arena, values[i], false));
+                append(&builder, StrFromValue(context.arena, program, values[i], false));
                 if (i < values.count - 1) append(&builder, ", ");
             }
-            appendf(&builder, "]->%S", VTypeGetName(vtype_from_index(value.vtype.base_index)));
+            appendf(&builder, "]->%S", VTypeGetName(program, TypeFromIndex(program, value.vtype.base_index)));
         }
         else
         {
             append(&builder, "{ ");
             foreach(i, values.count) {
-                append(&builder, StrFromValue(context.arena, values[i], false));
+                append(&builder, StrFromValue(context.arena, program, values[i], false));
                 if (i < values.count - 1) append(&builder, ", ");
             }
             append(&builder, " }");
@@ -1150,11 +1194,11 @@ String StrFromValue(Arena* arena, Value value, B32 raw)
     
     if (value.kind == ValueKind_StringComposition)
     {
-        Assert(value.vtype == VType_String);
+        Assert(TypeIsString(value.vtype));
         Array<Value> values = value.string_composition;
         StringBuilder builder = string_builder_make(context.arena);
         foreach(i, values.count) {
-            String src = StrFromValue(context.arena, values[i]);
+            String src = StrFromValue(context.arena, program, values[i]);
             appendf(&builder, "%S", src);
             if (i < values.count - 1) append(&builder, " + ");
         }
@@ -1167,7 +1211,7 @@ String StrFromValue(Arena* arena, Value value, B32 raw)
         StringBuilder builder = string_builder_make(context.arena);
         append(&builder, "(");
         foreach(i, values.count) {
-            String src = StrFromValue(context.arena, values[i]);
+            String src = StrFromValue(context.arena, program, values[i]);
             appendf(&builder, "%S", src);
             if (i < values.count - 1) append(&builder, ", ");
         }
@@ -1176,7 +1220,7 @@ String StrFromValue(Arena* arena, Value value, B32 raw)
     }
     
     if (value.kind == ValueKind_ZeroInit) {
-        return StrFormat(arena, "%S()", VTypeGetName(value.vtype));
+        return StrFormat(arena, "%S()", VTypeGetName(program, value.vtype));
     }
     
     if (value.kind == ValueKind_Register || value.kind == ValueKind_LValue)
@@ -1198,9 +1242,330 @@ String StrFromValue(Arena* arena, Value value, B32 raw)
             }
         }
         
-        return StrFormat(arena, "%S%S", ref_op, StringFromRegister(context.arena, value.reg.index));
+        return StrFormat(arena, "%S%S", ref_op, StringFromRegister(context.arena, program, value.reg.index));
     }
     
     InvalidCodepath();
     return "";
 }
+
+String StringFromCompiletime(Arena* arena, Program* program, Value value)
+{
+    if (!ValueIsCompiletime(value)) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    if (TypeIsString(value.vtype)) {
+        if (value.kind == ValueKind_Literal) {
+            return value.literal_string;
+        }
+        
+        if (value.kind == ValueKind_ZeroInit) {
+            return {};
+        }
+    }
+    else {
+        return StrFromValue(arena, program, value, true);
+    }
+    
+    InvalidCodepath();
+    return false;
+}
+
+B32 B32FromCompiletime(Value value)
+{
+    if (!ValueIsCompiletime(value)) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    if (!TypeIsBool(value.vtype)) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    if (value.kind == ValueKind_Literal) {
+        return value.literal_bool;
+    }
+    
+    if (value.kind == ValueKind_ZeroInit) {
+        return false;
+    }
+    
+    InvalidCodepath();
+    return false;
+}
+
+VType TypeFromCompiletime(Program* program, Value value)
+{
+    if (!ValueIsCompiletime(value)) {
+        InvalidCodepath();
+        return VType_Void;
+    }
+    
+    if (!TypeEquals(program, value.vtype, VType_Type)) {
+        InvalidCodepath();
+        return VType_Void;
+    }
+    
+    if (value.kind == ValueKind_Literal) {
+        return value.literal_type;
+    }
+    
+    if (value.kind == ValueKind_ZeroInit) {
+        return VType_Void;
+    }
+    
+    InvalidCodepath();
+    return VType_Void;
+}
+
+
+I32 RegIndexFromGlobal(U32 global_index)
+{
+    return global_index;
+}
+
+I32 RegIndexFromLocal(Program* program, U32 local_index)
+{
+    return local_index + program->globals.count;
+}
+
+I32 LocalFromRegIndex(Program* program, I32 register_index)
+{
+    if (register_index < program->globals.count) return -1;
+    return register_index - program->globals.count;
+}
+
+String StringFromRegister(Arena* arena, Program* program, I32 index)
+{
+    Global* global = GlobalFromRegisterIndex(program, index);
+    if (global != NULL) return global->identifier;
+    
+    I32 local_index = LocalFromRegIndex(program, index);
+    
+    if (local_index < 0) return "rE";
+    return StrFormat(arena, "r%i", local_index);
+}
+
+internal_fn String StringFromUnitInfo(Arena* arena, Program* program, Unit unit)
+{
+    String dst = StringFromRegister(context.arena, program, unit.dst_index);
+    
+    if (unit.kind == UnitKind_Error) return {};
+    
+    if (unit.kind == UnitKind_Copy)
+    {
+        String src = StrFromValue(context.arena, program, unit.src);
+        return StrFormat(arena, "%S = %S", dst, src);
+    }
+    
+    if (unit.kind == UnitKind_Store)
+    {
+        String src = StrFromValue(context.arena, program, unit.src);
+        return StrFormat(arena, "%S = %S", dst, src);
+    }
+    
+    if (unit.kind == UnitKind_FunctionCall)
+    {
+        FunctionDefinition* fn = unit.function_call.fn;
+        StringBuilder builder = string_builder_make(context.arena);
+        
+        if (unit.dst_index >= 0)
+        {
+            foreach(i, fn->returns.count)
+            {
+                appendf(&builder, StringFromRegister(context.arena, program, unit.dst_index + i));
+                if (i + 1 < fn->returns.count) {
+                    appendf(&builder, ", ");
+                }
+            }
+            
+            appendf(&builder, " = ");
+        }
+        
+        String identifier = fn->identifier;
+        Array<Value> params = unit.function_call.parameters;
+        
+        appendf(&builder, "%S(", identifier);
+        
+        foreach(i, params.count) {
+            String param = StrFromValue(context.arena, program, params[i]);
+            appendf(&builder, "%S", param);
+            if (i < params.count - 1) append(&builder, ", ");
+        }
+        append(&builder, ")");
+        return string_from_builder(arena, &builder);
+    }
+    
+    if (unit.kind == UnitKind_Return) return "";
+    
+    if (unit.kind == UnitKind_Jump)
+    {
+        StringBuilder builder = string_builder_make(context.arena);
+        String condition = StrFromValue(context.arena, program, unit.src);
+        if (unit.jump.condition > 0) appendf(&builder, "%S ", condition);
+        else if (unit.jump.condition < 0) appendf(&builder, "!%S ", condition);
+        appendf(&builder, "%i", unit.jump.offset);
+        return string_from_builder(arena, &builder);
+    }
+    
+    if (unit.kind == UnitKind_BinaryOperation)
+    {
+        String op = StringFromBinaryOperator(unit.binary_op.op);
+        String src0 = StrFromValue(context.arena, program, unit.src);
+        String src1 = StrFromValue(context.arena, program, unit.binary_op.src1);
+        return StrFormat(arena, "%S = %S %S %S", dst, src0, op, src1);
+    }
+    
+    if (unit.kind == UnitKind_SignOperation)
+    {
+        String op = StringFromBinaryOperator(unit.sign_op.op);
+        String src = StrFromValue(context.arena, program, unit.src);
+        return StrFormat(arena, "%S = %S%S", dst, op, src);
+    }
+    
+    if (unit.kind == UnitKind_Child)
+    {
+        Value src = unit.src;
+        Value index = unit.child.child_index;
+        B32 is_member = unit.child.child_is_member;
+        B32 is_literal_int = index.kind == ValueKind_Literal && TypeIsInt(index.vtype);
+        
+        String op = {};
+        
+        if (is_member && src.vtype.kind == VKind_Struct && is_literal_int) {
+            op = src.vtype._struct->names[index.literal_int];
+            op = StrFormat(context.arena, ".%S", op);
+        }
+        else if (!is_member && is_literal_int) {
+            Array<VariableTypeChild> props = VTypeGetProperties(program, src.vtype);
+            op = StrFormat(context.arena, ".%S", props[index.literal_int].name);
+        }
+        else {
+            String index = StrFromValue(context.arena, program, unit.child.child_index);
+            op = StrFormat(context.arena, "[%S]", index);
+        }
+        
+        String src_str = StrFromValue(context.arena, program, unit.src);
+        return StrFormat(arena, "%S = %S%S", dst, src_str, op);
+    }
+    
+    if (unit.kind == UnitKind_ResultEval) {
+        return StrFromValue(arena, program, unit.src);
+    }
+    
+    InvalidCodepath();
+    return {};
+}
+
+String StringFromUnitKind(Arena* arena, UnitKind unit)
+{
+    if (unit == UnitKind_Error) return "error";
+    if (unit == UnitKind_Copy) return "copy";
+    if (unit == UnitKind_Store) return "store";
+    if (unit == UnitKind_FunctionCall) return "call";
+    if (unit == UnitKind_Return) return "return";
+    if (unit == UnitKind_Jump) return "jump";
+    if (unit == UnitKind_BinaryOperation) return "bin_op";
+    if (unit == UnitKind_SignOperation) return "sgn_op";
+    if (unit == UnitKind_Child) return "child";
+    if (unit == UnitKind_ResultEval) return "res_ev";
+    if (unit == UnitKind_Empty) return "empty";
+    
+    InvalidCodepath();
+    return "?";
+}
+
+#if DEV
+
+String StringFromUnit(Arena* arena, Program* program, U32 index, U32 index_digits, U32 line_digits, Unit unit)
+{
+    StringBuilder builder = string_builder_make(context.arena);
+    
+    String index_str = StrFormat(context.arena, "%u", index);
+#if DEV_LOCATION_INFO
+    String line_str = StrFormat(context.arena, "%u", unit.location.info.line);
+#else
+    String line_str = "";
+#endif
+    
+    for (U32 i = (U32)index_str.size; i < index_digits; ++i) append(&builder, "0");
+    append(&builder, index_str);
+    append(&builder, " (");
+    for (U32 i = (U32)line_str.size; i < line_digits; ++i) append(&builder, "0");
+    append(&builder, line_str);
+    append(&builder, ") ");
+    
+    String name = StringFromUnitKind(context.arena, unit.kind);
+    
+    append(&builder, name);
+    for (U32 i = (U32)name.size; i < 7; ++i) append(&builder, " ");
+    
+    String info = StringFromUnitInfo(context.arena, program, unit);
+    append(&builder, info);
+    
+    return string_from_builder(arena, &builder);
+}
+
+void PrintUnits(Program* program, Array<Unit> units)
+{
+    U32 max_index = units.count;
+    U32 max_line = 0;
+    
+#if DEV_LOCATION_INFO
+    foreach(i, units.count) {
+        max_line = Max(units[i].location.info.line, max_line);
+    }
+#else
+    max_line = 10000;
+#endif
+    
+    // TODO(Jose): Use log
+    U32 index_digits = 0;
+    U32 aux = max_index;
+    while (aux != 0) {
+        aux /= 10;
+        index_digits++;
+    }
+    
+    U32 line_digits = 0;
+    aux = max_line;
+    while (aux != 0) {
+        aux /= 10;
+        line_digits++;
+    }
+    
+    foreach(i, units.count) {
+        PrintEx(PrintLevel_DevLog, "%S\n", StringFromUnit(context.arena, program, i, index_digits, line_digits, units[i]));
+    }
+}
+
+void PrintIr(Program* program, String name, IR ir)
+{
+    PrintEx(PrintLevel_DevLog, "[IR] %S:\n", name);
+    PrintUnits(program, ir.instructions);
+    
+    if (ir.local_registers.count > 0)
+        PrintEx(PrintLevel_DevLog, "----- REGISTERS -----\n");
+    
+    foreach(i, ir.local_registers.count)
+    {
+        Register reg = ir.local_registers[i];
+        
+        B32 is_param = reg.kind == RegisterKind_Parameter;
+        B32 is_return = reg.kind == RegisterKind_Return;
+        
+        if (is_param) PrintEx(PrintLevel_DevLog, "[param] ");
+        else if (is_return) PrintEx(PrintLevel_DevLog, "[return] ");
+        Assert(is_param + is_return <= 1);
+        
+        PrintEx(PrintLevel_DevLog, "%S: %S", StringFromRegister(context.arena, program, RegIndexFromLocal(program, i)), VTypeGetName(program, reg.vtype));
+        PrintEx(PrintLevel_DevLog, "\n");
+    }
+    
+    PrintEx(PrintLevel_DevLog, SEPARATOR_STRING "\n");
+}
+
+#endif

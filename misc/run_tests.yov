@@ -1,55 +1,44 @@
 
+test_count : Int = 0;
 failed_count : Int = 0;
 
 main :: func
 {
-    for (it := 0; it < 1; it += 1) {
+    set_cd("../");
+    
+    println("Running tests...");
+    for (it := 0; it < 10; it += 1) {
         run_all_tests();
+        if (failed_count > 0) break;
     }
     
+    println("Failed: {failed_count}/{test_count}");
     exit(failed_count);
 }
 
 run_all_tests :: func
 {
-    println("Running tests...");
+    run_test("examples/basics.yov", "", 0);
+    run_test("examples/default_definitions.yov", "", 0);
+    run_test("examples/errors.yov", "", 0);
+    run_test("examples/external_calls.yov", "", 0);
+    run_test("examples/file_system.yov", "", 0);
+    run_test("examples/script_args.yov", "-foo=A", 0);
     
-    // Examples
-    {
-        set_cd("../examples/");
-        println("## EXAMPLES:");
-        
-        run_test("basics.yov", "", 0);
-        run_test("default_definitions.yov", "", 0);
-        run_test("errors.yov", "", 0);
-        run_test("external_calls.yov", "", 0);
-        run_test("file_system.yov", "", 0);
-        run_test("script_args.yov", "-foo=A", 0);
-        
-        println("");
-    }
-    
-    // Tests
-    {
-        set_cd("../tests/");
-        println("## TESTS:");
-        
-        run_test("basics.yov", "", 0);
-        run_test("expressions.yov", "", 0);
-        run_test("references.yov", "", 0);
-        run_test("any.yov", "", 0);
-        
-        println("");
-    }
-    
-    println("Failed: {failed_count}");
+    run_test("tests/basics.yov", "", 0);
+    run_test("tests/expressions.yov", "", 0);
+    run_test("tests/references.yov", "", 0);
+    run_test("tests/any.yov", "", 0);
 }
 
 run_test :: func (name: String, args: String, expected_code: Int)
 {
-    calls.redirect_stdout = RedirectStdout.Script;
+    calls.redirect_stdout = RedirectStdout.Ignore;
     
-    for (it := 0; it < 1; it += 1) {
+    iterations :: 5;
+    
+    for (it := 0; it < iterations; it += 1) {
+        test_count += 1;
         out, res := call_script(name, args, "-no_user");
         
         if (res.code != expected_code) {
@@ -58,7 +47,9 @@ run_test :: func (name: String, args: String, expected_code: Int)
             println(out.stdout);
             return;
         }
+        
     }
     
-    println("Test succeded: {name}");
+    if (iterations == 1) println("Test succeded: {name}");
+    else println("Test succeded x{iterations}: {name}");
 }
