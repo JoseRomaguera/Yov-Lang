@@ -20,6 +20,7 @@ Runtime* RuntimeAlloc(Program* program, Reporter* reporter, RuntimeSettings sett
     runtime->program = program;
     runtime->settings = settings;
     runtime->reporter = reporter;
+    runtime->stack = array_make<Scope>(program->arena, 4096);
     
     return runtime;
 }
@@ -131,7 +132,6 @@ void RuntimeInitializeGlobals(Runtime* runtime)
     if (program->globals_initialize_ir.success)
     {
         RuntimePushScope(runtime, -1, 0, program->globals_initialize_ir, {});
-        RuntimeFetch(runtime);
         RuntimeStepAll(runtime);
     }
     
@@ -164,18 +164,25 @@ void RuntimeStart(Runtime* runtime, String function_name)
     }
     
     RunFunctionCall(runtime, -1, fn, {});
-    RuntimeFetch(runtime);
 }
 
 void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR ir, Array<Value> params)
 {
     Assert(ir.parameter_count == params.count);
     
+    if (runtime->stack_counter >= runtime->stack.count) {
+        ReportStackOverflow();
+        return;
+    }
+    
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
+    Scope* prev_scope = RuntimeGetCurrentScope(runtime);
+    
     // Push new scope
-    Scope* scope = ArenaPushStruct<Scope>(context.arena);
+    Scope* scope = &runtime->stack[runtime->stack_counter++];
+    *scope = {};
     scope->return_index = return_index;
     scope->return_count = return_count;
     scope->ir = ir;
@@ -184,12 +191,6 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
         I32 register_index = RegIndexFromLocal(program, i);
         RuntimeStore(runtime, scope, register_index, ref_from_object(null_obj));
     }
-    
-    scope->prev = runtime->current_scope;
-    runtime->current_scope = scope;
-    
-    scope->current_depth = 0;
-    if (scope->prev != NULL) scope->current_depth = scope->prev->current_depth + 1;
     
     // Define params
     {
@@ -202,7 +203,7 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
             
             I32 register_index = RegIndexFromLocal(program, i);
             Value param = params[param_index++];
-            Reference ref = RefFromValue(runtime, scope->prev, param);
+            Reference ref = RefFromValue(runtime, prev_scope, param);
             
             if (is_null(RuntimeLoad(runtime, scope, register_index)))
                 RuntimeStore(runtime, scope, register_index, object_alloc(runtime, ref.vtype));
@@ -210,15 +211,19 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
             RunCopy(runtime, register_index, ref);
         }
     }
-    
-    scope->pc = 0;
 }
 
 void RuntimePopScope(Runtime* runtime)
 {
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
-    Scope* scope = runtime->current_scope;
+    
+    if (runtime->stack_counter == 0) {
+        ReportStackIsBroken();
+        return;
+    }
+    
+    Scope* scope = &runtime->stack[--runtime->stack_counter];
     
     Array<Reference> output = array_make<Reference>(context.arena, scope->return_count);
     foreach(i, output.count) {
@@ -235,58 +240,37 @@ void RuntimePopScope(Runtime* runtime)
         }
     }
     
-    RuntimeStoreReturn(runtime, scope->prev, scope->return_index, output);
+    Scope* prev_scope = RuntimeGetCurrentScope(runtime);
+    RuntimeStoreReturn(runtime, prev_scope, scope->return_index, output);
     
     foreach(i, scope->registers.count) {
         object_decrement_ref(scope->registers[i].parent);
     }
     
-    runtime->current_scope = scope->prev;
-}
-
-B32 RuntimeFetch(Runtime* runtime)
-{
-    Program* program = runtime->program;
-    Reporter* reporter = runtime->reporter;
-    Scope* scope = runtime->current_scope;
-    
-    runtime->next_unit = NULL;
-    
-    if (scope == NULL) return false;
-    if (reporter->exit_requested) return false;
-    
-    Assert(scope->pc < scope->ir.instructions.count);
-    
-    IR ir = scope->ir;
-    
-    runtime->next_unit = &ir.instructions[scope->pc];
-    scope->pc++;
-    
-    runtime->current_scope->current_line = runtime->next_unit->line;
-    runtime->current_scope->current_path = ir.path;
-    
-    return true;
+    *scope = {};
 }
 
 B32 RuntimeStep(Runtime* runtime)
 {
-    if (runtime->next_unit == NULL) return false;
-    
     Program* program = runtime->program;
-    Unit unit = *runtime->next_unit;
-    RunInstruction(runtime, unit);
+    Scope* scope = RuntimeGetCurrentScope(runtime);
     
-    //PrintF("\n->%S\n", StringFromUnit(context.arena, program, 0, 3, 3, unit));
+    if (scope == NULL) return false;
+    if (runtime->reporter->exit_requested) return false;
+    
+    Unit unit = ScopeGetCurrentUnit(scope);
+    RunInstruction(runtime, unit);
+    PrintF("\n->%S\n", StringFromUnit(context.arena, program, 0, 3, 3, unit));
+    scope->unit_counter++;
     
     // TODO(Jose): Free garbage memory
-    
-    return RuntimeFetch(runtime);
+    return runtime->stack_counter > 0;
 }
 
 B32 RuntimeStepInto(Runtime* runtime)
 {
-    String ref_path = runtime->current_scope->current_path;
-    U32 ref_line = runtime->current_scope->current_line;
+    String ref_path = RuntimeGetCurrentFile(runtime);
+    U32 ref_line = RuntimeGetCurrentLine(runtime);
     
     while (1)
     {
@@ -294,8 +278,8 @@ B32 RuntimeStepInto(Runtime* runtime)
             return false;
         }
         
-        String path = runtime->current_scope->current_path;
-        U32 line = runtime->current_scope->current_line;
+        String path = RuntimeGetCurrentFile(runtime);
+        U32 line = RuntimeGetCurrentLine(runtime);
         
         if (ref_line != line || ref_path != path) {
             break;
@@ -307,8 +291,8 @@ B32 RuntimeStepInto(Runtime* runtime)
 
 B32 RuntimeStepOver(Runtime* runtime)
 {
-    U32 ref_line = runtime->current_scope->current_line;
-    U32 ref_depth = runtime->current_scope->current_depth;
+    U32 ref_line = RuntimeGetCurrentLine(runtime);
+    U32 ref_depth = runtime->stack_counter;
     
     while (1)
     {
@@ -316,8 +300,8 @@ B32 RuntimeStepOver(Runtime* runtime)
             return false;
         }
         
-        U32 depth = runtime->current_scope->current_depth;
-        U32 line = runtime->current_scope->current_line;
+        U32 depth = runtime->stack_counter;
+        U32 line = RuntimeGetCurrentLine(runtime);
         
         if (ref_line != line && depth <= ref_depth) {
             break;
@@ -329,7 +313,7 @@ B32 RuntimeStepOver(Runtime* runtime)
 
 B32 RuntimeStepOut(Runtime* runtime)
 {
-    U32 ref_depth = runtime->current_scope->current_depth;
+    U32 ref_depth = runtime->stack_counter;
     
     while (1)
     {
@@ -337,7 +321,7 @@ B32 RuntimeStepOut(Runtime* runtime)
             return false;
         }
         
-        U32 depth = runtime->current_scope->current_depth;
+        U32 depth = runtime->stack_counter;
         
         if (depth < ref_depth) {
             break;
@@ -444,6 +428,37 @@ void RuntimeReportError(Runtime* runtime, Result result) {
     Reporter* reporter = runtime->reporter;
     ReportErrorRT(result.message);
     RuntimeExit(runtime, result.code);
+}
+
+Scope* RuntimeGetCurrentScope(Runtime* runtime)
+{
+    if (runtime->stack_counter > 0) {
+        return &runtime->stack[runtime->stack_counter - 1];
+    }
+    return NULL;
+}
+
+Unit ScopeGetCurrentUnit(Scope* scope)
+{
+    return scope->ir.instructions[scope->unit_counter];
+}
+
+U32 RuntimeGetCurrentLine(Runtime* runtime)
+{
+    Scope* scope = RuntimeGetCurrentScope(runtime);
+    if (scope == NULL) {
+        return 0;
+    }
+    return ScopeGetCurrentUnit(scope).line;
+}
+
+String RuntimeGetCurrentFile(Runtime* runtime)
+{
+    Scope* scope = RuntimeGetCurrentScope(runtime);
+    if (scope == NULL) {
+        return {};
+    }
+    return scope->ir.path;
 }
 
 String RuntimeGenerateInheritedLangArgs(Runtime* runtime)
@@ -613,13 +628,13 @@ void RunInstruction(Runtime* runtime, Unit unit)
     I32 dst_index = unit.dst_index;
     
     if (unit.kind == UnitKind_Copy) {
-        Reference src = RefFromValue(runtime, runtime->current_scope, unit.src);
+        Reference src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src);
         RunCopy(runtime, dst_index, src);
         return;
     }
     
     if (unit.kind == UnitKind_Store) {
-        Reference src = RefFromValue(runtime, runtime->current_scope, unit.src);
+        Reference src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src);
         RunStore(runtime, dst_index, src);
         return;
     }
@@ -643,15 +658,15 @@ void RunInstruction(Runtime* runtime, Unit unit)
         Reference src = ref_from_object(null_obj);
         I32 offset = unit.jump.offset;
         
-        if (condition != 0) src = RefFromValue(runtime, runtime->current_scope, unit.src);
+        if (condition != 0) src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src);
         RunJump(runtime, src, condition, offset);
         return;
     }
     
     if (unit.kind == UnitKind_BinaryOperation) {
-        Reference dst = RuntimeLoad(runtime, runtime->current_scope, dst_index);
-        Reference src0 = RefFromValue(runtime, runtime->current_scope, unit.src);
-        Reference src1 = RefFromValue(runtime, runtime->current_scope, unit.binary_op.src1);
+        Reference dst = RuntimeLoad(runtime, RuntimeGetCurrentScope(runtime), dst_index);
+        Reference src0 = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src);
+        Reference src1 = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.binary_op.src1);
         BinaryOperator op = unit.binary_op.op;
         
         if (is_null(src0)) {
@@ -674,7 +689,7 @@ void RunInstruction(Runtime* runtime, Unit unit)
     }
     
     if (unit.kind == UnitKind_SignOperation) {
-        Reference src = RefFromValue(runtime, runtime->current_scope, unit.src);
+        Reference src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src);
         BinaryOperator op = unit.sign_op.op;
         
         if (is_null(src)) {
@@ -690,8 +705,8 @@ void RunInstruction(Runtime* runtime, Unit unit)
     if (unit.kind == UnitKind_Child)
     {
         B32 child_is_member = unit.child.child_is_member;
-        Reference child_index_obj = RefFromValue(runtime, runtime->current_scope, unit.child.child_index);
-        Reference src = RefFromValue(runtime, runtime->current_scope, unit.src);
+        Reference child_index_obj = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.child.child_index);
+        Reference src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src);
         
         if (is_unknown(src) || is_unknown(child_index_obj)) return;
         
@@ -722,7 +737,7 @@ void RunInstruction(Runtime* runtime, Unit unit)
     
     if (unit.kind == UnitKind_ResultEval)
     {
-        Reference src = RefFromValue(runtime, runtime->current_scope, unit.src);
+        Reference src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src);
         
         Assert(TypeEquals(program, src.vtype, VType_Result));
         
@@ -752,7 +767,7 @@ void RunCopy(Runtime* runtime, I32 dst_index, Reference src)
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
-    Reference dst = RuntimeLoad(runtime, runtime->current_scope, dst_index);
+    Reference dst = RuntimeLoad(runtime, RuntimeGetCurrentScope(runtime), dst_index);
     
     if (is_unknown(dst) || is_unknown(src)) {
         InvalidCodepath();
@@ -795,7 +810,7 @@ void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Ar
         
         Array<Reference> params = array_make<Reference>(context.arena, parameters.count);
         foreach(i, params.count) {
-            params[i] = RefFromValue(runtime, runtime->current_scope, parameters[i]);
+            params[i] = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), parameters[i]);
         }
         
         fn->intrinsic.fn(runtime, params, returns);
@@ -838,13 +853,13 @@ void RunJump(Runtime* runtime, Reference ref, I32 condition, I32 offset)
     }
     
     if (jump) {
-        Scope* scope = runtime->current_scope;
+        Scope* scope = RuntimeGetCurrentScope(runtime);
         if (scope == NULL) {
             InvalidCodepath();
             return;
         }
         
-        scope->pc += offset;
+        scope->unit_counter += offset;
     }
 }
 
@@ -1069,7 +1084,7 @@ void RuntimeStore(Runtime* runtime, Scope* scope, I32 register_index, Reference 
 {
     Program* program = runtime->program;
     
-    if (scope == NULL) scope = runtime->current_scope;
+    if (scope == NULL) scope = RuntimeGetCurrentScope(runtime);
     
     I32 local_index = LocalFromRegIndex(program, register_index);
     
@@ -1119,7 +1134,7 @@ Reference RuntimeLoad(Runtime* runtime, Scope* scope, I32 register_index)
 {
     Program* program = runtime->program;
     
-    if (scope == NULL) scope = runtime->current_scope;
+    if (scope == NULL) scope = RuntimeGetCurrentScope(runtime);
     I32 local_index = LocalFromRegIndex(program, register_index);
     
     if (local_index >= 0) {

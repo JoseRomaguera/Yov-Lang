@@ -10,14 +10,7 @@ struct Scope {
     
     Array<Reference> registers;
     
-    I32 pc; // Program Counter
-    
-    U32 current_line;
-    U32 current_depth;
-    String current_path;
-    
-    U32 scratch_arena_index;
-    Scope* prev;
+    I32 unit_counter;
 };
 
 struct Runtime {
@@ -37,8 +30,9 @@ struct Runtime {
     } gc;
     
     Array<Reference> globals;
-    Scope* current_scope;
-    Unit* next_unit;
+    
+    Array<Scope> stack;
+    U32 stack_counter;
     
     struct {
         Reference yov;
@@ -57,7 +51,6 @@ void RuntimeStart(Runtime* runtime, String function_name);
 void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR ir, Array<Value> params);
 void RuntimePopScope(Runtime* runtime);
 
-B32 RuntimeFetch(Runtime* runtime);
 B32 RuntimeStep(Runtime* runtime);
 B32 RuntimeStepInto(Runtime* runtime);
 B32 RuntimeStepOver(Runtime* runtime);
@@ -68,6 +61,11 @@ void RuntimePrintScriptHelp(Runtime* runtime);
 
 void RuntimeExit(Runtime* runtime, I64 exit_code);
 void RuntimeReportError(Runtime* runtime, Result result);
+
+Scope* RuntimeGetCurrentScope(Runtime* runtime);
+Unit ScopeGetCurrentUnit(Scope* scope);
+U32 RuntimeGetCurrentLine(Runtime* runtime);
+String RuntimeGetCurrentFile(Runtime* runtime);
 
 String RuntimeGenerateInheritedLangArgs(Runtime* runtime);
 CallOutput RuntimeCallScript(Runtime* runtime, String script, String args, String lang_args, RedirectStdout redirect_stdout);
@@ -212,13 +210,14 @@ void LogMemoryUsage(Runtime* runtime);
 
 //- REPORTS 
 
-#define ReportErrorRT(_text, ...) ReportErrorEx(reporter, NO_CODE, runtime->current_scope->current_line, runtime->current_scope->current_path, _text, __VA_ARGS__)
+#define ReportErrorRT(_text, ...) ReportErrorEx(runtime->reporter, NO_CODE, RuntimeGetCurrentLine(runtime), RuntimeGetCurrentFile(runtime), _text, __VA_ARGS__)
 
 #define ReportNullRef() ReportErrorRT("Null reference")
 #define ReportZeroDivision() ReportErrorRT("Divided by zero")
 #define ReportRightPathCantBeAbsolute() ReportErrorRT("Right path can't be absolute")
 #define ReportInvalidOp() ReportErrorRT("Invalid Op")
+#define ReportStackOverflow() ReportErrorRT("Stack overflow")
+#define ReportStackIsBroken() ReportErrorNoCode("[LANG_ERROR] The stack is broken")
 
-#define lang_report_stack_is_broken() ReportErrorNoCode("[LANG_ERROR] The stack is broken")
 #define lang_report_unfreed_objects() ReportErrorNoCode("[LANG_ERROR] Not all objects have been freed")
 #define lang_report_unfreed_dynamic() ReportErrorNoCode("[LANG_ERROR] Not all dynamic allocations have been freed")

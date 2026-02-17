@@ -65,7 +65,7 @@ void Intrinsic_assert(Runtime* runtime, Array<Reference> params, Array<Reference
     
     Result res = RESULT_SUCCESS;
     if (!result) {
-        res = ResultMakeFailed(StrFormat(runtime->arena, "Assertion failed at '%S:%u'", runtime->current_scope->current_path, runtime->current_scope->current_line));
+        res = ResultMakeFailed(StrFormat(runtime->arena, "Assertion failed at '%S:%u'", RuntimeGetCurrentFile(runtime), RuntimeGetCurrentLine(runtime)));
     }
     
     returns[0] = ref_from_Result(runtime, res);
