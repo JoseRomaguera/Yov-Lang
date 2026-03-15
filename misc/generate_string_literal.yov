@@ -10,10 +10,10 @@ generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_nam
     lines: String[];
     {
         line: String;
-        cursor := 0;
-        codepoint := 0;
+        cursor    : UInt = 0;
+        codepoint : UInt = 0;
         while (cursor < raw.size) {
-            codepoint, cursor = str_get_codepoint(raw, cursor);
+            codepoint, cursor = StrGetCodepoint(raw, cursor);
             
             if (codepoint == '\r') continue;
             

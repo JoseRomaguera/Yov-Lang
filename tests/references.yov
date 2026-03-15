@@ -22,6 +22,7 @@ main :: func
     ref0 = 6;
     assert(val0 == ref0);
     
+    
     ref0 = global_ref;
     assert(val0 != ref0);
     
@@ -33,11 +34,31 @@ main :: func
     foo0.val = ref0;
     foo0.child = &foo0;
     
-    //assert(foo0.ref == val0);
-    //assert(foo0.val == 7 && foo0.val == foo0.child.val);
+    assert(foo0.ref == val0);
+    assert(foo0.val == 7 && foo0.val == foo0.child.val);
     
-    //foo1: Foo;
-    //foo1.child = &foo0;
+    foo1: Foo;
+    foo1.child = &foo0;
     
-    //assert(foo0.val == foo1.child.val && foo1.val != foo1.child.val);
+    assert(foo0.val == foo1.child.val && foo1.val != foo1.child.val);
+    
+    {
+        x := 5;
+        inc(&x);
+        assert(x == 6);
+    }
+    
+    {
+        a := 5;
+        b := &a;
+        c := &b;
+        
+        c = 10;
+        
+        assert(a == 10);
+    }
+}
+
+inc :: func (v:Int&) {
+    v += 1;
 }

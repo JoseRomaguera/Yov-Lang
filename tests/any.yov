@@ -4,14 +4,20 @@ main :: func
     a: Any;
     
     b: Any = 10;
+    assert(b is Int);
+    
     println(b);
     println(custom_string(b));
     
     b = "Hello";
+    assert(b is String);
     
     if (b == "Hello") {
         println(b);
         println(custom_string(b));
+    }
+    else {
+        assert(false);
     }
     
     b = true;
@@ -46,7 +52,7 @@ main :: func
 
 custom_string :: func (v: Any) -> String
 {
-    if (v is I64) {
+    if (v is Int) {
         r := v + 0;
         return "Int: {r}";
     }

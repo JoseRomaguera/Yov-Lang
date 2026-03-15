@@ -11,6 +11,7 @@ enum TokenKind {
     TokenKind_Comment,
     TokenKind_Identifier,
     TokenKind_IntLiteral,
+    TokenKind_FloatLiteral,
     TokenKind_StringLiteral,
     TokenKind_CodepointLiteral,
     TokenKind_Dot,
@@ -61,6 +62,8 @@ enum TokenKind {
     TokenKind_ReturnKeyword,
     TokenKind_ContinueKeyword,
     TokenKind_BreakKeyword,
+    TokenKind_CastKeyword,
+    TokenKind_BitCastKeyword,
     TokenKind_ImportKeyword,
     
     TokenKind_BoolLiteral,
@@ -75,22 +78,22 @@ struct Token {
     U32 skip_size;
     
     union {
-        BinaryOperator assignment_binary_operator;
+        OperatorKind assignment_operator;
     };
 };
 
 String StringFromTokens(Arena* arena, Array<Token> tokens);
 String DebugInfoFromToken(Arena* arena, Token token);
 
-BinaryOperator binary_operator_from_token(TokenKind token);
+OperatorKind OperatorKindFromToken(TokenKind token);
 B32 token_is_sign_or_binary_op(TokenKind token);
 B32 TokenIsFlowModifier(TokenKind token);
 TokenKind TokenKindFromOpenScope(TokenKind open_token);
 
 Location LocationFromTokens(Array<Token> tokens);
 
-Token read_token(String text, U64 cursor, I32 script_id);
-Token read_valid_token(String text, U64 cursor, U64 end_cursor, I32 script_id);
+Token ReadToken(String text, U64 cursor, I32 script_id);
+Token ReadValidToken(String text, U64 cursor, U64 end_cursor, I32 script_id);
 B32 TokenIsValid(TokenKind token);
 
 B32 CheckTokensAreCouple(Array<Token> tokens, U32 open_index, U32 close_index, TokenKind open_token, TokenKind close_token);
@@ -157,7 +160,10 @@ struct IR_Unit {
     UnitKind kind;
     Location location;
     I32 dst_index;
-    Value src;
+    Value src0;
+    Value src1;
+    PrimitiveType op_dst_type;
+    
     union {
         struct {
             FunctionDefinition* fn;
@@ -170,16 +176,6 @@ struct IR_Unit {
         } jump;
         
         struct {
-            Value src1;
-            BinaryOperator op;
-        } binary_op;
-        
-        struct {
-            BinaryOperator op;
-        } sign_op;
-        
-        struct {
-            Value child_index;
             B32 child_is_member;
         } child;
     };
@@ -231,6 +227,7 @@ ExpresionContext ExpresionContext_from_inference(U32 assignment_count);
 ExpresionContext ExpresionContext_from_vtype(VType vtype, U32 assignment_count);
 
 IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext context);
+IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionContext context);
 IR_Group ReadCode(IR_Context* ir, Parser* parser);
 IR_Group ReadSentence(IR_Context* ir, Parser* parser);
 
@@ -261,13 +258,18 @@ IR_Group IRFromDefineTemporal(IR_Context* ir, VType vtype, Location location);
 IR_Group IRFromReference(IR_Context* ir, B32 expects_lvalue, Value value, Location location);
 IR_Group IRFromDereference(IR_Context* ir, Value value, Location location);
 IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location);
-IR_Group IRFromFunctionCall(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext context, Location location);
+IR_Group IRFromCall(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext context, Location location);
+IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromDefaultInitializer(IR_Context* ir, VType vtype, Location location);
 IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location);
-IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, BinaryOperator op, Location location);
-IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Value> destinations, Value src, BinaryOperator op, Location location);
-IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, BinaryOperator op, B32 reuse_left, Location location);
-IR_Group IRFromSignOperator(IR_Context* ir, Value src, BinaryOperator op, Location location);
+IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location);
+IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, OperatorKind op, Location location);
+IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Value> destinations, Value src, OperatorKind op, Location location);
+IR_Group IRFromOp(IR_Context* ir, UnitKind kind, VType dst_type, Value src0, Value src1, Location location);
+IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorKind op, B32 reuse_left, Location location);
+IR_Group IRFromSignOperator(IR_Context* ir, Value src, OperatorKind op, Location location);
+IR_Group IRFromCasting(IR_Context* ir, Value src, VType type, B32 bitcast, Location location);
+IR_Group IRFromOptionalCasting(IR_Context* ir, Value src, VType type, Location location);
 IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, VType vtype, Location location);
 IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, ExpresionContext context, Location location);
 IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR_Group failure, Location location);

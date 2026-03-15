@@ -8,9 +8,9 @@ Result :: struct {
 YovInfo :: struct {
     path: String;
     version: String;
-    major: Int;
-    minor: Int;
-    revision: Int;
+    major: UInt;
+    minor: UInt;
+    revision: UInt;
 }
 
 Type :: struct {
@@ -51,11 +51,16 @@ set_cd  :: func(cd: String) -> Result;
 assert  :: func(result: Bool) -> Result;
 failed :: func(message: String, exit_code: Int) -> Result;
 
-sleep :: func(millis: Int);
+sleep :: func(millis: UInt);
 
 env            :: func(name: String) -> (value: String, result: Result);
 env_path       :: func(name: String) -> (value: String, result: Result);
 env_path_array :: func(name: String) -> (value: String[], result: Result);
+
+ArrayAppendBack         :: func(dst: Any, src: Any);
+// TODO: ArrayAppendFront        :: func(dst: Any, src: Any);
+ArrayAppendElementBack  :: func(dst: Any, src: Any);
+// TODO: ArrayAppendElementFront :: func(dst: Any, src: Any);
 
 // Console
 
@@ -74,9 +79,14 @@ call_script :: func(path: String, arguments: String, yov_arguments: String) -> (
 
 // String Utils
 
-path_resolve :: func(path: String) -> String;
-str_get_codepoint :: func(str: String, cursor: Int) -> (codepoint: Int, next_cursor: Int);
-str_split :: func(str: String, separator: String) -> String[];
+StrAppend       :: func(str0: String, str1: String) -> String;
+StrEquals       :: func(str0: String, str1: String) -> Bool;
+StrSplit        :: func(str: String, separator: String) -> String[];
+StrGetCodepoint :: func(str: String, cursor: UInt) -> (codepoint: UInt, next_cursor: UInt);
+StrFromCodepoint :: func(cp: UInt) -> String;
+
+PathAppend  :: func(path0: String, path1: String) -> String;
+PathResolve :: func(path: String) -> String;
 
 // JSON
 
@@ -84,9 +94,9 @@ json_route :: func(json: String, route: String) -> (out: String, res: Result);
 
 // Yov
 
-yov_require     :: func(major: Int, minor: Int) -> Result;
-yov_require_min :: func(major: Int, minor: Int) -> Result;
-yov_require_max :: func(major: Int, minor: Int) -> Result;
+yov_require     :: func(major: UInt, minor: UInt) -> Result;
+yov_require_min :: func(major: UInt, minor: UInt) -> Result;
+yov_require_max :: func(major: UInt, minor: UInt) -> Result;
 
 ObjectDefinition :: struct {
     identifier: String;

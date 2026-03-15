@@ -27,7 +27,7 @@ Location LocationFromParser(Parser* parser, U64 end) {
 
 Token PeekToken(Parser* parser, I64 cursor_offset)
 {
-    Token token = read_valid_token(parser->text, parser->cursor + cursor_offset, parser->range.max, parser->script_id);
+    Token token = ReadValidToken(parser->text, parser->cursor + cursor_offset, parser->range.max, parser->script_id);
     return token;
 }
 
@@ -84,7 +84,7 @@ void SkipInvalidTokens(Parser* parser)
 {
     while (1)
     {
-        Token token = read_token(parser->text, parser->cursor, parser->script_id);
+        Token token = ReadToken(parser->text, parser->cursor, parser->script_id);
         if (TokenIsValid(token.kind)) break;
         parser->cursor += token.skip_size;
     }
@@ -371,10 +371,24 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
     {
         Token token = tokens[0];
         
-        if (token.kind == TokenKind_IntLiteral) {
-            U32 v;
-            if (U32FromString(&v, token.value)) {
+        if (token.kind == TokenKind_IntLiteral)
+        {
+            U64 v;
+            if (U64FromString(&v, token.value)) {
+                if (TypeIsUInt(expr_context.vtype)) {
+                    return IRFromNone(ValueFromUInt(v));
+                }
+                
                 return IRFromNone(ValueFromInt(v));
+            }
+            else {
+                InvalidCodepath();
+            }
+        }
+        else if (token.kind == TokenKind_FloatLiteral) {
+            F64 v;
+            if (F64FromString(&v, token.value)) {
+                return IRFromNone(ValueFromFloat(v));
             }
             else {
                 InvalidCodepath();
@@ -500,7 +514,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                 }
             }
             
-            return IRFromNone(ValueFromInt(v));
+            return IRFromNone(ValueFromUInt(v));
         }
         else if (token.kind == TokenKind_NullKeyword) {
             return IRFromNone(ValueNull());
@@ -620,22 +634,22 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     preference = sign_preference;
                 }
                 else {
-                    BinaryOperator op = binary_operator_from_token(token.kind);
-                    if (op == BinaryOperator_Addition) preference = addition_preference;
-                    else if (op == BinaryOperator_Substraction) preference = addition_preference;
-                    else if (op == BinaryOperator_Multiplication) preference = multiplication_preference;
-                    else if (op == BinaryOperator_Division) preference = multiplication_preference;
-                    else if (op == BinaryOperator_Modulo) preference = multiplication_preference;
-                    else if (op == BinaryOperator_LogicalNot) preference = logical_preference;
-                    else if (op == BinaryOperator_LogicalOr) preference = logical_preference;
-                    else if (op == BinaryOperator_LogicalAnd) preference = logical_preference;
-                    else if (op == BinaryOperator_Equals) preference = boolean_preference;
-                    else if (op == BinaryOperator_NotEquals) preference = boolean_preference;
-                    else if (op == BinaryOperator_LessThan) preference = boolean_preference;
-                    else if (op == BinaryOperator_LessEqualsThan) preference = boolean_preference;
-                    else if (op == BinaryOperator_GreaterThan) preference = boolean_preference;
-                    else if (op == BinaryOperator_GreaterEqualsThan) preference = boolean_preference;
-                    else if (op == BinaryOperator_Is) preference = addition_preference;
+                    OperatorKind op = OperatorKindFromToken(token.kind);
+                    if (op == OperatorKind_Addition) preference = addition_preference;
+                    else if (op == OperatorKind_Substraction) preference = addition_preference;
+                    else if (op == OperatorKind_Multiplication) preference = multiplication_preference;
+                    else if (op == OperatorKind_Division) preference = multiplication_preference;
+                    else if (op == OperatorKind_Modulo) preference = multiplication_preference;
+                    else if (op == OperatorKind_LogicalNot) preference = logical_preference;
+                    else if (op == OperatorKind_LogicalOr) preference = logical_preference;
+                    else if (op == OperatorKind_LogicalAnd) preference = logical_preference;
+                    else if (op == OperatorKind_Equals) preference = boolean_preference;
+                    else if (op == OperatorKind_NotEquals) preference = boolean_preference;
+                    else if (op == OperatorKind_LessThan) preference = boolean_preference;
+                    else if (op == OperatorKind_LessEqualsThan) preference = boolean_preference;
+                    else if (op == OperatorKind_GreaterThan) preference = boolean_preference;
+                    else if (op == OperatorKind_GreaterEqualsThan) preference = boolean_preference;
+                    else if (op == OperatorKind_Is) preference = addition_preference;
                     else {
                         Assert(0);
                     }
@@ -671,7 +685,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             
             if (token_is_sign_or_binary_op(op_token.kind))
             {
-                BinaryOperator op = binary_operator_from_token(op_token.kind);
+                OperatorKind op = OperatorKindFromToken(op_token.kind);
                 expr_context.assignment_count = Min(expr_context.assignment_count, 1);
                 
                 if (preference_is_sign)
@@ -751,6 +765,49 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         }
     }
     
+    // Explicit castings
+    if (tokens.count > 0 && (tokens[0].kind == TokenKind_CastKeyword || tokens[0].kind == TokenKind_BitCastKeyword))
+    {
+        if (tokens.count < 5 || tokens[1].kind != TokenKind_OpenParenthesis)
+        {
+            ReportErrorFront(location, "Wrong format for explicit casting");
+            return IRFailed();
+        }
+        
+        Token keyword_token = tokens[0];
+        
+        I32 end_parenthesis_index = -1;
+        for (I32 i = 2; i < tokens.count; i++)
+        {
+            if (tokens[i].kind == TokenKind_CloseParenthesis) {
+                end_parenthesis_index = i;
+                break;
+            }
+        }
+        
+        if (end_parenthesis_index < 0) {
+            ReportErrorFront(location, "Closing parenthesis not found");
+            return IRFailed();
+        }
+        
+        B32 bitcast = keyword_token.kind == TokenKind_BitCastKeyword;
+        
+        Array<Token> type_tokens = array_subarray(tokens, 2, end_parenthesis_index - 2);
+        Array<Token> src_tokens = array_subarray(tokens, end_parenthesis_index + 1, tokens.count - end_parenthesis_index - 1);
+        
+        VType type = ReadObjectType(ParserSub(parser, LocationFromTokens(type_tokens)), reporter, program);
+        if (TypeIsNil(type)) return IRFailed();
+        
+        IR_Group out = ReadExpression(ir, ParserSub(parser, LocationFromTokens(src_tokens)), ExpresionContext_from_inference(1));
+        if (!out.success) return IRFailed();
+        
+        if (!TypeEquals(program, out.value.vtype, type)) {
+            out = IRAppend(out, IRFromCasting(ir, out.value, type, bitcast, location));
+        }
+        
+        return out;
+    }
+    
     // Array Expresions
     if (tokens.count >= 2 && (tokens[0].kind == TokenKind_OpenBrace || tokens[0].kind == TokenKind_OpenBracket))
     {
@@ -795,7 +852,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                 }
             }
             
-            VType expr_vtype = is_empty ? VType_Int : element_vtype;
+            VType expr_vtype = is_empty ? VType_UInt : element_vtype;
             
             Array<Token> expr_tokens = array_subarray(tokens, 1, close_index - 1);
             IR_Group out = ReadExpressionList(context.arena, ir, expr_vtype, {}, ParserSub(parser, LocationFromTokens(expr_tokens)));
@@ -831,7 +888,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                 
                 foreach(i, dimensions.count) {
                     if (i < values.count) dimensions[i] = values[i];
-                    else dimensions[i] = ValueFromInt(0);
+                    else dimensions[i] = ValueFromUInt(0);
                 }
                 
                 out.value = ValueFromEmptyArray(ir->arena, TypeFromIndex(ir->program, array_vtype.base_index), dimensions);
@@ -867,7 +924,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     Location index_location = LocationFromTokens(index_tokens);
                     
                     IR_Group src = ReadExpression(ir, ParserSub(parser, src_location), ExpresionContext_from_void());
-                    IR_Group index = ReadExpression(ir, ParserSub(parser, index_location), ExpresionContext_from_vtype(VType_Int, 1));
+                    IR_Group index = ReadExpression(ir, ParserSub(parser, index_location), ExpresionContext_from_vtype(VType_UInt, 1));
                     
                     if (!src.success || !index.success) {
                         return IRFailed();
@@ -878,7 +935,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                         return IRFailed();
                     }
                     
-                    if (!TypeIsInt(index.value.vtype)) {
+                    if (!TypeIsAnyInt(index.value.vtype)) {
                         report_indexing_expects_an_int(location);
                         return IRFailed();
                     }
@@ -909,6 +966,68 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
     return {};
 }
 
+internal_fn B32 CastingNeeded(Program* program, VType dst_type, VType src_type)
+{
+    return !TypeIsVoid(dst_type) && !TypeIsAny(dst_type) && !TypeIsAny(src_type) && !TypeEquals(program, src_type, dst_type);
+}
+
+IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionContext expr_context)
+{
+    Reporter* reporter = ir->reporter;
+    Program* program = ir->program;
+    IR_Group out = ReadExpression(ir, parser, expr_context);
+    if (!out.success) return IRFailed();
+    
+    Value src = out.value;
+    
+    VType src_type = src.vtype;
+    VType dst_type = expr_context.vtype;
+    
+    Location location = LocationFromParser(parser);
+    
+    if (CastingNeeded(ir->program, dst_type, src_type))
+    {
+        if (TypeIsReference(dst_type)) dst_type = VTypeNext(program, dst_type);
+        
+        if (TypeIsReference(src_type)) {
+            out = IRAppend(out, IRFromDereference(ir, src, location));
+            src = out.value;
+            src_type = src.vtype;
+        }
+    }
+    
+    if (CastingNeeded(ir->program, dst_type, src_type))
+    {
+        B32 casting_solved = false;
+        
+        if (expr_context.assignment_count == 1)
+        {
+            if (TypeIsAnyInt(src_type) && TypeIsAnyInt(dst_type))
+            {
+                B32 dst_sign = TypeIsInt(dst_type);
+                B32 src_sign = TypeIsInt(src_type);
+                
+                if (dst_sign && !src_sign) {
+                    out = IRAppend(out, IRFromCasting(ir, src, dst_type, false, location));
+                    casting_solved = true;
+                }
+            }
+            else if (TypeIsAnyInt(src_type) && TypeIsFloat(dst_type))
+            {
+                out = IRAppend(out, IRFromCasting(ir, src, dst_type, false, location));
+                casting_solved = true;
+            }
+        }
+        
+        if (!casting_solved) {
+            ReportErrorFront(location, "Implicit casting failed: %S to %S", VTypeGetName(program, src_type), VTypeGetName(program, dst_type));
+            return IRFailed();
+        }
+    }
+    
+    return out;
+}
+
 void CheckForAnyAssumptions(IR_Context* ir, IR_Unit* unit, Value value)
 {
     Program* program = ir->program;
@@ -918,11 +1037,11 @@ void CheckForAnyAssumptions(IR_Context* ir, IR_Unit* unit, Value value)
         return;
     }
     
-    if (unit->kind == UnitKind_BinaryOperation && unit->binary_op.op == BinaryOperator_Is) {
-        if (!TypeIsArray(unit->src.vtype))
+    if (unit->kind == UnitKind_Is) {
+        if (!TypeIsArray(unit->src0.vtype))
         {
-            IR_Object* obj = ir_find_object_from_value(ir, unit->src);
-            VType vtype = TypeFromCompiletime(program, unit->binary_op.src1);
+            IR_Object* obj = ir_find_object_from_value(ir, unit->src0);
+            VType vtype = TypeFromCompiletime(program, unit->src1);
             
             if (obj != NULL && !TypeIsNil(vtype)) {
                 ir_assume_object(ir, obj, vtype);
@@ -979,7 +1098,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 return IRFailed();
             }
             
-            IR_Group expression = ReadExpression(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+            IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
             if (!expression.success) return IRFailed();
             
             CheckForAnyAssumptions(ir, expression.last, expression.value);
@@ -1036,7 +1155,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 return IRFailed();
             }
             
-            IR_Group condition = ReadExpression(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+            IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
             if (!condition.success) return IRFailed();
             
             // Read code
@@ -1144,7 +1263,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 
                 Location iterator_location = LocationFromParser(parser, parser->range.max);
                 
-                IR_Group iterator = ReadExpression(ir, ParserSub(parser, iterator_location), ExpresionContext_from_inference(1));
+                IR_Group iterator = ReadExpressionWithCasting(ir, ParserSub(parser, iterator_location), ExpresionContext_from_inference(1));
                 
                 if (!TypeIsArray(iterator.value.vtype)) {
                     ReportErrorFront(location, "Invalid iterator for a for each statement");
@@ -1158,19 +1277,19 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 Value element_value = init.value;
                 
                 if (index_identifier.size > 0) {
-                    init = IRAppend(init, IRFromDefineObject(ir, RegisterKind_Local, index_identifier, VType_Int, false, location));
+                    init = IRAppend(init, IRFromDefineObject(ir, RegisterKind_Local, index_identifier, VType_UInt, false, location));
                 }
                 else {
-                    init = IRAppend(init, IRFromDefineTemporal(ir, VType_Int, location));
+                    init = IRAppend(init, IRFromDefineTemporal(ir, VType_UInt, location));
                 }
                 Value index_value = init.value;
-                init = IRAppend(init, IRFromStore(ir, index_value, ValueFromInt(0), location));
+                init = IRAppend(init, IRFromStore(ir, index_value, ValueFromZero(VType_UInt), location));
                 
                 // Condition code
                 VariableTypeChild count_info = VTypeGetProperty(program, iterator.value.vtype, "count");
-                IR_Group condition = IRFromChild(ir, iterator.value, ValueFromInt(count_info.index), count_info.is_member, count_info.vtype, location);
+                IR_Group condition = IRFromChild(ir, iterator.value, ValueFromZero(VType_UInt), count_info.is_member, count_info.vtype, location);
                 Value count_value = condition.value;
-                condition = IRAppend(condition, IRFromBinaryOperator(ir, index_value, count_value, BinaryOperator_LessThan, false, location));
+                condition = IRAppend(condition, IRFromBinaryOperator(ir, index_value, count_value, OperatorKind_LessThan, false, location));
                 
                 // Content code
                 IR_Group content = IRFromChild(ir, iterator.value, index_value, true, element_vtype, location);
@@ -1178,7 +1297,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 content = IRAppend(content, ReadCode(ir, ParserSub(parser, content_location)));
                 
                 // Update code
-                IR_Group update = IRFromAssignment(ir, false, index_value, ValueFromInt(1), BinaryOperator_Addition, location);
+                IR_Group update = IRFromAssignment(ir, false, index_value, ValueFromUInt(1), OperatorKind_Addition, location);
                 
                 out = IRAppend(out, IRFromLoop(ir, init, condition, content, update, first_token.location));
             }
@@ -1186,7 +1305,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             else if (splits.count == 3)
             {
                 IR_Group init = ReadSentence(ir, ParserSub(parser, splits[0]));
-                IR_Group condition = ReadExpression(ir, ParserSub(parser, splits[1]), ExpresionContext_from_vtype(VType_Bool, 1));
+                IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, splits[1]), ExpresionContext_from_vtype(VType_Bool, 1));
                 IR_Group update = ReadSentence(ir, ParserSub(parser, splits[2]));
                 IR_Group content = ReadCode(ir, ParserSub(parser, content_location));
                 
@@ -1284,14 +1403,27 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
             }
         }
         
-        Location src_code = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+        OperatorKind op = assignment_token.assignment_operator;
         
-        IR_Group src = ReadExpression(ir, ParserSub(parser, src_code), ExpresionContext_from_vtype(values[0].vtype, values.count));
+        IR_Group src;
+        {
+            
+            B32 register_is_any = false;
+            if (values.count == 1) {
+                Register reg = IRRegisterFromValue(ir, values[0]);
+                register_is_any = reg.kind != RegisterKind_None && TypeIsAny(reg.vtype);
+            }
+            
+            Location src_location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+            ExpresionContext expr_context = ExpresionContext_from_vtype(values[0].vtype, values.count);
+            Parser* expr_parser = ParserSub(parser, src_location);
+            if (op == OperatorKind_None && !register_is_any) src = ReadExpressionWithCasting(ir, expr_parser, expr_context);
+            else src = ReadExpression(ir, expr_parser, expr_context);
+        }
         out = IRAppend(out, src);
         
         if (!out.success) return IRFailed();
         
-        BinaryOperator op = assignment_token.assignment_binary_operator;
         IR_Group assignment = IRFromMultipleAssignment(ir, true, values, src.value, op, location);
         return IRAppend(out, assignment);
     }
@@ -1311,7 +1443,7 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
         ExpresionContext context = (TypeIsVoid(expected_vtype)) ? ExpresionContext_from_void() : ExpresionContext_from_vtype(expected_vtype, 1);
         
         Location expression_location = LocationFromParser(parser, parser->range.max);
-        IR_Group expression = ReadExpression(ir, ParserSub(parser, expression_location), context);
+        IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), context);
         if (!expression.success) return IRFailed();
         return IRFromReturn(ir, expression, location);
     }
@@ -1359,7 +1491,7 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser*
     IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, expected_vtypes, ParserSub(parser, expressions_location));
     Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
     
-    IR_Group call = IRFromFunctionCall(ir, identifier, params, expr_context, location);
+    IR_Group call = IRFromCall(ir, identifier, params, expr_context, location);
     return IRAppend(out, call);
 }
 
@@ -1533,7 +1665,7 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
     
     if (assignment_token.kind != TokenKind_None)
     {
-        B32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None;
+        B32 variable_assignment = assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_operator == OperatorKind_None;
         B32 constant_assignment = assignment_token.kind == TokenKind_Colon;
         
         if (!variable_assignment && !constant_assignment) {
@@ -1547,7 +1679,7 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
         
         Location expression_code = LocationFromParser(parser, assignment_end_cursor);
         ExpresionContext expression_context = inference_type ? ExpresionContext_from_inference(identifiers.count) : ExpresionContext_from_vtype(definition_vtype, identifiers.count);
-        IR_Group src = ReadExpression(ir, ParserSub(parser, expression_code), expression_context);
+        IR_Group src = ReadExpressionWithCasting(ir, ParserSub(parser, expression_code), expression_context);
         if (!src.success) return res;
         
         Array<VType> vtypes = {};
@@ -1608,7 +1740,7 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
         res.out = IRAppend(res.out, src);
         
         if (src.value.kind != ValueKind_None) {
-            IR_Group assignment = IRFromMultipleAssignment(ir, true, values, src.value, BinaryOperator_None, location);
+            IR_Group assignment = IRFromMultipleAssignment(ir, true, values, src.value, OperatorKind_None, location);
             res.out = IRAppend(res.out, assignment);
         }
         
@@ -1756,7 +1888,7 @@ IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VTy
         
         Location expression_location = LocationMake(parser->cursor, expression_end_cursor, parser->script_id);
         
-        out = IRAppend(out, ReadExpression(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(expected_vtype, 1)));
+        out = IRAppend(out, ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(expected_vtype, 1)));
         if (!out.success) return IRFailed();
         
         array_add(&list, out.value);
@@ -1856,6 +1988,7 @@ String DebugInfoFromToken(Arena* arena, Token token)
     if (k == TokenKind_ForKeyword) return "for";
     if (k == TokenKind_EnumKeyword) return "enum";
     if (k == TokenKind_IntLiteral) return StrFormat(arena, "Int Literal: %S", token.value);
+    if (k == TokenKind_FloatLiteral) return StrFormat(arena, "Float Literal: %S", token.value);
     if (k == TokenKind_BoolLiteral) { return StrFormat(arena, "Bool Literal: %S", token.value); }
     if (k == TokenKind_StringLiteral) { return StrFormat(arena, "String Literal: %S", token.value); }
     if (k == TokenKind_Comment) { return StrFormat(arena, "Comment: %S", token.value); }
@@ -1869,8 +2002,8 @@ String DebugInfoFromToken(Arena* arena, Token token)
     if (k == TokenKind_OpenParenthesis) return "(";
     if (k == TokenKind_CloseParenthesis) return ")";
     if (k == TokenKind_Assignment) {
-        if (token.assignment_binary_operator == BinaryOperator_None) return "=";
-        return StrFormat(arena, "%S=", StringFromBinaryOperator(token.assignment_binary_operator));
+        if (token.assignment_operator == OperatorKind_None) return "=";
+        return StrFormat(arena, "%S=", StringFromOperatorKind(token.assignment_operator));
     }
     if (k == TokenKind_PlusSign) return "+";
     if (k == TokenKind_MinusSign) return "-";
@@ -1897,25 +2030,25 @@ String DebugInfoFromToken(Arena* arena, Token token)
     return "?";
 }
 
-BinaryOperator binary_operator_from_token(TokenKind token)
+OperatorKind OperatorKindFromToken(TokenKind token)
 {
-    if (token == TokenKind_PlusSign) return BinaryOperator_Addition;
-    if (token == TokenKind_MinusSign) return BinaryOperator_Substraction;
-    if (token == TokenKind_Asterisk) return BinaryOperator_Multiplication;
-    if (token == TokenKind_Slash) return BinaryOperator_Division;
-    if (token == TokenKind_Modulo) return BinaryOperator_Modulo;
-    if (token == TokenKind_Ampersand) return BinaryOperator_None;
-    if (token == TokenKind_Exclamation) return BinaryOperator_LogicalNot;
-    if (token == TokenKind_LogicalOr) return BinaryOperator_LogicalOr;
-    if (token == TokenKind_LogicalAnd) return BinaryOperator_LogicalAnd;
-    if (token == TokenKind_CompEquals) return BinaryOperator_Equals;
-    if (token == TokenKind_CompNotEquals) return BinaryOperator_NotEquals;
-    if (token == TokenKind_CompLess) return BinaryOperator_LessThan;
-    if (token == TokenKind_CompLessEquals) return BinaryOperator_LessEqualsThan;
-    if (token == TokenKind_CompGreater) return BinaryOperator_GreaterThan;
-    if (token == TokenKind_CompGreaterEquals) return BinaryOperator_GreaterEqualsThan;
-    if (token == TokenKind_IsKeyword) return BinaryOperator_Is;
-    return BinaryOperator_None;
+    if (token == TokenKind_PlusSign) return OperatorKind_Addition;
+    if (token == TokenKind_MinusSign) return OperatorKind_Substraction;
+    if (token == TokenKind_Asterisk) return OperatorKind_Multiplication;
+    if (token == TokenKind_Slash) return OperatorKind_Division;
+    if (token == TokenKind_Modulo) return OperatorKind_Modulo;
+    if (token == TokenKind_Ampersand) return OperatorKind_None;
+    if (token == TokenKind_Exclamation) return OperatorKind_LogicalNot;
+    if (token == TokenKind_LogicalOr) return OperatorKind_LogicalOr;
+    if (token == TokenKind_LogicalAnd) return OperatorKind_LogicalAnd;
+    if (token == TokenKind_CompEquals) return OperatorKind_Equals;
+    if (token == TokenKind_CompNotEquals) return OperatorKind_NotEquals;
+    if (token == TokenKind_CompLess) return OperatorKind_LessThan;
+    if (token == TokenKind_CompLessEquals) return OperatorKind_LessEqualsThan;
+    if (token == TokenKind_CompGreater) return OperatorKind_GreaterThan;
+    if (token == TokenKind_CompGreaterEquals) return OperatorKind_GreaterEqualsThan;
+    if (token == TokenKind_IsKeyword) return OperatorKind_Is;
+    return OperatorKind_None;
 };
 
 B32 token_is_sign_or_binary_op(TokenKind token)
@@ -1988,7 +2121,7 @@ Location LocationFromTokens(Array<Token> tokens)
 }
 
 
-internal_fn Token token_make_dynamic(String text, U64 cursor, TokenKind kind, U64 size, I32 script_id)
+internal_fn Token TokenMakeDynamic(String text, U64 cursor, TokenKind kind, U64 size, I32 script_id)
 {
     Assert(size > 0);
     
@@ -2020,6 +2153,8 @@ internal_fn Token token_make_dynamic(String text, U64 cursor, TokenKind kind, U6
         else if (StrEquals("import", token.value)) kind = TokenKind_ImportKeyword;
         else if (StrEquals("true", token.value)) kind = TokenKind_BoolLiteral;
         else if (StrEquals("false", token.value)) kind = TokenKind_BoolLiteral;
+        else if (StrEquals("cast", token.value)) kind = TokenKind_CastKeyword;
+        else if (StrEquals("bitcast", token.value)) kind = TokenKind_BitCastKeyword;
     }
     
     token.kind = kind;
@@ -2033,7 +2168,7 @@ internal_fn Token token_make_dynamic(String text, U64 cursor, TokenKind kind, U6
     return token;
 }
 
-internal_fn Token token_make_fixed(String text, U64 cursor, TokenKind kind, U32 codepoint_length, I32 script_id)
+internal_fn Token TokenMakeFixed(String text, U64 cursor, TokenKind kind, U32 codepoint_length, I32 script_id)
 {
     U64 start_cursor = cursor;
     
@@ -2043,17 +2178,17 @@ internal_fn Token token_make_fixed(String text, U64 cursor, TokenKind kind, U32 
         StrGetCodepoint(text, &cursor);
     }
     
-    return token_make_dynamic(text, start_cursor, kind, cursor - start_cursor, script_id);
+    return TokenMakeDynamic(text, start_cursor, kind, cursor - start_cursor, script_id);
 }
 
-internal_fn Token token_from_assignment(String text, U64 cursor, BinaryOperator binary_op, U32 codepoint_length, I32 script_id)
+internal_fn Token TokenFromAssignment(String text, U64 cursor, OperatorKind op, U32 codepoint_length, I32 script_id)
 {
-    Token token = token_make_fixed(text, cursor, TokenKind_Assignment, codepoint_length, script_id);
-    token.assignment_binary_operator = binary_op;
+    Token token = TokenMakeFixed(text, cursor, TokenKind_Assignment, codepoint_length, script_id);
+    token.assignment_operator = op;
     return token;
 }
 
-Token read_token(String text, U64 start_cursor, I32 script_id)
+Token ReadToken(String text, U64 start_cursor, I32 script_id)
 {
     U32 c0, c1;
     
@@ -2064,21 +2199,21 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
     }
     
     if (c0 == 0) {
-        return token_make_fixed(text, start_cursor, TokenKind_NextLine, 1, script_id);
+        return TokenMakeFixed(text, start_cursor, TokenKind_NextLine, 1, script_id);
     }
     
-    if (codepoint_is_separator(c0))
+    if (CodepointIsSeparator(c0))
     {
         U64 cursor = start_cursor;
         while (cursor < text.size) {
             U64 next_cursor = cursor;
             U32 codepoint = StrGetCodepoint(text, &next_cursor);
-            if (!codepoint_is_separator(codepoint)) {
+            if (!CodepointIsSeparator(codepoint)) {
                 break;
             }
             cursor = next_cursor;
         }
-        return token_make_dynamic(text, start_cursor, TokenKind_Separator, cursor - start_cursor, script_id);
+        return TokenMakeDynamic(text, start_cursor, TokenKind_Separator, cursor - start_cursor, script_id);
     }
     
     if (c0 == '/' && c1 == '/')
@@ -2090,7 +2225,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
             if (codepoint == '\n') break;
             cursor = next_cursor;
         }
-        return token_make_dynamic(text, start_cursor, TokenKind_Comment, cursor - start_cursor, script_id);
+        return TokenMakeDynamic(text, start_cursor, TokenKind_Comment, cursor - start_cursor, script_id);
     }
     
     if (c0 == '/' && c1 == '*')
@@ -2112,7 +2247,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
             }
             last_codepoint = codepoint;
         }
-        return token_make_dynamic(text, start_cursor, TokenKind_Comment, cursor - start_cursor, script_id);
+        return TokenMakeDynamic(text, start_cursor, TokenKind_Comment, cursor - start_cursor, script_id);
     }
     
     if (c0 == '"') {
@@ -2129,7 +2264,7 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
             if (codepoint == '\\') ignore_next = true;
             if (codepoint == '"') break;
         }
-        return token_make_dynamic(text, start_cursor, TokenKind_StringLiteral, cursor - start_cursor, script_id);
+        return TokenMakeDynamic(text, start_cursor, TokenKind_StringLiteral, cursor - start_cursor, script_id);
     }
     
     if (c0 == '\'') {
@@ -2146,85 +2281,105 @@ Token read_token(String text, U64 start_cursor, I32 script_id)
             if (codepoint == '\\') ignore_next = true;
             if (codepoint == '\'') break;
         }
-        return token_make_dynamic(text, start_cursor, TokenKind_CodepointLiteral, cursor - start_cursor, script_id);
+        return TokenMakeDynamic(text, start_cursor, TokenKind_CodepointLiteral, cursor - start_cursor, script_id);
     }
     
-    if (c0 == '-' && c1 == '>') return token_make_fixed(text, start_cursor, TokenKind_Arrow, 2, script_id);
+    if (c0 == '-' && c1 == '>') return TokenMakeFixed(text, start_cursor, TokenKind_Arrow, 2, script_id);
     
-    if (c0 == ',') return token_make_fixed(text, start_cursor, TokenKind_Comma, 1, script_id);
-    if (c0 == '.') return token_make_fixed(text, start_cursor, TokenKind_Dot, 1, script_id);
-    if (c0 == '{') return token_make_fixed(text, start_cursor, TokenKind_OpenBrace, 1, script_id);
-    if (c0 == '}') return token_make_fixed(text, start_cursor, TokenKind_CloseBrace, 1, script_id);
-    if (c0 == '[') return token_make_fixed(text, start_cursor, TokenKind_OpenBracket, 1, script_id);
-    if (c0 == ']') return token_make_fixed(text, start_cursor, TokenKind_CloseBracket, 1, script_id);
-    if (c0 == '"') return token_make_fixed(text, start_cursor, TokenKind_OpenString, 1, script_id);
-    if (c0 == '(') return token_make_fixed(text, start_cursor, TokenKind_OpenParenthesis, 1, script_id);
-    if (c0 == ')') return token_make_fixed(text, start_cursor, TokenKind_CloseParenthesis, 1, script_id);
-    if (c0 == ':') return token_make_fixed(text, start_cursor, TokenKind_Colon, 1, script_id);
-    if (c0 == ';') return token_make_fixed(text, start_cursor, TokenKind_NextSentence, 1, script_id);
-    if (c0 == '\n') return token_make_fixed(text, start_cursor, TokenKind_NextLine, 1, script_id);
-    if (c0 == '_') return token_make_fixed(text, start_cursor, TokenKind_Identifier, 1, script_id);
+    if (c0 == ',') return TokenMakeFixed(text, start_cursor, TokenKind_Comma, 1, script_id);
+    if (c0 == '.') return TokenMakeFixed(text, start_cursor, TokenKind_Dot, 1, script_id);
+    if (c0 == '{') return TokenMakeFixed(text, start_cursor, TokenKind_OpenBrace, 1, script_id);
+    if (c0 == '}') return TokenMakeFixed(text, start_cursor, TokenKind_CloseBrace, 1, script_id);
+    if (c0 == '[') return TokenMakeFixed(text, start_cursor, TokenKind_OpenBracket, 1, script_id);
+    if (c0 == ']') return TokenMakeFixed(text, start_cursor, TokenKind_CloseBracket, 1, script_id);
+    if (c0 == '"') return TokenMakeFixed(text, start_cursor, TokenKind_OpenString, 1, script_id);
+    if (c0 == '(') return TokenMakeFixed(text, start_cursor, TokenKind_OpenParenthesis, 1, script_id);
+    if (c0 == ')') return TokenMakeFixed(text, start_cursor, TokenKind_CloseParenthesis, 1, script_id);
+    if (c0 == ':') return TokenMakeFixed(text, start_cursor, TokenKind_Colon, 1, script_id);
+    if (c0 == ';') return TokenMakeFixed(text, start_cursor, TokenKind_NextSentence, 1, script_id);
+    if (c0 == '\n') return TokenMakeFixed(text, start_cursor, TokenKind_NextLine, 1, script_id);
+    if (c0 == '_') return TokenMakeFixed(text, start_cursor, TokenKind_Identifier, 1, script_id);
     
-    if (c0 == '+' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Addition, 2, script_id);
-    if (c0 == '-' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Substraction, 2, script_id);
-    if (c0 == '*' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Multiplication, 2, script_id);
-    if (c0 == '/' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Division, 2, script_id);
-    if (c0 == '%' && c1 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_Modulo, 2, script_id);
+    if (c0 == '+' && c1 == '=') return TokenFromAssignment(text, start_cursor, OperatorKind_Addition, 2, script_id);
+    if (c0 == '-' && c1 == '=') return TokenFromAssignment(text, start_cursor, OperatorKind_Substraction, 2, script_id);
+    if (c0 == '*' && c1 == '=') return TokenFromAssignment(text, start_cursor, OperatorKind_Multiplication, 2, script_id);
+    if (c0 == '/' && c1 == '=') return TokenFromAssignment(text, start_cursor, OperatorKind_Division, 2, script_id);
+    if (c0 == '%' && c1 == '=') return TokenFromAssignment(text, start_cursor, OperatorKind_Modulo, 2, script_id);
     
-    if (c0 == '=' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompEquals, 2, script_id);
-    if (c0 == '!' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompNotEquals, 2, script_id);
-    if (c0 == '<' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompLessEquals, 2, script_id);
-    if (c0 == '>' && c1 == '=') return token_make_fixed(text, start_cursor, TokenKind_CompGreaterEquals, 2, script_id);
+    if (c0 == '=' && c1 == '=') return TokenMakeFixed(text, start_cursor, TokenKind_CompEquals, 2, script_id);
+    if (c0 == '!' && c1 == '=') return TokenMakeFixed(text, start_cursor, TokenKind_CompNotEquals, 2, script_id);
+    if (c0 == '<' && c1 == '=') return TokenMakeFixed(text, start_cursor, TokenKind_CompLessEquals, 2, script_id);
+    if (c0 == '>' && c1 == '=') return TokenMakeFixed(text, start_cursor, TokenKind_CompGreaterEquals, 2, script_id);
     
-    if (c0 == '|' && c1 == '|') return token_make_fixed(text, start_cursor, TokenKind_LogicalOr, 2, script_id);
-    if (c0 == '&' && c1 == '&') return token_make_fixed(text, start_cursor, TokenKind_LogicalAnd, 2, script_id);
+    if (c0 == '|' && c1 == '|') return TokenMakeFixed(text, start_cursor, TokenKind_LogicalOr, 2, script_id);
+    if (c0 == '&' && c1 == '&') return TokenMakeFixed(text, start_cursor, TokenKind_LogicalAnd, 2, script_id);
     
-    if (c0 == '=') return token_from_assignment(text, start_cursor, BinaryOperator_None, 1, script_id);
+    if (c0 == '=') return TokenFromAssignment(text, start_cursor, OperatorKind_None, 1, script_id);
     
-    if (c0 == '<') return token_make_fixed(text, start_cursor, TokenKind_CompLess, 1, script_id);
-    if (c0 == '>') return token_make_fixed(text, start_cursor, TokenKind_CompGreater, 1, script_id);
+    if (c0 == '<') return TokenMakeFixed(text, start_cursor, TokenKind_CompLess, 1, script_id);
+    if (c0 == '>') return TokenMakeFixed(text, start_cursor, TokenKind_CompGreater, 1, script_id);
     
-    if (c0 == '+') return token_make_fixed(text, start_cursor, TokenKind_PlusSign, 1, script_id);
-    if (c0 == '-') return token_make_fixed(text, start_cursor, TokenKind_MinusSign, 1, script_id);
-    if (c0 == '*') return token_make_fixed(text, start_cursor, TokenKind_Asterisk, 1, script_id);
-    if (c0 == '/') return token_make_fixed(text, start_cursor, TokenKind_Slash, 1, script_id);
-    if (c0 == '%') return token_make_fixed(text, start_cursor, TokenKind_Modulo, 1, script_id);
+    if (c0 == '+') return TokenMakeFixed(text, start_cursor, TokenKind_PlusSign, 1, script_id);
+    if (c0 == '-') return TokenMakeFixed(text, start_cursor, TokenKind_MinusSign, 1, script_id);
+    if (c0 == '*') return TokenMakeFixed(text, start_cursor, TokenKind_Asterisk, 1, script_id);
+    if (c0 == '/') return TokenMakeFixed(text, start_cursor, TokenKind_Slash, 1, script_id);
+    if (c0 == '%') return TokenMakeFixed(text, start_cursor, TokenKind_Modulo, 1, script_id);
     
-    if (c0 == '&') return token_make_fixed(text, start_cursor, TokenKind_Ampersand, 1, script_id);
-    if (c0 == '!') return token_make_fixed(text, start_cursor, TokenKind_Exclamation, 1, script_id);
+    if (c0 == '&') return TokenMakeFixed(text, start_cursor, TokenKind_Ampersand, 1, script_id);
+    if (c0 == '!') return TokenMakeFixed(text, start_cursor, TokenKind_Exclamation, 1, script_id);
     
-    if (codepoint_is_number(c0))
+    if (CodepointIsNumber(c0))
+    {
+        U32 dot_count = 0;
+        U64 cursor = start_cursor;
+        while (cursor < text.size) {
+            U64 next_cursor = cursor;
+            U32 codepoint = StrGetCodepoint(text, &next_cursor);
+            
+            if (CodepointIsNumber(codepoint)) { }
+            else if (codepoint == '.') {
+                dot_count++;
+            }
+            else {
+                break;
+            }
+            
+            cursor = next_cursor;
+        }
+        
+        TokenKind kind;
+        
+        if (dot_count == 0) {
+            kind = TokenKind_IntLiteral;
+        }
+        else if (dot_count == 1) {
+            kind = TokenKind_FloatLiteral;
+        }
+        else {
+            kind = TokenKind_Error;
+        }
+        
+        return TokenMakeDynamic(text, start_cursor, kind, cursor - start_cursor, script_id);
+    }
+    
+    if (CodepointIsText(c0))
     {
         U64 cursor = start_cursor;
         while (cursor < text.size) {
             U64 next_cursor = cursor;
             U32 codepoint = StrGetCodepoint(text, &next_cursor);
-            if (!codepoint_is_number(codepoint)) {
+            if (!CodepointIsText(codepoint) && !CodepointIsNumber(codepoint) && codepoint != '_') {
                 break;
             }
             cursor = next_cursor;
         }
-        return token_make_dynamic(text, start_cursor, TokenKind_IntLiteral, cursor - start_cursor, script_id);
+        return TokenMakeDynamic(text, start_cursor, TokenKind_Identifier, cursor - start_cursor, script_id);
     }
     
-    if (codepoint_is_text(c0))
-    {
-        U64 cursor = start_cursor;
-        while (cursor < text.size) {
-            U64 next_cursor = cursor;
-            U32 codepoint = StrGetCodepoint(text, &next_cursor);
-            if (!codepoint_is_text(codepoint) && !codepoint_is_number(codepoint) && codepoint != '_') {
-                break;
-            }
-            cursor = next_cursor;
-        }
-        return token_make_dynamic(text, start_cursor, TokenKind_Identifier, cursor - start_cursor, script_id);
-    }
-    
-    return token_make_fixed(text, start_cursor, TokenKind_Error, 1, script_id);
+    return TokenMakeFixed(text, start_cursor, TokenKind_Error, 1, script_id);
 }
 
-Token read_valid_token(String text, U64 start_cursor, U64 end_cursor, I32 script_id)
+Token ReadValidToken(String text, U64 start_cursor, U64 end_cursor, I32 script_id)
 {
     Assert(end_cursor <= text.size);
     
@@ -2236,7 +2391,7 @@ Token read_valid_token(String text, U64 start_cursor, U64 end_cursor, I32 script
         I64 cursor = (I64)start_cursor + total_skip_size;
         if (cursor < 0 || cursor >= end_cursor) break;
         
-        token = read_token(text, cursor, script_id);
+        token = ReadToken(text, cursor, script_id);
         
         total_skip_size += token.skip_size;
         

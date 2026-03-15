@@ -33,7 +33,7 @@ void Intrinsic_println(Runtime* runtime, Array<Reference> params, Array<Referenc
 
 void Intrinsic_exit(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    I64 exit_code = get_int(params[0]);
+    I64 exit_code = RefGetSInt(params[0]);
     RuntimeExit(runtime, (I32)exit_code);
 }
 
@@ -61,7 +61,7 @@ void Intrinsic_set_cd(Runtime* runtime, Array<Reference> params, Array<Reference
 
 void Intrinsic_assert(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    B32 result = get_bool(params[0]);
+    B32 result = RefGetBool(params[0]);
     
     Result res = RESULT_SUCCESS;
     if (!result) {
@@ -74,7 +74,7 @@ void Intrinsic_assert(Runtime* runtime, Array<Reference> params, Array<Reference
 void Intrinsic_failed(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String message = get_string(params[0]);
-    I64 exit_code = get_int(params[1]);
+    I64 exit_code = RefGetSInt(params[1]);
     
     Result res = ResultMakeFailed(message, exit_code);
     returns[0] = ref_from_Result(runtime, res);
@@ -82,7 +82,7 @@ void Intrinsic_failed(Runtime* runtime, Array<Reference> params, Array<Reference
 
 void Intrinsic_sleep(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    I64 millis = get_int(params[0]);
+    U64 millis = RefGetUInt(params[0]);
     OsThreadSleep(millis);
 }
 
@@ -92,7 +92,7 @@ void Intrinsic_env(Runtime* runtime, Array<Reference> params, Array<Reference> r
     String value;
     Result res = OsEnvGet(context.arena, &value, name);
     
-    returns[0] = alloc_string(runtime, value);
+    returns[0] = AllocString(runtime, value);
     returns[1] = ref_from_Result(runtime, res);
 }
 
@@ -106,7 +106,7 @@ void Intrinsic_env_path(Runtime* runtime, Array<Reference> params, Array<Referen
         value = PathResolve(context.arena, value);
     }
     
-    returns[0] = alloc_string(runtime, value);
+    returns[0] = AllocString(runtime, value);
     returns[1] = ref_from_Result(runtime, res);
 }
 
@@ -121,7 +121,7 @@ void Intrinsic_env_path_array(Runtime* runtime, Array<Reference> params, Array<R
     if (!res.failed)
     {
         Array<String> values = StrSplit(context.arena, value, ";");
-        array = alloc_array(runtime, VType_String, values.count);
+        array = AllocArray(runtime, VType_String, values.count);
         
         foreach(i, values.count) {
             Reference element = ref_get_member(runtime, array, i);
@@ -131,11 +131,53 @@ void Intrinsic_env_path_array(Runtime* runtime, Array<Reference> params, Array<R
         }
     }
     else {
-        array = alloc_array(runtime, VType_String, 0);
+        array = AllocArray(runtime, VType_String, 0);
     }
     
     returns[0] = array;
     returns[1] = ref_from_Result(runtime, res);
+}
+
+void Intrinsic_ArrayAppendBack(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    Assert(TypeIsReference(params[0].vtype) && TypeIsArray(VTypeNext(runtime->program, params[0].vtype)));
+    Assert(TypeIsArray(params[1].vtype));
+    
+    Reference dst = RefDereference(runtime, params[0]);
+    Reference src = params[1];
+    
+    ObjectData_Array* dst_array = RefGetArray(dst);
+    ObjectData_Array* src_array = RefGetArray(src);
+    
+    RefArrayPrepare(runtime, dst, dst_array->count + src_array->count);
+    
+    for (U32 i = 0; i < src_array->count; i++)
+    {
+        U32 dst_index = dst_array->count++;
+        ref_set_member(runtime, dst, dst_index, ref_get_member(runtime, src, i));
+    }
+}
+
+void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    Program* program = runtime->program;
+    
+#if DEV
+    VType array_type = VTypeNext(program, params[0].vtype);
+    VType element_type = VTypeNext(program, array_type);
+    Assert(TypeIsReference(params[0].vtype) && TypeIsArray(array_type));
+    Assert(TypeEquals(program, element_type, params[1].vtype));
+#endif
+    
+    Reference dst = RefDereference(runtime, params[0]);
+    Reference src = params[1];
+    
+    ObjectData_Array* dst_array = RefGetArray(dst);
+    
+    RefArrayPrepare(runtime, dst, dst_array->count + 1);
+    
+    U32 dst_index = dst_array->count++;
+    ref_set_member(runtime, dst, dst_index, src);
 }
 
 //- CONSOLE 
@@ -219,36 +261,77 @@ void Intrinsic_call_script(Runtime* runtime, Array<Reference> params, Array<Refe
 
 //- UTILS
 
-void Intrinsic_path_resolve(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrAppend(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String res = PathResolve(context.arena, get_string(params[0]));
-    returns[0] = alloc_string(runtime, res);
+    String str0 = get_string(params[0]);
+    String str1 = get_string(params[1]);
+    
+    String res = StrAlloc(context.arena, str0.size + str1.size);
+    MemoryCopy(res.data, str0.data, str0.size);
+    MemoryCopy(res.data + str0.size, str1.data, str1.size);
+    
+    returns[0] = AllocString(runtime, res);
 }
 
-void Intrinsic_str_get_codepoint(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrEquals(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String str = get_string(params[0]);
-    U64 cursor = get_int(params[1]);
+    String str0 = get_string(params[0]);
+    String str1 = get_string(params[1]);
     
-    U32 codepoint = StrGetCodepoint(str, &cursor);
-    
-    returns[0] = alloc_int(runtime, codepoint);
-    returns[1] = alloc_int(runtime, cursor);
+    B32 res = StrEquals(str0, str1);
+    returns[0] = AllocBool(runtime, res);
 }
 
-void Intrinsic_str_split(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrSplit(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String str = get_string(params[0]);
     String separator = get_string(params[1]);
     
     Array<String> result = StrSplit(context.arena, str, separator);
     
-    Reference array = alloc_array(runtime, VType_String, result.count);
+    Reference array = AllocArray(runtime, VType_String, result.count);
     foreach(i, result.count) {
-        ref_set_member(runtime, array, i, alloc_string(runtime, result[i]));
+        ref_set_member(runtime, array, i, AllocString(runtime, result[i]));
     }
     
     returns[0] = array;
+}
+
+void Intrinsic_StrGetCodepoint(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    String str = get_string(params[0]);
+    U64 cursor = RefGetUInt(params[1]);
+    
+    U32 codepoint = StrGetCodepoint(str, &cursor);
+    
+    returns[0] = AllocUInt(runtime, codepoint);
+    returns[1] = AllocUInt(runtime, cursor);
+}
+
+void Intrinsic_StrFromCodepoint(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    U32 codepoint = (U32)RefGetUInt(params[0]);
+    String str = StringFromCodepoint(context.arena, codepoint);
+    
+    returns[0] = AllocString(runtime, str);
+}
+
+
+void Intrinsic_PathAppend(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    String str0 = get_string(params[0]);
+    String str1 = get_string(params[1]);
+    
+    String res = PathAppend(context.arena, str0, str1);
+    res = PathResolve(context.arena, res);
+    
+    returns[0] = AllocString(runtime, res);
+}
+
+void Intrinsic_PathResolve(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    String res = PathResolve(context.arena, get_string(params[0]));
+    returns[0] = AllocString(runtime, res);
 }
 
 struct JsonProperty {
@@ -325,7 +408,7 @@ void Intrinsic_json_route(Runtime* runtime, Array<Reference> params, Array<Refer
     Result res = RESULT_SUCCESS;
     if (!success) res = ResultMakeFailed("Json route not found");
     
-    returns[0] = alloc_string(runtime, json);
+    returns[0] = AllocString(runtime, json);
     returns[1] = ref_from_Result(runtime, res);
 }
 
@@ -333,8 +416,8 @@ void Intrinsic_json_route(Runtime* runtime, Array<Reference> params, Array<Refer
 
 void Intrinsic_yov_require(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    I64 major = get_int(params[0]);
-    I64 minor = get_int(params[1]);
+    U64 major = RefGetUInt(params[0]);
+    U64 minor = RefGetUInt(params[1]);
     
     Result res = RESULT_SUCCESS;
     
@@ -348,8 +431,8 @@ void Intrinsic_yov_require(Runtime* runtime, Array<Reference> params, Array<Refe
 
 void Intrinsic_yov_require_min(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    I64 major = get_int(params[0]);
-    I64 minor = get_int(params[1]);
+    U64 major = RefGetUInt(params[0]);
+    U64 minor = RefGetUInt(params[1]);
     
     Result res = RESULT_SUCCESS;
     
@@ -365,8 +448,8 @@ void Intrinsic_yov_require_min(Runtime* runtime, Array<Reference> params, Array<
 
 void Intrinsic_yov_require_max(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    I64 major = get_int(params[0]);
-    I64 minor = get_int(params[1]);
+    U64 major = RefGetUInt(params[0]);
+    U64 minor = RefGetUInt(params[1]);
     
     Result res = RESULT_SUCCESS;
     
@@ -423,20 +506,20 @@ void Intrinsic_ask_yesno(Runtime* runtime, Array<Reference> params, Array<Refere
 {
     String content = get_string(params[0]);
     B32 result = RuntimeAskYesNo(runtime, "Ask", content);
-    returns[0] = alloc_bool(runtime, result);
+    returns[0] = AllocBool(runtime, result);
 }
 
 void Intrinsic_exists(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String path = get_string(params[0]);
     B32 result = OsPathExists(path);
-    returns[0] = alloc_bool(runtime, result);
+    returns[0] = AllocBool(runtime, result);
 }
 
 void Intrinsic_create_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
-    B32 recursive = get_bool(params[1]);
+    B32 recursive = RefGetBool(params[1]);
     
     Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Create directory:\n%S", path));
     
@@ -545,7 +628,7 @@ void Intrinsic_read_entire_file(Runtime* runtime, Array<Reference> params, Array
     if (!res.failed) res = OsReadEntireFile(context.arena, path, &content);
     String content_str = StrMake((char*)content.data, content.size);
     
-    returns[0] = alloc_string(runtime, content_str);
+    returns[0] = AllocString(runtime, content_str);
     returns[1] = ref_from_Result(runtime, res);
 }
 
@@ -572,7 +655,7 @@ void Intrinsic_dir_get_files_info(Runtime* runtime, Array<Reference> params, Arr
     Array<FileInfo> infos;
     Result res = OsDirGetFilesInfo(context.arena, path, &infos);
     
-    Reference ret = alloc_array(runtime, VType_FileInfo, infos.count);
+    Reference ret = AllocArray(runtime, VType_FileInfo, infos.count);
     if (!res.failed) {
         foreach(i, infos.count) {
             Reference element = ref_get_member(runtime, ret, i);
@@ -617,14 +700,28 @@ IntrinsicRegistry intrinsics[] = {
     { Intrinsic_env, "env" },
     { Intrinsic_env_path, "env_path" },
     { Intrinsic_env_path_array, "env_path_array" },
+    
+    { Intrinsic_ArrayAppendBack, "ArrayAppendBack" },
+    // TODO(Jose): { Intrinsic_ArrayAppendFront, "ArrayAppendFront" },
+    { Intrinsic_ArrayAppendElementBack, "ArrayAppendElementBack" },
+    // TODO(Jose): { Intrinsic_ArrayAppendElementFront, "ArrayAppendElementFront" },
+    
+    
     { Intrinsic_console_write, "console_write" },
     { Intrinsic_console_clear, "console_clear" },
     { Intrinsic_call, "call" },
     { Intrinsic_call_exe, "call_exe" },
     { Intrinsic_call_script, "call_script" },
-    { Intrinsic_path_resolve, "path_resolve" },
-    { Intrinsic_str_get_codepoint, "str_get_codepoint" },
-    { Intrinsic_str_split, "str_split" },
+    
+    { Intrinsic_StrAppend, "StrAppend" },
+    { Intrinsic_StrEquals, "StrEquals" },
+    { Intrinsic_StrSplit, "StrSplit" },
+    { Intrinsic_StrGetCodepoint, "StrGetCodepoint" },
+    { Intrinsic_StrFromCodepoint, "StrFromCodepoint" },
+    
+    { Intrinsic_PathAppend, "PathAppend" },
+    { Intrinsic_PathResolve, "PathResolve" },
+    
     { Intrinsic_json_route, "json_route" },
     { Intrinsic_yov_require, "yov_require" },
     { Intrinsic_yov_require_min, "yov_require_min" },

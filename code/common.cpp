@@ -218,11 +218,11 @@ void LaneBarrier(LaneContext* lane)
 {
     volatile U32* counter = &lane->group->barrier_counter;
     
-    CompilerReadBarrier();
-    U32 barrier_index = *counter / lane->count;
-    AtomicIncrement32(counter);
+    U32 barrier_index = (AtomicIncrement32(counter) - 1) / lane->count;
     
-    while ((*counter / lane->count) <= barrier_index) {
+    U32 target = (barrier_index + 1) * lane->count;
+    
+    while (*counter < target) {
         OsThreadYield();
     }
 }
@@ -631,28 +631,69 @@ B32 StrEnds(String str, String with) {
 
 B32 U32FromString(U32* dst, String str)
 {
-	U32 digits = (U32)str.size;
-	*dst = 0u;
+	U64 v; 
+    B32 res = U64FromString(&v, str);
+    if (v > U32_MAX) return false;
+    *dst = (U32)v;
+    return res;
+}
+
+B32 U64FromString(U64* dst, String str)
+{
+    if (str.size == 0) return false;
     
-	if (digits == 0) return false;
+    U64 value = 0;
+    defer (*dst = value);
     
-	U32 mul = 10;
-	foreach(i, digits - 1)
-        mul *= 10;
-    
-	foreach(i, digits) {
+    for (U64 i = 0; i < str.size; ++i)
+    {
+        char c = str[i];
+        if (c < '0' || c > '9') return false;
         
-		mul /= 10;
-		
-		char c = str[i];
-		I32 v = c - '0';
-        if (v < 0 || v > 9) return false;
+        U64 digit = (U64)(c - '0');
         
-		v *= mul;
-		*dst += v;
-	}
+        if (value > (U64_MAX - digit) / 10) return false;
+        
+        value = value * 10 + digit;
+    }
     
-	return true;
+    return true;
+}
+
+B32 F64FromString(F64* dst, String str)
+{
+    if (str.size == 0) return false;
+    
+    F64 value = 0.0;
+    F64 frac_mul = 0.1;
+    B32 seen_dot = false;
+    
+    defer (*dst = value);
+    
+    for (U64 i = 0; i < str.size; ++i)
+    {
+        char c = str[i];
+        
+        if (c == '.') {
+            if (seen_dot) return false;
+            seen_dot = true;
+            continue;
+        }
+        
+        if (c < '0' || c > '9') return false;
+        
+        F64 digit = (F64)(c - '0');
+        
+        if (!seen_dot) {
+            value = value * 10.0 + digit;
+        }
+        else {
+            value += digit * frac_mul;
+            frac_mul *= 0.1;
+        }
+    }
+    
+    return true;
 }
 
 B32 U32FromChar(U32* dst, char c)
@@ -721,6 +762,27 @@ B32 I32FromString(String str, I32* out)
 	}
     
 	return true;
+}
+
+String StrFromU64(Arena* arena, U64 value, U32 base)
+{
+    char buff[32];
+    CStrFromU64(buff, value, base);
+    return StrCopy(arena,buff);
+}
+
+String StrFromI64(Arena* arena, I64 value, U32 base)
+{
+    char buff[32];
+    CStrFromI64(buff, value, base);
+    return StrCopy(arena,buff);
+}
+
+String StrFromF64(Arena* arena, F64 value, U32 decimals)
+{
+    char buff[32];
+    CStrFromF64(buff, value, decimals);
+    return StrCopy(arena,buff);
 }
 
 String StringFromCodepoint(Arena* arena, U32 c)
@@ -1075,18 +1137,18 @@ String escape_string_from_raw_string(Arena* arena, String raw)
     return string_from_builder(arena, &builder);
 }
 
-B32 codepoint_is_separator(U32 codepoint) {
+B32 CodepointIsSeparator(U32 codepoint) {
     if (codepoint == ' ') return true;
     if (codepoint == '\t') return true;
     if (codepoint == '\r') return true;
     return false;
 }
 
-B32 codepoint_is_number(U32 codepoint) {
+B32 CodepointIsNumber(U32 codepoint) {
     return codepoint >= '0' && codepoint <= '9';
 }
 
-B32 codepoint_is_text(U32 codepoint) {
+B32 CodepointIsText(U32 codepoint) {
     if (codepoint >= 'a' && codepoint <= 'z') return true;
     if (codepoint >= 'A' && codepoint <= 'Z') return true;
     return false;
@@ -1549,7 +1611,10 @@ internal_fn I32 ReportCompare(const void* _0, const void* _1)
 void ReporterPrint(Reporter* reporter)
 {
     Array<Report> reports = array_from_pooled_array(context.arena, reporter->reports);
+    
+#if !DEV_UNSORTED_REPORTS
     array_sort(reports, ReportCompare);
+#endif
     
     foreach(i, reports.count) {
         PrintReport(reports[i]);

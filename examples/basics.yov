@@ -22,7 +22,8 @@ main :: func
     println("\n-> BASIC TYPES");
     
     integer: Int = 10;
-    // TODO: floating: Float = 0.0;
+    unsigned_integer: UInt = 20;
+    floating: Float = 0.0;
     boolean: Bool = true;
     string: String = "Hello";
     
@@ -31,6 +32,21 @@ main :: func
     println("\n-> EXPRESIONS");
     
     expresion_result := (integer + 10) * 2 == 40 && boolean;
+    
+    //==============================================
+    
+    println("\n-> CASTINGS");
+    
+    // Implicit 
+    impl_float_from_int : Float = integer;
+    impl_int_from_uint : UInt = unsigned_integer;
+    
+    // Explicit castings
+    expl_int_from_float := cast(Int) floating;
+    expl_uint_from_int  := cast(UInt) integer;
+    
+    // Reinterpret bits
+    bitcast_uint_from_float := bitcast(UInt) floating;
     
     //==============================================
     

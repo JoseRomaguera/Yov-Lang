@@ -87,8 +87,28 @@ void RunCopy(Runtime* runtime, I32 dst_index, Reference src);
 void RunReturn(Runtime* runtime);
 void RunJump(Runtime* runtime, Reference ref, I32 condition, I32 offset);
 void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Array<Value> parameters);
-Reference RunBinaryOperation(Runtime* runtime, Reference dst, Reference left, Reference right, BinaryOperator op);
-Reference RunSignOperation(Runtime* runtime, Reference value, BinaryOperator op);
+
+void RunAdd(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunSub(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunMul(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunDiv(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunMod(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+
+void RunEql(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunNeq(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunGtr(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunLss(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunGeq(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunLeq(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+
+void RunOr(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunAnd(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
+void RunNot(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src);
+void RunCast(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src);
+void RunBitCast(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src);
+void RunIs(Runtime* runtime, I32 dst_index, Reference left, Reference right);
+
+void RunNeg(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src);
 
 //- SCOPE
 
@@ -116,39 +136,51 @@ U32 RefGetChildCount(Runtime* runtime, Reference ref, B32 is_member);
 U32 RefGetPropertyCount(Runtime* runtime, Reference ref);
 U32 RefGetMemberCount(Reference ref);
 
-Reference alloc_int(Runtime* runtime, I64 value);
-Reference alloc_bool(Runtime* runtime, B32 value);
-Reference alloc_string(Runtime* runtime, String value);
-Reference alloc_array(Runtime* runtime, VType element_vtype, I64 count);
-Reference alloc_array_multidimensional(Runtime* runtime, VType base_vtype, Array<I64> dimensions);
-Reference alloc_array_from_enum(Runtime* runtime, VType enum_vtype);
-Reference alloc_enum(Runtime* runtime, VType vtype, I64 index);
-Reference alloc_reference(Runtime* runtime, Reference ref);
+Reference AllocSInt(Runtime* runtime, I64 value);
+Reference AllocUInt(Runtime* runtime, U64 value);
+Reference AllocFloat(Runtime* runtime, F64 value);
+Reference AllocBool(Runtime* runtime, B32 value);
+Reference AllocString(Runtime* runtime, String value);
+Reference AllocArray(Runtime* runtime, VType element_vtype, U32 count);
+Reference AllocArrayMultidimensional(Runtime* runtime, VType base_vtype, Array<I64> dimensions);
+Reference AllocArrayFromEnum(Runtime* runtime, VType enum_vtype);
+Reference AllocEnum(Runtime* runtime, VType vtype, I64 index);
+Reference AllocReference(Runtime* runtime, Reference ref);
 
 B32 is_valid(Reference ref);
 B32 is_unknown(Reference ref);
 B32 is_const(Reference ref);
 B32 is_null(Reference ref);
-B32 is_int(Reference ref);
-B32 is_bool(Reference ref);
+B32 RefIsAnyInt(Reference ref);
+B32 RefIsInt(Reference ref);
+B32 RefIsUInt(Reference ref);
+B32 RefIsBool(Reference ref);
+B32 RefIsFloat(Reference ref);
 B32 is_string(Reference ref);
-B32 is_array(Reference ref);
+B32 RefIsArray(Reference ref);
 B32 is_enum(Reference ref);
 B32 is_reference(Reference ref);
+B32 RefIsType(Program* program, Reference ref);
 
-I64 get_int(Reference ref);
-B32 get_bool(Reference ref);
+I64 RefGetSInt(Reference ref);
+U64 RefGetUInt(Reference ref);
+I64 RefGetInt(Reference ref);
+B32 RefGetBool(Reference ref);
+F64 RefGetFloat(Reference ref);
 I64 get_enum_index(Reference ref);
 String get_string(Reference ref);
-ObjectData_Array* get_array(Reference ref);
+ObjectData_Array* RefGetArray(Reference ref);
 Reference RefDereference(Runtime* runtime, Reference ref);
+VType RefGetType(Runtime* runtime, Reference ref);
 
 I64 get_int_member(Runtime* runtime, Reference ref, String member);
 B32 get_bool_member(Runtime* runtime, Reference ref, String member);
 String get_string_member(Runtime* runtime, Reference ref, String member);
 
-void set_int(Reference ref, I64 v);
-void set_bool(Reference ref, B32 v);
+void RefSetSInt(Reference ref, I64 v);
+void RefSetUInt(Reference ref, U64 v);
+void RefSetFloat(Reference ref, F64 v);
+void RefSetBool(Reference ref, B32 v);
 void set_enum_index(Reference ref, I64 v);
 
 ObjectData_String* ref_string_get_data(Runtime* runtime, Reference ref);
@@ -157,9 +189,13 @@ void ref_string_clear(Runtime* runtime, Reference ref);
 void ref_string_set(Runtime* runtime, Reference ref, String v);
 void ref_string_append(Runtime* runtime, Reference ref, String v);
 
+void RefArrayFree(Runtime* runtime, Reference ref, U32 capacity);
+void RefArrayPrepare(Runtime* runtime, Reference ref, U32 capacity);
+
 void set_reference(Runtime* runtime, Reference ref, Reference src);
 
-void set_int_member(Runtime* runtime, Reference ref, String member, I64 v);
+void RefSetSIntMember(Runtime* runtime, Reference ref, String member, I64 v);
+void RefSetUIntMember(Runtime* runtime, Reference ref, String member, U64 v);
 void ref_member_set_bool(Runtime* runtime, Reference ref, String member, B32 v);
 void set_enum_index_member(Runtime* runtime, Reference ref, String member, I64 v);
 void ref_member_set_string(Runtime* runtime, Reference ref, String member, String v);
@@ -181,7 +217,6 @@ void ref_assign_EnumDefinition(Runtime* runtime, Reference ref, VType vtype);
 void ref_assign_ObjectDefinition(Runtime* runtime, Reference ref, ObjectDefinition def);
 
 void ref_assign_Type(Runtime* runtime, Reference ref, VType vtype);
-VType get_Type(Runtime* runtime, Reference ref);
 
 Reference ref_from_Result(Runtime* runtime, Result res);
 Result Result_from_ref(Runtime* runtime, Reference ref);

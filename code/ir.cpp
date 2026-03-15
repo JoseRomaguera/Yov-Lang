@@ -3,6 +3,8 @@
 inline_fn IR_Unit* ir_unit_alloc(IR_Context* ir, UnitKind kind, Location location)
 {
     IR_Unit* unit = ArenaPushStruct<IR_Unit>(ir->arena);
+    unit->src0 = ValueNone();
+    unit->src1 = ValueNone();
     unit->kind = kind;
     unit->location = location;
     unit->dst_index = -1;
@@ -17,7 +19,7 @@ internal_fn IR_Unit* ir_alloc_jump(IR_Context* ir, I32 condition, Value src, IR_
 {
     Assert(jump_to_unit != NULL);
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Jump, location);
-    unit->src = src;
+    unit->src0 = src;
     unit->jump.condition = condition;
     unit->jump.unit = jump_to_unit;
     return unit;
@@ -134,7 +136,7 @@ inline_fn IR_Group ir_append_5(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o
 internal_fn IR_Group ir_from_result_eval(IR_Context* ir, Value src, Location location)
 {
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_ResultEval, location);
-    unit->src = src;
+    unit->src0 = src;
     return IRFromSingle(unit);
 }
 
@@ -162,8 +164,13 @@ IR_Group IRFromReference(IR_Context* ir, B32 expects_lvalue, Value value, Locati
 {
     Reporter* reporter = ir->reporter;
     
-    Register reg = IRRegisterFromValue(ir, value);
+    if (TypeIsReference(value.vtype)) {
+        //ReportErrorFront(location, "Can't take a reference of a reference");
+        //return IRFailed();
+        return IRFromNone(value);
+    }
     
+    Register reg = IRRegisterFromValue(ir, value);
     B32 is_constant = reg.is_constant;
     
     if (is_constant) {
@@ -190,10 +197,9 @@ IR_Group IRFromDereference(IR_Context* ir, Value value, Location location)
     return IRFromNone(ValueFromDereference(program, value));
 }
 
-IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location)
+internal_fn Value ValueFromSymbol(IR_Context* ir, String identifier, Location location)
 {
     Program* program = ir->program;
-    Reporter* reporter = ir->reporter;
     Symbol symbol = ir_find_symbol(ir, identifier);
     
     // Define globals
@@ -204,26 +210,46 @@ IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location)
         if (global_index >= 0)
         {
             Assert(VTypeValid(GlobalFromIndex(program, global_index)->vtype));
-            
-            Value value = ValueFromGlobal(program, global_index);
-            return IRFromNone(value);
+            return ValueFromGlobal(program, global_index);
         }
     }
     
     if (symbol.type == SymbolType_Object)
     {
         IR_Object* object = symbol.object;
-        return IRFromNone(ValueFromIrObject(object));
+        return ValueFromIrObject(object);
     }
     else if (symbol.type == SymbolType_Type) {
-        return IRFromNone(ValueFromType(program, symbol.vtype));
+        return ValueFromType(program, symbol.vtype);
+    }
+    
+    return ValueNone();
+}
+
+IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location)
+{
+    Program* program = ir->program;
+    Reporter* reporter = ir->reporter;
+    Symbol symbol = ir_find_symbol(ir, identifier);
+    
+    Value value = ValueFromSymbol(ir, identifier, location);
+    
+    if (value.kind != ValueKind_None)
+    {
+        IR_Group out = IRFromNone(value);
+        
+        //if (TypeIsReference(value.vtype)) {
+        //out = IRAppend(out, IRFromDereference(ir, out.value, location));
+        //}
+        
+        return out;
     }
     
     report_symbol_not_found(location, identifier);
     return IRFailed();
 }
 
-IR_Group IRFromFunctionCall(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext expr_context, Location location)
+IR_Group IRFromCall(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext expr_context, Location location)
 {
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
@@ -232,70 +258,7 @@ IR_Group IRFromFunctionCall(IR_Context* ir, String identifier, Array<Value> para
     
     if (fn != NULL)
     {
-        IR_Group out = IRFromNone();
-        
-        Array<Value> params = array_make<Value>(context.arena, parameters.count);
-        
-        foreach(i, parameters.count)
-        {
-            VType expected_vtype = VType_Nil;
-            if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
-            
-            Value param = parameters[i];
-            
-            if (param.kind == ValueKind_LValue && TypeIsReference(param.vtype) && TypeEquals(program, VTypeNext(program, param.vtype), expected_vtype)) {
-                param = ValueFromDereference(program, param);
-            }
-            
-            params[i] = param;
-        }
-        
-        if (params.count != fn->parameters.count) {
-            report_function_expecting_parameters(location, fn->identifier, fn->parameters.count);
-            return IRFailed();
-        }
-        
-        // Check parameters
-        foreach(i, params.count) {
-            if (!TypeIsAny(fn->parameters[i].vtype) && !TypeEquals(program, fn->parameters[i].vtype, params[i].vtype)) {
-                report_function_wrong_parameter_type(location, fn->identifier, VTypeGetName(program, fn->parameters[i].vtype), i + 1);
-                return IRFailed();
-            }
-        }
-        
-        //out = IRAppend(out, ir_from_function_call(ir, fn, params, node->location));
-        {
-            I32 first_register_index = -1;
-            
-            Array<Value> values = array_make<Value>(context.arena, fn->returns.count);
-            foreach(i, values.count) {
-                VType vtype = fn->returns[i].vtype;
-                I32 register_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
-                if (i == 0) first_register_index = register_index;
-                values[i] = ValueFromRegister(register_index, vtype, false);
-            }
-            
-            IR_Unit* unit = ir_unit_alloc(ir, UnitKind_FunctionCall, location);
-            unit->dst_index = first_register_index;
-            unit->function_call.fn = fn;
-            unit->function_call.parameters = array_copy(ir->arena, params);
-            
-            out = IRAppend(out, IRFromSingle(unit, value_from_return(ir->arena, values)));
-        }
-        
-        Array<Value> returns = ValuesFromReturn(context.arena, out.value, false);
-        
-        for (U32 i = expr_context.assignment_count; i < returns.count; ++i) {
-            if (TypeEquals(program, returns[i].vtype, VType_Result))
-                out = IRAppend(out, ir_from_result_eval(ir, returns[i], location));
-        }
-        
-        returns.count = Min(returns.count, expr_context.assignment_count);
-        Value return_value = value_from_return(ir->arena, returns);
-        
-        out.value = return_value;
-        
-        return out;
+        return IRFromFunctionCall(ir, fn, parameters, expr_context, location);
     }
     
     VType call_vtype = TypeFromName(program, identifier);
@@ -305,6 +268,77 @@ IR_Group IRFromFunctionCall(IR_Context* ir, String identifier, Array<Value> para
     
     report_symbol_not_found(location, identifier);
     return IRFailed();
+}
+
+IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value> parameters, ExpresionContext expr_context, Location location)
+{
+    Reporter* reporter = ir->reporter;
+    Program* program = ir->program;
+    
+    IR_Group out = IRFromNone();
+    
+    Array<Value> params = array_make<Value>(context.arena, parameters.count);
+    
+    foreach(i, parameters.count)
+    {
+        VType expected_vtype = VType_Nil;
+        if (i < fn->parameters.count) expected_vtype = fn->parameters[i].vtype;
+        
+        Value param = parameters[i];
+        
+        if (param.kind == ValueKind_LValue && TypeIsReference(param.vtype) && TypeEquals(program, VTypeNext(program, param.vtype), expected_vtype)) {
+            param = ValueFromDereference(program, param);
+        }
+        
+        params[i] = param;
+    }
+    
+    if (params.count != fn->parameters.count) {
+        report_function_expecting_parameters(location, fn->identifier, fn->parameters.count);
+        return IRFailed();
+    }
+    
+    // Check parameters
+    foreach(i, params.count) {
+        if (!TypeIsAny(fn->parameters[i].vtype) && !TypeEquals(program, fn->parameters[i].vtype, params[i].vtype)) {
+            report_function_wrong_parameter_type(location, fn->identifier, VTypeGetName(program, fn->parameters[i].vtype), i + 1);
+            return IRFailed();
+        }
+    }
+    
+    //out = IRAppend(out, ir_from_function_call(ir, fn, params, node->location));
+    {
+        I32 first_register_index = -1;
+        
+        Array<Value> values = array_make<Value>(context.arena, fn->returns.count);
+        foreach(i, values.count) {
+            VType vtype = fn->returns[i].vtype;
+            I32 register_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
+            if (i == 0) first_register_index = register_index;
+            values[i] = ValueFromRegister(register_index, vtype, false);
+        }
+        
+        IR_Unit* unit = ir_unit_alloc(ir, UnitKind_FunctionCall, location);
+        unit->dst_index = first_register_index;
+        unit->function_call.fn = fn;
+        unit->function_call.parameters = array_copy(ir->arena, params);
+        
+        out = IRAppend(out, IRFromSingle(unit, value_from_return(ir->arena, values)));
+    }
+    
+    Array<Value> returns = ValuesFromReturn(context.arena, out.value, false);
+    
+    for (U32 i = expr_context.assignment_count; i < returns.count; ++i) {
+        if (TypeEquals(program, returns[i].vtype, VType_Result))
+            out = IRAppend(out, ir_from_result_eval(ir, returns[i], location));
+    }
+    
+    returns.count = Min(returns.count, expr_context.assignment_count);
+    Value return_value = value_from_return(ir->arena, returns);
+    
+    out.value = return_value;
+    
+    return out;
 }
 
 IR_Group IRFromDefaultInitializer(IR_Context* ir, VType vtype, Location location) {
@@ -318,12 +352,23 @@ IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location)
     
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Store, location);
     unit->dst_index = dst.reg.index;
-    unit->src = src;
+    unit->src0 = src;
     
     return IRFromSingle(unit, dst);
 }
 
-IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, BinaryOperator op, Location location)
+IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location)
+{
+    Assert(dst.kind == ValueKind_LValue || dst.kind == ValueKind_Register);
+    
+    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Copy, location);
+    unit->dst_index = dst.reg.index;
+    unit->src0 = src;
+    
+    return IRFromSingle(unit, dst);
+}
+
+IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, OperatorKind op, Location location)
 {
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
@@ -335,7 +380,7 @@ IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value s
     
     IR_Group out = IRFromNone();
     
-    if (op != BinaryOperator_None)
+    if (op != OperatorKind_None)
     {
         out = IRAppend(out, IRFromBinaryOperator(ir, dst, src, op, true, location));
         if (!out.success) return IRFailed();
@@ -398,19 +443,19 @@ IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value s
     {
         unit = ir_unit_alloc(ir, UnitKind_Copy, location);
         unit->dst_index = dst.reg.index;
-        unit->src = src;
+        unit->src0 = src;
     }
     else
     {
         unit = ir_unit_alloc(ir, UnitKind_Store, location);
         unit->dst_index = dst.reg.index;
-        unit->src = src;
+        unit->src0 = src;
     }
     
     return IRAppend(out, IRFromSingle(unit));
 }
 
-IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Value> destinations, Value src, BinaryOperator op, Location location)
+IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Value> destinations, Value src, OperatorKind op, Location location)
 {
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
@@ -449,84 +494,370 @@ IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Valu
     return out;
 }
 
-IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, BinaryOperator op, B32 reuse_left, Location location)
+IR_Group IRFromOp(IR_Context* ir, UnitKind kind, VType dst_type, Value src0, Value src1, Location location)
+{
+    Assert(dst_type.kind == VKind_Primitive);
+    Value dst = ValueFromRegister(IRRegisterAlloc(ir, dst_type, RegisterKind_Local, false), dst_type, false);
+    
+    IR_Unit* unit = ir_unit_alloc(ir, kind, location);
+    unit->dst_index = dst.reg.index;
+    unit->src0 = src0;
+    unit->src1 = src1;
+    unit->op_dst_type = dst_type.primitive_type;
+    return IRFromSingle(unit, dst);
+}
+
+internal_fn IR_Group IRFromArrayAppend(IR_Context* ir, Value array, Value src, B32 reuse_array, B32 front, Location location)
+{
+    Program* program = ir->program;
+    VType element_type = VTypeNext(program, array.vtype);
+    B32 src_is_element = !TypeIsArray(src.vtype) || TypeEquals(program, element_type, src.vtype);
+    
+    Assert(TypeIsArray(array.vtype));
+    
+    ExpresionContext expr_ctx = ExpresionContext_from_inference(1);
+    IR_Group out = IRFromNone();
+    
+    if (!reuse_array)
+    {
+        out = IRAppend(out, IRFromDefineTemporal(ir, array.vtype, location));
+        Value dst = out.value;
+        out = IRAppend(out, IRFromStore(ir, dst, ValueFromZero(dst.vtype), location));
+        out = IRAppend(out, IRFromCopy(ir, dst, array, location));
+        array = out.value;
+    }
+    
+    out = IRAppend(out, IRFromReference(ir, false, array, location));
+    array = out.value;
+    
+    String call = {};
+    if (front && src_is_element) call = "ArrayAppendElementFront";
+    else if (!front && src_is_element) call = "ArrayAppendElementBack";
+    else if (front && !src_is_element) call = "ArrayAppendFront";
+    else if (!front && !src_is_element) call = "ArrayAppendBack";
+    else {
+        InvalidCodepath();
+        return IRFailed();
+    }
+    
+    Array<Value> params = array_make<Value>(context.arena, 2);
+    params[0] = array;
+    params[1] = src;
+    out = IRAppend(out, IRFromCall(ir, call, params, expr_ctx, location));
+    out = IRAppend(out, IRFromDereference(ir, array, location));
+    return out;
+}
+
+IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorKind op, B32 reuse_left, Location location)
 {
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
     IR_Group out = IRFromNone();
     
-    VType vtype = TypeFromBinaryOperation(program, left.vtype, right.vtype, op);
-    
-    if (TypeIsNil(vtype))
+    if (left.vtype.kind == VKind_Reference)
     {
-        B32 deref = false;
-        deref |= left.vtype.kind == VKind_Reference && right.vtype.kind != VKind_Reference;
-        deref |= right.vtype.kind == VKind_Reference && left.vtype.kind != VKind_Reference;
-        
-        if (deref)
+        reuse_left = false;
+        out = IRAppend(out, IRFromDereference(ir, left, location));
+        left = out.value;
+    }
+    
+    if (right.vtype.kind == VKind_Reference)
+    {
+        out = IRAppend(out, IRFromDereference(ir, right, location));
+        right = out.value;
+    }
+    
+    if (left.vtype.kind == VKind_Primitive && right.vtype.kind == VKind_Primitive)
+    {
+        if (left.vtype.primitive_type == PrimitiveType_String || right.vtype.primitive_type == PrimitiveType_String)
         {
-            reuse_left = false;
-            
-            if (left.vtype.kind == VKind_Reference) {
-                out = IRAppend(out, IRFromDereference(ir, left, location));
+            // TODO(Jose): 
+        }
+        else
+        {
+            {
+                VType type = TypeChooseMostSignificantPrimitive(left.vtype, right.vtype);
+                out = IRAppend(out, IRFromOptionalCasting(ir, left, type, location));
                 left = out.value;
-            }
-            else {
-                out = IRAppend(out, IRFromDereference(ir, right, location));
+                out = IRAppend(out, IRFromOptionalCasting(ir, right, type, location));
                 right = out.value;
             }
             
-            vtype = TypeFromBinaryOperation(program, left.vtype, right.vtype, op);
+            if (TypeIsAnyInt(left.vtype) && TypeIsAnyInt(right.vtype))
+            {
+                if (OperatorKindIsArithmetic(op))
+                {
+                    VType dst_type = left.vtype;
+                    
+                    UnitKind kind = UnitKind_Error;
+                    if (op == OperatorKind_Addition)            kind = UnitKind_Add;
+                    else if (op == OperatorKind_Substraction)   kind = UnitKind_Sub;
+                    else if (op == OperatorKind_Multiplication) kind = UnitKind_Mul;
+                    else if (op == OperatorKind_Division)       kind = UnitKind_Div;
+                    else if (op == OperatorKind_Modulo)         kind = UnitKind_Mod;
+                    
+                    if (kind != UnitKind_Error) {
+                        return IRAppend(out, IRFromOp(ir, kind, dst_type, left, right, location));
+                    }
+                }
+                else if (OperatorKindIsComparison(op))
+                {
+                    UnitKind kind = UnitKind_Error;
+                    if (op == OperatorKind_Equals)                 kind = UnitKind_Eql;
+                    else if (op == OperatorKind_NotEquals)         kind = UnitKind_Neq;
+                    else if (op == OperatorKind_LessThan)          kind = UnitKind_Lss;
+                    else if (op == OperatorKind_LessEqualsThan)    kind = UnitKind_Leq;
+                    else if (op == OperatorKind_GreaterThan)       kind = UnitKind_Gtr;
+                    else if (op == OperatorKind_GreaterEqualsThan) kind = UnitKind_Geq;
+                    else if (op == OperatorKind_LogicalOr)         kind = UnitKind_Or;
+                    else if (op == OperatorKind_LogicalAnd)        kind = UnitKind_And;
+                    
+                    if (kind != UnitKind_Error) {
+                        return IRAppend(out, IRFromOp(ir, kind, VType_Bool, left, right, location));
+                    }
+                }
+            }
+            else if (TypeIsBool(left.vtype) && TypeIsBool(right.vtype))
+            {
+                if (OperatorKindIsComparison(op))
+                {
+                    UnitKind kind = UnitKind_Error;
+                    if (op == OperatorKind_Equals)                 kind = UnitKind_Eql;
+                    else if (op == OperatorKind_NotEquals)         kind = UnitKind_Neq;
+                    else if (op == OperatorKind_LessThan)          kind = UnitKind_Lss;
+                    else if (op == OperatorKind_LessEqualsThan)    kind = UnitKind_Leq;
+                    else if (op == OperatorKind_GreaterThan)       kind = UnitKind_Gtr;
+                    else if (op == OperatorKind_GreaterEqualsThan) kind = UnitKind_Geq;
+                    else if (op == OperatorKind_LogicalOr)         kind = UnitKind_Or;
+                    else if (op == OperatorKind_LogicalAnd)        kind = UnitKind_And;
+                    
+                    if (kind != UnitKind_Error) {
+                        return IRAppend(out, IRFromOp(ir, kind, VType_Bool, left, right, location));
+                    }
+                }
+            }
+            else if (TypeIsFloat(left.vtype) && TypeIsFloat(right.vtype))
+            {
+                if (OperatorKindIsArithmetic(op))
+                {
+                    VType type = (VTypeGetSize(left.vtype) > VTypeGetSize(right.vtype)) ? left.vtype : right.vtype;
+                    
+                    UnitKind kind = UnitKind_Error;
+                    if (op == OperatorKind_Addition)            kind = UnitKind_Add;
+                    else if (op == OperatorKind_Substraction)   kind = UnitKind_Sub;
+                    else if (op == OperatorKind_Multiplication) kind = UnitKind_Mul;
+                    else if (op == OperatorKind_Division)       kind = UnitKind_Div;
+                    
+                    if (kind != UnitKind_Error) {
+                        return IRAppend(out, IRFromOp(ir, kind, type, left, right, location));
+                    }
+                }
+                else if (OperatorKindIsComparison(op))
+                {
+                    UnitKind kind = UnitKind_Error;
+                    if (op == OperatorKind_Equals)                 kind = UnitKind_Eql;
+                    else if (op == OperatorKind_NotEquals)         kind = UnitKind_Neq;
+                    else if (op == OperatorKind_LessThan)          kind = UnitKind_Lss;
+                    else if (op == OperatorKind_LessEqualsThan)    kind = UnitKind_Leq;
+                    else if (op == OperatorKind_GreaterThan)       kind = UnitKind_Gtr;
+                    else if (op == OperatorKind_GreaterEqualsThan) kind = UnitKind_Geq;
+                    
+                    if (kind != UnitKind_Error) {
+                        return IRAppend(out, IRFromOp(ir, kind, VType_Bool, left, right, location));
+                    }
+                }
+            }
+            
         }
     }
     
-    if (TypeIsNil(vtype)) {
-        report_invalid_binary_op(location, VTypeGetName(program, left.vtype), StringFromBinaryOperator(op), VTypeGetName(program, right.vtype));
-        return IRFailed();
+    if (TypeIsEnum(left.vtype) && TypeEquals(program, left.vtype, right.vtype))
+    {
+        VariableTypeChild info = VTypeGetProperty(program, left.vtype, "index");
+        Value child_index = ValueFromUInt(info.index);
+        
+        out = IRAppend(out, IRFromChild(ir, left, child_index, false, info.vtype, location));
+        left = out.value;
+        
+        out = IRAppend(out, IRFromChild(ir, right, child_index, false, info.vtype, location));
+        right = out.value;
+        
+        out = IRAppend(out, IRFromBinaryOperator(ir, left, right, op, reuse_left, location));
+        return out;
     }
     
-    reuse_left = reuse_left && TypeEquals(program, vtype, left.vtype) && (left.kind == ValueKind_LValue || left.kind == ValueKind_Register);
+    if (TypeEquals(program, right.vtype, VType_Type)) {
+        if (op == OperatorKind_Is) return IRAppend(out, IRFromOp(ir, UnitKind_Is, VType_Bool, left, right, location));
+    }
     
-    Value dst = reuse_left ? left : ValueFromRegister(IRRegisterAlloc(ir, vtype, RegisterKind_Local, false), vtype, false);
+#if 0
+    if (left.kind == VKind_Reference && TypeEquals(program, left, right))
+    {
+        if (op == OperatorKind_Equals)    return BinaryOperation_Eql_Ref_Type;
+        if (op == OperatorKind_NotEquals) return BinaryOperation_Neq_Ref_Type;
+    }
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_BinaryOperation, location);
-    unit->dst_index = dst.reg.index;
-    unit->src = left;
-    unit->binary_op.src1 = right;
-    unit->binary_op.op = op;
+    if (TypeEquals(program, left, VType_Type) && TypeEquals(program, right, VType_Type))
+    {
+        if (op == OperatorKind_Equals)         return BinaryOperation_Eql_Type_Type;
+        else if (op == OperatorKind_NotEquals) return BinaryOperation_Neq_Type_Type;
+    }
+#endif
     
-    return IRAppend(out, IRFromSingle(unit, dst));
+    if (TypeIsString(left.vtype) && TypeIsString(right.vtype))
+    {
+        ExpresionContext expr_ctx = ExpresionContext_from_inference(1);
+        
+        Array<Value> params = array_make<Value>(context.arena, 2);
+        params[0] = left;
+        params[1] = right;
+        
+        if (op == OperatorKind_Addition) {
+            out = IRAppend(out, IRFromCall(ir, "StrAppend", params, expr_ctx, location));
+            return out;
+        }
+        if (op == OperatorKind_Division) {
+            out = IRAppend(out, IRFromCall(ir, "PathAppend", params, expr_ctx, location));
+            return out;
+        }
+        if (op == OperatorKind_Equals) {
+            out = IRAppend(out, IRFromCall(ir, "StrEquals", params, expr_ctx, location));
+            return out;
+        }
+        if (op == OperatorKind_NotEquals) {
+            out = IRAppend(out, IRFromCall(ir, "StrEquals", params, expr_ctx, location));
+            out = IRAppend(out, IRFromOp(ir, UnitKind_Not, out.value.vtype, out.value, ValueNone(), location));
+            return out;
+        }
+    }
+    
+    if (op == OperatorKind_Addition && (TypeIsString(left.vtype) || TypeIsString(right.vtype)) && (TypeIsAnyInt(left.vtype) || TypeIsAnyInt(right.vtype)))
+    {
+        Value str, cp;
+        B32 front;
+        
+        if (TypeIsString(left.vtype)) {
+            str = left;
+            cp = right;
+            front = false;
+        }
+        else {
+            str = right;
+            cp = left;
+            front = true;
+        }
+        
+        // String from codepoint
+        {
+            Array<Value> params = array_make<Value>(context.arena, 1);
+            params[0] = cp;
+            
+            ExpresionContext expr_ctx = ExpresionContext_from_vtype(VType_String, 1);
+            out = IRAppend(out, IRFromCall(ir, "StrFromCodepoint", params, expr_ctx, location));
+            if (!out.success) return IRFailed();
+            
+            cp = out.value;
+        }
+        
+        Array<Value> params = array_make<Value>(context.arena, 2);
+        params[0] = front ? cp : str;
+        params[1] = front ? str : cp;
+        
+        ExpresionContext expr_ctx = ExpresionContext_from_inference(1);
+        out = IRAppend(out, IRFromCall(ir, "StrAppend", params, expr_ctx, location));
+        return out;
+    }
+    
+    if (op == OperatorKind_Addition && (TypeIsArray(left.vtype) || TypeIsArray(right.vtype)))
+    {
+        VType left_element = TypeIsArray(left.vtype) ? VTypeNext(program, left.vtype) : left.vtype;
+        VType right_element = TypeIsArray(right.vtype) ? VTypeNext(program, right.vtype) : right.vtype;
+        
+        if (TypeEquals(program, left_element, right_element))
+        {
+            Value array, src;
+            B32 reuse_array = false;
+            B32 front = false;
+            
+            if (TypeIsArray(left.vtype)) {
+                array = left;
+                src = right;
+                reuse_array = reuse_left;
+            }
+            else
+            {
+                array = right;
+                src = left;
+                front = true;
+            }
+            
+            out = IRAppend(out, IRFromArrayAppend(ir, array, src, reuse_array, front, location));
+            return out;
+        }
+    }
+    
+    report_invalid_binary_op(location, VTypeGetName(program, left.vtype), StringFromOperatorKind(op), VTypeGetName(program, right.vtype));
+    return IRFailed();
 }
 
-IR_Group IRFromSignOperator(IR_Context* ir, Value src, BinaryOperator op, Location location)
+IR_Group IRFromSignOperator(IR_Context* ir, Value src, OperatorKind op, Location location)
 {
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
-    Assert(op != BinaryOperator_None);
+    Assert(op != OperatorKind_None);
     
-    VType vtype = TypeFromSignOperation(program, src.vtype, op);
+    if (TypeIsAnyInt(src.vtype))
+    {
+        if (op == OperatorKind_Addition) return IRFromNone(src);
+        else if (op == OperatorKind_Substraction)
+        {
+            VType type = VType_Int;
+            return IRFromOp(ir, UnitKind_Neg, type, src, ValueNone(), location);
+        }
+        if (op == OperatorKind_LogicalNot) return IRFromOp(ir, UnitKind_Not, src.vtype, src, ValueNone(), location);
+    }
+    else if (TypeIsFloat(src.vtype))
+    {
+        if (op == OperatorKind_Addition) return IRFromNone(src);
+        else if (op == OperatorKind_Substraction)
+        {
+            VType type = src.vtype;
+            return IRFromOp(ir, UnitKind_Neg, type, src, ValueNone(), location);
+        }
+    }
     
-    if (!VTypeValid(vtype)) {
-        report_invalid_signed_op(location, StringFromBinaryOperator(op), VTypeGetName(program, src.vtype));
+    report_invalid_signed_op(location, StringFromOperatorKind(op), VTypeGetName(program, src.vtype));
+    return IRFailed();
+}
+
+IR_Group IRFromCasting(IR_Context* ir, Value src, VType type, B32 bitcast, Location location)
+{
+    Program* program = ir->program;
+    Reporter* reporter = ir->reporter;
+    
+    if (src.vtype.kind != VKind_Primitive || type.kind != VKind_Primitive) {
+        ReportErrorFront(location, "Can't cast '%S' to '%S', only primitive types are allowed", VTypeGetName(program, src.vtype), VTypeGetName(program, type));
         return IRFailed();
     }
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_SignOperation, location);
-    unit->dst_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
-    unit->src = src;
-    unit->sign_op.op = op;
-    
-    return IRFromSingle(unit, ValueFromRegister(unit->dst_index, vtype, false));
+    UnitKind kind = bitcast ? UnitKind_BitCast : UnitKind_Cast;
+    return IRFromOp(ir, kind, type, src, ValueNone(), location);
+}
+
+IR_Group IRFromOptionalCasting(IR_Context* ir, Value src, VType type, Location location)
+{
+    if (TypeEquals(ir->program, src.vtype, type)) return IRFromNone(src);
+    return IRFromCasting(ir, src, type, false, location);
 }
 
 IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, VType vtype, Location location)
 {
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Child, location);
     unit->dst_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
-    unit->src = src;
-    unit->child.child_index = index;
+    unit->src0 = src;
+    unit->src1 = index;
     unit->child.child_is_member = is_member;
     
     Value child = ValueFromRegister(unit->dst_index, vtype, src.kind == ValueKind_LValue);
@@ -555,7 +886,7 @@ IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, Expresi
     
     if (info.index >= 0)
     {
-        mem = IRFromChild(ir, src, ValueFromInt(info.index), info.is_member, info.vtype, location);
+        mem = IRFromChild(ir, src, ValueFromUInt(info.index), info.is_member, info.vtype, location);
     }
     else if (TypeEquals(program, src.vtype, VType_Type) && ValueIsCompiletime(src))
     {
@@ -566,7 +897,7 @@ IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, Expresi
             Assert(vtype._enum->stage >= DefinitionStage_Defined);
             
             if (StrEquals(child_name, "count")) {
-                mem = IRFromNone(ValueFromInt(vtype._enum->values.count));
+                mem = IRFromNone(ValueFromUInt(vtype._enum->values.count));
             }
             else if (StrEquals(child_name, "array"))
             {
@@ -607,7 +938,7 @@ IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR
     Reporter* reporter = ir->reporter;
     
     if (!TypeIsBool(condition.vtype)) {
-        ReportErrorFront(location, "If statement expects a Bool");
+        ReportErrorFront(location, "If statement expects a boolean expression");
         return IRFailed();
     }
     
@@ -641,7 +972,7 @@ IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group 
         return IRFailed();
     
     if (!TypeIsBool(condition.value.vtype)) {
-        ReportErrorFront(location, "Loop condition expects a Bool");
+        ReportErrorFront(location, "Loop condition expects a boolean expression");
         return IRFailed();
     }
     
@@ -719,7 +1050,7 @@ IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location)
             return IRFailed();
         }
         
-        IR_Group assignment = IRFromAssignment(ir, true, ValueFromIrObject(dst), out.value, BinaryOperator_None, location);
+        IR_Group assignment = IRFromAssignment(ir, true, ValueFromIrObject(dst), out.value, OperatorKind_None, location);
         out = IRAppend(out, assignment);
     }
     else
@@ -732,7 +1063,7 @@ IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location)
         if (dst != NULL)
         {
             out = IRAppend(out, IRFromDefaultInitializer(ir, dst->vtype, location));
-            out = IRAppend(out, IRFromAssignment(ir, true, ValueFromIrObject(dst), out.value, BinaryOperator_None, location));
+            out = IRAppend(out, IRFromAssignment(ir, true, ValueFromIrObject(dst), out.value, OperatorKind_None, location));
             
             //Array<VType> vtypes = ir->returns;
             
@@ -902,7 +1233,9 @@ internal_fn Unit UnitMake(Arena* arena, IR_Unit* unit)
     Unit dst = {};
     dst.kind = kind;
     dst.dst_index = unit->dst_index;
-    dst.src = ValueCopy(arena, unit->src);
+    dst.src0 = ValueCopy(arena, unit->src0);
+    dst.src1 = ValueCopy(arena, unit->src1);
+    dst.op_dst_type = unit->op_dst_type;
     
     if (kind == UnitKind_FunctionCall) {
         dst.function_call.fn = unit->function_call.fn;
@@ -912,15 +1245,7 @@ internal_fn Unit UnitMake(Arena* arena, IR_Unit* unit)
         dst.jump.condition = unit->jump.condition;
         dst.jump.offset = I32_MIN; // Calculated later
     }
-    else if (kind == UnitKind_BinaryOperation) {
-        dst.binary_op.src1 = ValueCopy(arena, unit->binary_op.src1);
-        dst.binary_op.op = unit->binary_op.op;
-    }
-    else if (kind == UnitKind_SignOperation) {
-        dst.sign_op.op = unit->sign_op.op;
-    }
     else if (kind == UnitKind_Child) {
-        dst.child.child_index = unit->child.child_index;
         dst.child.child_is_member = unit->child.child_is_member;
     }
     

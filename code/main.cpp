@@ -96,8 +96,8 @@ int main()
 {
     SetupGlobals();
     
-    //I64 exit_code = CompileAndRunFromArgs();
-    I64 exit_code = CompileAndDebugFromArgs();
+    I64 exit_code = CompileAndRunFromArgs();
+    //I64 exit_code = CompileAndDebugFromArgs();
     
     ShutdownGlobals();
     return (I32)exit_code;

@@ -1,32 +1,60 @@
 #include "program.h"
 
-String StringFromBinaryOperator(BinaryOperator op) {
-    if (op == BinaryOperator_Addition) return "+";
-    if (op == BinaryOperator_Substraction) return "-";
-    if (op == BinaryOperator_Multiplication) return "*";
-    if (op == BinaryOperator_Division) return "/";
-    if (op == BinaryOperator_Modulo) return "%";
-    if (op == BinaryOperator_LogicalNot) return "!";
-    if (op == BinaryOperator_LogicalOr) return "||";
-    if (op == BinaryOperator_LogicalAnd) return "&&";
-    if (op == BinaryOperator_Equals) return "==";
-    if (op == BinaryOperator_NotEquals) return "!=";
-    if (op == BinaryOperator_LessThan) return "<";
-    if (op == BinaryOperator_LessEqualsThan) return "<=";
-    if (op == BinaryOperator_GreaterThan) return ">";
-    if (op == BinaryOperator_GreaterEqualsThan) return ">=";
-    if (op == BinaryOperator_Is) return "is";
+String StringFromOperatorKind(OperatorKind op) {
+    if (op == OperatorKind_Addition) return "+";
+    if (op == OperatorKind_Substraction) return "-";
+    if (op == OperatorKind_Multiplication) return "*";
+    if (op == OperatorKind_Division) return "/";
+    if (op == OperatorKind_Modulo) return "%";
+    if (op == OperatorKind_LogicalNot) return "!";
+    if (op == OperatorKind_LogicalOr) return "||";
+    if (op == OperatorKind_LogicalAnd) return "&&";
+    if (op == OperatorKind_Equals) return "==";
+    if (op == OperatorKind_NotEquals) return "!=";
+    if (op == OperatorKind_LessThan) return "<";
+    if (op == OperatorKind_LessEqualsThan) return "<=";
+    if (op == OperatorKind_GreaterThan) return ">";
+    if (op == OperatorKind_GreaterEqualsThan) return ">=";
+    if (op == OperatorKind_Is) return "is";
     Assert(0);
     return "?";
 }
 
-B32 BinaryOperatorIsArithmetic(BinaryOperator op) {
-    if (op == BinaryOperator_Addition) return true;
-    if (op == BinaryOperator_Substraction) return true;
-    if (op == BinaryOperator_Multiplication) return true;
-    if (op == BinaryOperator_Division) return true;
-    if (op == BinaryOperator_Modulo) return true;
+B32 OperatorKindIsArithmetic(OperatorKind op) {
+    if (op == OperatorKind_Addition) return true;
+    if (op == OperatorKind_Substraction) return true;
+    if (op == OperatorKind_Multiplication) return true;
+    if (op == OperatorKind_Division) return true;
+    if (op == OperatorKind_Modulo) return true;
     return false;
+}
+
+B32 OperatorKindIsComparison(OperatorKind op) {
+    if (op == OperatorKind_Equals) return true;
+    if (op == OperatorKind_NotEquals) return true;
+    if (op == OperatorKind_LessThan) return true;
+    if (op == OperatorKind_GreaterThan) return true;
+    if (op == OperatorKind_LessEqualsThan) return true;
+    if (op == OperatorKind_GreaterEqualsThan) return true;
+    if (op == OperatorKind_LogicalAnd) return true;
+    if (op == OperatorKind_LogicalOr) return true;
+    if (op == OperatorKind_LogicalNot) return true;
+    return false;
+}
+
+String StringFromPrimitive(PrimitiveType type)
+{
+    switch (type)
+    {
+        case PrimitiveType_Int: return "Int";
+        case PrimitiveType_UInt: return "UInt";
+        case PrimitiveType_Bool: return "Bool";
+        case PrimitiveType_Float: return "Float";
+        case PrimitiveType_String: return "String";
+    }
+    
+    InvalidCodepath();
+    return "?";
 }
 
 internal_fn Object _make_object(VType vtype) {
@@ -80,11 +108,14 @@ String StringFromDefinitionType(DefinitionType type)
 void ProgramInitializeTypesTable(Program* program)
 {
     VType primitives[] = {
-        VType_Int,
-        VType_Bool,
-        VType_String,
+        VType_Void,
+        VType_Any,
         
-        MakePrimitive("I64", PrimitiveType_I64, -1),
+        VType_Int,
+        VType_UInt,
+        VType_Bool,
+        VType_Float,
+        VType_String,
     };
     
     U32 vtype_count = countof(primitives);
@@ -95,8 +126,10 @@ void ProgramInitializeTypesTable(Program* program)
     
     U32 index = 0;
     foreach(i, countof(primitives)) {
-        program->vtypes[index] = primitives[i];
-        program->vtypes[index].base_index = index;
+        VType* type = &program->vtypes[index];
+        *type = primitives[i];
+        Assert(type->base_index == index || type->base_index == -1);
+        type->base_index = index;
         index++;
     }
     
@@ -157,13 +190,23 @@ VType vtype_from_reference(VType base_type)
     return vtype;
 }
 
+VType TypeFromPrimitive(Program* program, PrimitiveType ptype)
+{
+    return program->vtypes[(U32)ptype + 2];
+}
+
 B32 TypeIsEnum(VType vtype) { return vtype.kind == VKind_Enum; }
 B32 TypeIsArray(VType vtype) { return vtype.kind == VKind_Array; }
 B32 TypeIsStruct(VType vtype) { return vtype.kind == VKind_Struct; }
 B32 TypeIsReference(VType vtype) { return vtype.kind == VKind_Reference; }
 B32 TypeIsString(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_String; }
-B32 TypeIsInt(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_I64; }
-B32 TypeIsBool(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_B32; }
+
+B32 TypeIsInt(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_Int; }
+B32 TypeIsUInt(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_UInt; }
+B32 TypeIsAnyInt(VType type) { return type.kind == VKind_Primitive && (type.primitive_type == PrimitiveType_Int || type.primitive_type == PrimitiveType_UInt); }
+B32 TypeIsBool(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_Bool; }
+B32 TypeIsFloat(VType type) { return type.kind == VKind_Primitive && type.primitive_type == PrimitiveType_Float; }
+
 B32 TypeIsAny(VType type) { return type.kind == VKind_Any; }
 B32 TypeIsVoid(VType type) { return type.kind == VKind_Void; }
 B32 TypeIsNil(VType type) { return type.kind == VKind_Nil; }
@@ -240,23 +283,26 @@ B32 VTypeIsSizeReady(VType vtype)
     return true;
 }
 
-U32 VTypeGetSize(VType vtype)
+U32 VTypeGetSize(VType type)
 {
-    if (vtype.kind == VKind_Primitive) {
-        PrimitiveType type = vtype.primitive_type;
-        if (type == PrimitiveType_I64) return sizeof(I64);
-        if (type == PrimitiveType_B32) return sizeof(B32);
-        if (type == PrimitiveType_String) return sizeof(ObjectData_String);
+    if (type.kind == VKind_Primitive) {
+        switch(type.primitive_type) {
+            case PrimitiveType_Int: return sizeof(I64);
+            case PrimitiveType_UInt: return sizeof(U64);
+            case PrimitiveType_Bool: return sizeof(B32);
+            case PrimitiveType_Float: return sizeof(F64);
+            case PrimitiveType_String: return sizeof(ObjectData_String);
+        }
     }
-    if (vtype.kind == VKind_Struct) {
-        Assert(vtype._struct->stage == DefinitionStage_Ready);
-        return vtype._struct->size;
+    if (type.kind == VKind_Struct) {
+        Assert(type._struct->stage == DefinitionStage_Ready);
+        return type._struct->size;
     }
-    if (vtype.kind == VKind_Enum) return sizeof(I64);
-    if (vtype.kind == VKind_Array) return sizeof(ObjectData_Array);
-    if (vtype.kind == VKind_Reference) return sizeof(ObjectData_Ref);
-    if (vtype.kind == VKind_Void) return 0;
-    if (vtype.kind == VKind_Nil) return 0;
+    if (type.kind == VKind_Enum) return sizeof(I64);
+    if (type.kind == VKind_Array) return sizeof(ObjectData_Array);
+    if (type.kind == VKind_Reference) return sizeof(ObjectData_Ref);
+    if (type.kind == VKind_Void) return 0;
+    if (type.kind == VKind_Nil) return 0;
     
     InvalidCodepath();
     return 0;
@@ -289,6 +335,7 @@ String VTypeGetName(Program* program, VType vtype)
             name[offset + 0] = '[';
             name[offset + 1] = ']';
         }
+        return name;
     }
     if (vtype.kind == VKind_Reference) {
         String next = VTypeGetName(program, VTypeNext(program, vtype));
@@ -296,6 +343,32 @@ String VTypeGetName(Program* program, VType vtype)
     }
     
     return vtype.base_name;
+}
+
+VType TypeChooseMostSignificantPrimitive(VType t0, VType t1)
+{
+    if (t0.kind != VKind_Primitive || t1.kind != VKind_Primitive) {
+        InvalidCodepath();
+        return t0;
+    }
+    
+    Assert(t0.primitive_type != PrimitiveType_String);
+    Assert(t1.primitive_type != PrimitiveType_String);
+    
+    if (TypeIsFloat(t0) || TypeIsFloat(t1)) return VType_Float;
+    
+    if (TypeIsAnyInt(t0) || TypeIsAnyInt(t1))
+    {
+        B32 t0_sign = TypeIsInt(t0);
+        B32 t1_sign = TypeIsInt(t1);
+        B32 sign = t0_sign || t1_sign;
+        
+        if (sign) return VType_Int;
+        else return VType_UInt;
+    }
+    
+    Assert(t0.primitive_type == t1.primitive_type);
+    return t0;
 }
 
 VType TypeFromIndex(Program* program, U32 index) {
@@ -375,11 +448,11 @@ VariableTypeChild VTypeGetProperty(Program* program, VType vtype, String propert
 }
 
 VariableTypeChild string_properties[] = {
-    VariableTypeChild{ false, "size", 0, VType_Int }
+    VariableTypeChild{ false, "size", 0, VType_UInt }
 };
 
 VariableTypeChild array_properties[] = {
-    VariableTypeChild{ false, "count", 0, VType_Int }
+    VariableTypeChild{ false, "count", 0, VType_UInt }
 };
 
 VariableTypeChild enum_properties[] = {
@@ -403,91 +476,6 @@ Array<VariableTypeChild> VTypeGetProperties(Program* program, VType vtype)
     }
     
     return {};
-}
-
-VType TypeFromBinaryOperation(Program* program, VType left, VType right, BinaryOperator op)
-{
-    if (left.kind == VKind_Reference && TypeEquals(program, left, right))
-    {
-        if (op == BinaryOperator_Equals) return VType_Bool;
-        if (op == BinaryOperator_NotEquals) return VType_Bool;
-    }
-    
-    if (TypeEquals(program, left, VType_Int) && TypeEquals(program, right, VType_Int)) {
-        if (BinaryOperatorIsArithmetic(op)) return VType_Int;
-        
-        if (op == BinaryOperator_Equals) return VType_Bool;
-        if (op == BinaryOperator_NotEquals) return VType_Bool;
-        if (op == BinaryOperator_LessThan) return VType_Bool;
-        if (op == BinaryOperator_LessEqualsThan) return VType_Bool;
-        if (op == BinaryOperator_GreaterThan) return VType_Bool;
-        if (op == BinaryOperator_GreaterEqualsThan) return VType_Bool;
-    }
-    
-    if (TypeEquals(program, left, VType_Bool) && TypeEquals(program, right, VType_Bool)) {
-        if (op == BinaryOperator_LogicalOr) return VType_Bool;
-        if (op == BinaryOperator_LogicalAnd) return VType_Bool;
-        if (op == BinaryOperator_Equals) return VType_Bool;
-        if (op == BinaryOperator_NotEquals) return VType_Bool;
-    }
-    
-    if (TypeEquals(program, left, VType_String) && TypeEquals(program, right, VType_String))
-    {
-        if (op == BinaryOperator_Addition) return VType_String;
-        if (op == BinaryOperator_Division) return VType_String;
-        if (op == BinaryOperator_Equals) return VType_Bool;
-        if (op == BinaryOperator_NotEquals) return VType_Bool;
-    }
-    
-    if (TypeEquals(program, left, VType_Type) && TypeEquals(program, right, VType_Type))
-    {
-        if (op == BinaryOperator_Equals) return VType_Bool;
-        else if (op == BinaryOperator_NotEquals) return VType_Bool;
-    }
-    
-    if (TypeEquals(program, right, VType_Type)) {
-        if (op == BinaryOperator_Is) return VType_Bool;
-    }
-    
-    if ((TypeEquals(program, left, VType_String) && TypeEquals(program, right, VType_Int)) || (TypeEquals(program, left, VType_Int) && TypeEquals(program, right, VType_String)))
-    {
-        if (op == BinaryOperator_Addition) return VType_String;
-    }
-    
-    if (left.kind == VKind_Enum && right.kind == VKind_Enum) {
-        if (op == BinaryOperator_Equals) return VType_Bool;
-        else if (op == BinaryOperator_NotEquals) return VType_Bool;
-    }
-    
-    if (left.kind == VKind_Array && right.kind == VKind_Array && TypeEquals(program, VTypeNext(program, left), VTypeNext(program, right))) {
-        if (op == BinaryOperator_Addition) return left;
-    }
-    
-    if ((left.kind == VKind_Array && right.kind != VKind_Array) || (left.kind != VKind_Array && right.kind == VKind_Array))
-    {
-        VType array_type = (left.kind == VKind_Array) ? left : right;
-        VType element_type = (left.kind == VKind_Array) ? right : left;
-        
-        if (TypeEquals(program, VTypeNext(program, array_type), element_type)) {
-            if (op == BinaryOperator_Addition) return array_type;
-        }
-    }
-    
-    return VType_Nil;
-}
-
-VType TypeFromSignOperation(Program* program, VType src, BinaryOperator op)
-{
-    if (TypeEquals(program, src, VType_Int)) {
-        if (op == BinaryOperator_Addition) return VType_Int;
-        if (op == BinaryOperator_Substraction) return VType_Int;
-    }
-    
-    if (TypeEquals(program, src, VType_Bool)) {
-        if (op == BinaryOperator_LogicalNot) return VType_Bool;
-    }
-    
-    return VType_Nil;
 }
 
 Array<VType> vtypes_from_definitions(Arena* arena, Array<ObjectDefinition> defs)
@@ -956,15 +944,15 @@ Value ValueFromInt(I64 value) {
     Value v{};
     v.vtype = VType_Int;
     v.kind = ValueKind_Literal;
-    v.literal_int = value;
+    v.literal_sint = value;
     return v;
 }
 
-Value ValueFromEnum(VType vtype, I64 value) {
+Value ValueFromUInt(U64 value) {
     Value v{};
-    v.vtype = vtype;
+    v.vtype = VType_UInt;
     v.kind = ValueKind_Literal;
-    v.literal_int = value;
+    v.literal_uint = value;
     return v;
 }
 
@@ -973,6 +961,22 @@ Value ValueFromBool(B32 value) {
     v.vtype = VType_Bool;
     v.kind = ValueKind_Literal;
     v.literal_bool = value;
+    return v;
+}
+
+Value ValueFromFloat(F64 value) {
+    Value v{};
+    v.vtype = VType_Float;
+    v.kind = ValueKind_Literal;
+    v.literal_float = value;
+    return v;
+}
+
+Value ValueFromEnum(VType vtype, I64 value) {
+    Value v{};
+    v.vtype = vtype;
+    v.kind = ValueKind_Literal;
+    v.literal_sint = value;
     return v;
 }
 
@@ -1050,9 +1054,14 @@ Value ValueFromZero(VType vtype)
     if (TypeIsInt(vtype)) {
         return ValueFromInt(0);
     }
-    
+    if (TypeIsUInt(vtype)) {
+        return ValueFromUInt(0);
+    }
     if (TypeIsBool(vtype)) {
         return ValueFromBool(false);
+    }
+    if (TypeIsFloat(vtype)) {
+        return ValueFromFloat(0.0);
     }
     
     if (TypeIsAny(vtype)) {
@@ -1076,18 +1085,27 @@ Value ValueFromStringExpression(Arena* arena, String str, VType vtype)
     if (str.size <= 0) return ValueNone();
     // TODO(Jose): if (StrEquals(str, "null")) return value_null();
     
+    if (TypeIsBool(vtype)) {
+        if (str == "true" || str == "1") return ValueFromBool(true);
+        if (str == "false" || str == "0") return ValueFromBool(false);
+    }
+    
     if (TypeIsInt(vtype)) {
         I64 value;
         if (!I64FromString(str, &value)) return ValueNone();
         return ValueFromInt(value);
     }
     
-    if (TypeIsBool(vtype)) {
-        if (StrEquals(str, "true")) return ValueFromBool(true);
-        if (StrEquals(str, "false")) return ValueFromBool(false);
-        if (StrEquals(str, "1")) return ValueFromBool(true);
-        if (StrEquals(str, "0")) return ValueFromBool(false);
-        return ValueNone();
+    if (TypeIsUInt(vtype)) {
+        U64 value;
+        if (!U64FromString(&value, str)) return ValueNone();
+        return ValueFromUInt(value);
+    }
+    
+    if (TypeIsFloat(vtype)) {
+        F64 value;
+        if (!F64FromString(&value, str)) return ValueNone();
+        return ValueFromFloat(value);
     }
     
     if (TypeIsString(vtype)) {
@@ -1144,8 +1162,10 @@ String StrFromValue(Arena* arena, Program* program, Value value, B32 raw)
     if (value.kind == ValueKind_None) return "E";
     
     if (value.kind == ValueKind_Literal) {
-        if (TypeIsInt(value.vtype)) return StrFormat(arena, "%l", value.literal_int);
+        if (TypeIsInt(value.vtype)) return StrFromI64(arena, value.literal_sint);
+        if (TypeIsUInt(value.vtype)) return StrFromU64(arena, value.literal_uint);
         if (TypeIsBool(value.vtype)) return value.literal_bool ? "true" : "false";
+        if (TypeIsFloat(value.vtype)) return StrFromF64(arena, value.literal_float, 4);
         if (TypeIsString(value.vtype)) {
             if (raw) return value.literal_string;
             String escape = escape_string_from_raw_string(context.arena, value.literal_string);
@@ -1154,7 +1174,7 @@ String StrFromValue(Arena* arena, Program* program, Value value, B32 raw)
         if (TypeIsVoid(value.vtype)) return "null";
         if (TypeEquals(program, value.vtype, VType_Type)) return VTypeGetName(program, value.literal_type);
         if (TypeIsEnum(value.vtype)) {
-            I32 index = (I32)value.literal_int;
+            I32 index = (I32)value.literal_sint;
             if (index < 0 || index >= value.vtype._enum->names.count) return "?";
             return value.vtype._enum->names[index];
         }
@@ -1349,112 +1369,147 @@ String StringFromRegister(Arena* arena, Program* program, I32 index)
     return StrFormat(arena, "r%i", local_index);
 }
 
+internal_fn String StringFromBinaryOperation(Arena* arena, String dst, String left, String right, OperatorKind op_kind)
+{
+    String op = StringFromOperatorKind(op_kind);
+    return StrFormat(arena, "%S = %S %S %S", dst, left, op, right);
+}
+
+internal_fn String StringFromUnaryOperation(Arena* arena, String dst, String src, OperatorKind op_kind)
+{
+    String op = StringFromOperatorKind(op_kind);
+    return StrFormat(arena, "%S = %S%S", dst, op, src);
+}
+
+internal_fn String StringFromCast(Arena* arena, String dst, String src, PrimitiveType type)
+{
+    String type_str = StringFromPrimitive(type);
+    return StrFormat(arena, "%S = (%S)%S", dst, type_str, src);
+}
+
 internal_fn String StringFromUnitInfo(Arena* arena, Program* program, Unit unit)
 {
     String dst = StringFromRegister(context.arena, program, unit.dst_index);
+    String src0 = StrFromValue(context.arena, program, unit.src0);
+    String src1 = StrFromValue(context.arena, program, unit.src1);
     
-    if (unit.kind == UnitKind_Error) return {};
-    
-    if (unit.kind == UnitKind_Copy)
+    switch(unit.kind)
     {
-        String src = StrFromValue(context.arena, program, unit.src);
-        return StrFormat(arena, "%S = %S", dst, src);
-    }
-    
-    if (unit.kind == UnitKind_Store)
-    {
-        String src = StrFromValue(context.arena, program, unit.src);
-        return StrFormat(arena, "%S = %S", dst, src);
-    }
-    
-    if (unit.kind == UnitKind_FunctionCall)
-    {
-        FunctionDefinition* fn = unit.function_call.fn;
-        StringBuilder builder = string_builder_make(context.arena);
+        case UnitKind_Error: return {};
         
-        if (unit.dst_index >= 0)
+        case UnitKind_Copy:
+        case UnitKind_Store:
+        return StrFormat(arena, "%S = %S", dst, src0);
+        
+        case UnitKind_FunctionCall:
         {
-            foreach(i, fn->returns.count)
+            FunctionDefinition* fn = unit.function_call.fn;
+            StringBuilder builder = string_builder_make(context.arena);
+            
+            if (unit.dst_index >= 0)
             {
-                appendf(&builder, StringFromRegister(context.arena, program, unit.dst_index + i));
-                if (i + 1 < fn->returns.count) {
-                    appendf(&builder, ", ");
+                foreach(i, fn->returns.count)
+                {
+                    appendf(&builder, StringFromRegister(context.arena, program, unit.dst_index + i));
+                    if (i + 1 < fn->returns.count) {
+                        appendf(&builder, ", ");
+                    }
+                }
+                
+                appendf(&builder, " = ");
+            }
+            
+            String identifier = fn->identifier;
+            Array<Value> params = unit.function_call.parameters;
+            
+            appendf(&builder, "%S(", identifier);
+            
+            foreach(i, params.count) {
+                String param = StrFromValue(context.arena, program, params[i]);
+                appendf(&builder, "%S", param);
+                if (i < params.count - 1) append(&builder, ", ");
+            }
+            append(&builder, ")");
+            return string_from_builder(arena, &builder);
+        }
+        
+        case UnitKind_Return: return "";
+        
+        case UnitKind_Jump:
+        {
+            StringBuilder builder = string_builder_make(context.arena);
+            String condition = src0;
+            if (unit.jump.condition > 0) appendf(&builder, "%S ", condition);
+            else if (unit.jump.condition < 0) appendf(&builder, "!%S ", condition);
+            appendf(&builder, "%i", unit.jump.offset);
+            return string_from_builder(arena, &builder);
+        }
+        
+        case UnitKind_Child:
+        {
+            Value src = unit.src0;
+            Value index = unit.src1;
+            
+            B32 is_member = unit.child.child_is_member;
+            B32 is_literal_int = index.kind == ValueKind_Literal && TypeIsUInt(index.vtype);
+            
+            String op = {};
+            
+            if (is_literal_int)
+            {
+                U64 i = index.literal_uint;
+                
+                if (is_member && src.vtype.kind == VKind_Struct) {
+                    if (i < src.vtype._struct->names.count) op = src.vtype._struct->names[i];
+                    else op = "?";
+                    op = StrFormat(context.arena, ".%S", op);
+                }
+                else if (!is_member) {
+                    Array<VariableTypeChild> props = VTypeGetProperties(program, src.vtype);
+                    if (i < props.count) op = props[i].name;
+                    else op = "?";
+                    op = StrFormat(context.arena, ".%S", op);
                 }
             }
             
-            appendf(&builder, " = ");
+            
+            if (op.size == 0) {
+                op = StrFormat(context.arena, "[%S]", src1);
+            }
+            
+            return StrFormat(arena, "%S = %S%S", dst, src0, op);
         }
         
-        String identifier = fn->identifier;
-        Array<Value> params = unit.function_call.parameters;
+        case UnitKind_ResultEval: return src0;
         
-        appendf(&builder, "%S(", identifier);
+        case UnitKind_Add: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_Addition);
+        case UnitKind_Sub: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_Substraction);
+        case UnitKind_Mul: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_Multiplication);
+        case UnitKind_Div: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_Division);
+        case UnitKind_Mod: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_Modulo);
         
-        foreach(i, params.count) {
-            String param = StrFromValue(context.arena, program, params[i]);
-            appendf(&builder, "%S", param);
-            if (i < params.count - 1) append(&builder, ", ");
-        }
-        append(&builder, ")");
-        return string_from_builder(arena, &builder);
-    }
-    
-    if (unit.kind == UnitKind_Return) return "";
-    
-    if (unit.kind == UnitKind_Jump)
-    {
-        StringBuilder builder = string_builder_make(context.arena);
-        String condition = StrFromValue(context.arena, program, unit.src);
-        if (unit.jump.condition > 0) appendf(&builder, "%S ", condition);
-        else if (unit.jump.condition < 0) appendf(&builder, "!%S ", condition);
-        appendf(&builder, "%i", unit.jump.offset);
-        return string_from_builder(arena, &builder);
-    }
-    
-    if (unit.kind == UnitKind_BinaryOperation)
-    {
-        String op = StringFromBinaryOperator(unit.binary_op.op);
-        String src0 = StrFromValue(context.arena, program, unit.src);
-        String src1 = StrFromValue(context.arena, program, unit.binary_op.src1);
-        return StrFormat(arena, "%S = %S %S %S", dst, src0, op, src1);
-    }
-    
-    if (unit.kind == UnitKind_SignOperation)
-    {
-        String op = StringFromBinaryOperator(unit.sign_op.op);
-        String src = StrFromValue(context.arena, program, unit.src);
-        return StrFormat(arena, "%S = %S%S", dst, op, src);
-    }
-    
-    if (unit.kind == UnitKind_Child)
-    {
-        Value src = unit.src;
-        Value index = unit.child.child_index;
-        B32 is_member = unit.child.child_is_member;
-        B32 is_literal_int = index.kind == ValueKind_Literal && TypeIsInt(index.vtype);
+        case UnitKind_Eql: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_Equals);
+        case UnitKind_Neq: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_NotEquals);
+        case UnitKind_Gtr: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_GreaterThan);
+        case UnitKind_Lss: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_LessThan);
+        case UnitKind_Geq: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_GreaterEqualsThan);
+        case UnitKind_Leq: return StringFromBinaryOperation(arena, dst, src0, src1, OperatorKind_LessEqualsThan);
         
-        String op = {};
+        case UnitKind_Or: return StringFromUnaryOperation(arena, dst, src0, OperatorKind_LogicalOr);
+        case UnitKind_And: return StringFromUnaryOperation(arena, dst, src0, OperatorKind_LogicalAnd);
+        case UnitKind_Not: return StringFromUnaryOperation(arena, dst, src0, OperatorKind_LogicalNot);
         
-        if (is_member && src.vtype.kind == VKind_Struct && is_literal_int) {
-            op = src.vtype._struct->names[index.literal_int];
-            op = StrFormat(context.arena, ".%S", op);
-        }
-        else if (!is_member && is_literal_int) {
-            Array<VariableTypeChild> props = VTypeGetProperties(program, src.vtype);
-            op = StrFormat(context.arena, ".%S", props[index.literal_int].name);
-        }
-        else {
-            String index = StrFromValue(context.arena, program, unit.child.child_index);
-            op = StrFormat(context.arena, "[%S]", index);
-        }
+        case UnitKind_Neg: return StringFromUnaryOperation(arena, dst, src0, OperatorKind_Substraction);
         
-        String src_str = StrFromValue(context.arena, program, unit.src);
-        return StrFormat(arena, "%S = %S%S", dst, src_str, op);
+        case UnitKind_Cast:
+        case UnitKind_BitCast:
+        return StringFromCast(arena, dst, src0, unit.op_dst_type);
+        
+        case UnitKind_Is: return StrFormat(arena, "%S = %S is %S", dst, src0, src1);
+        
+        case UnitKind_Empty: return {};
     }
     
-    if (unit.kind == UnitKind_ResultEval) {
-        return StrFromValue(arena, program, unit.src);
-    }
     
     InvalidCodepath();
     return {};
@@ -1462,17 +1517,41 @@ internal_fn String StringFromUnitInfo(Arena* arena, Program* program, Unit unit)
 
 String StringFromUnitKind(Arena* arena, UnitKind unit)
 {
-    if (unit == UnitKind_Error) return "error";
-    if (unit == UnitKind_Copy) return "copy";
-    if (unit == UnitKind_Store) return "store";
-    if (unit == UnitKind_FunctionCall) return "call";
-    if (unit == UnitKind_Return) return "return";
-    if (unit == UnitKind_Jump) return "jump";
-    if (unit == UnitKind_BinaryOperation) return "bin_op";
-    if (unit == UnitKind_SignOperation) return "sgn_op";
-    if (unit == UnitKind_Child) return "child";
-    if (unit == UnitKind_ResultEval) return "res_ev";
-    if (unit == UnitKind_Empty) return "empty";
+    switch (unit)
+    {
+        case UnitKind_Error: return "error";
+        case UnitKind_Copy: return "copy";
+        case UnitKind_Store: return "store";
+        case UnitKind_FunctionCall: return "call";
+        case UnitKind_Return: return "return";
+        case UnitKind_Jump: return "jump";
+        case UnitKind_Child: return "child";
+        case UnitKind_ResultEval: return "eval";
+        case UnitKind_Empty: return "empty";
+        case UnitKind_Add: return "add";
+        case UnitKind_Sub: return "sub";
+        case UnitKind_Mul: return "mul";
+        case UnitKind_Div: return "div";
+        case UnitKind_Mod: return "mod";
+        
+        case UnitKind_Eql: return "eql";
+        
+        case UnitKind_Neq: return "neq";
+        case UnitKind_Gtr: return "gtr";
+        case UnitKind_Lss: return "lss";
+        case UnitKind_Geq: return "geq";
+        case UnitKind_Leq: return "leq";
+        
+        case UnitKind_Or: return "or";
+        case UnitKind_And: return "and";
+        case UnitKind_Not: return "not";
+        case UnitKind_Neg: return "neg";
+        
+        case UnitKind_Cast: return "cast";
+        case UnitKind_BitCast: return "bcast";
+        
+        case UnitKind_Is: return "is";
+    }
     
     InvalidCodepath();
     return "?";

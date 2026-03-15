@@ -2,38 +2,43 @@
 
 #include "common.h"
 
-enum BinaryOperator {
-    BinaryOperator_Unknown,
-    BinaryOperator_None,
+enum OperatorKind {
+    OperatorKind_Unknown,
+    OperatorKind_None,
     
-    BinaryOperator_Addition,
-    BinaryOperator_Substraction,
-    BinaryOperator_Multiplication,
-    BinaryOperator_Division,
-    BinaryOperator_Modulo,
+    OperatorKind_Addition,
+    OperatorKind_Substraction,
+    OperatorKind_Multiplication,
+    OperatorKind_Division,
+    OperatorKind_Modulo,
     
-    BinaryOperator_LogicalNot,
-    BinaryOperator_LogicalOr,
-    BinaryOperator_LogicalAnd,
+    OperatorKind_LogicalNot,
+    OperatorKind_LogicalOr,
+    OperatorKind_LogicalAnd,
     
-    BinaryOperator_Equals,
-    BinaryOperator_NotEquals,
-    BinaryOperator_LessThan,
-    BinaryOperator_LessEqualsThan,
-    BinaryOperator_GreaterThan,
-    BinaryOperator_GreaterEqualsThan,
+    OperatorKind_Equals,
+    OperatorKind_NotEquals,
+    OperatorKind_LessThan,
+    OperatorKind_LessEqualsThan,
+    OperatorKind_GreaterThan,
+    OperatorKind_GreaterEqualsThan,
     
-    BinaryOperator_Is,
+    OperatorKind_Is,
 };
 
-String StringFromBinaryOperator(BinaryOperator op);
-B32 BinaryOperatorIsArithmetic(BinaryOperator op);
+String StringFromOperatorKind(OperatorKind op);
+B32 OperatorKindIsArithmetic(OperatorKind op);
+B32 OperatorKindIsComparison(OperatorKind op);
 
 enum PrimitiveType {
-    PrimitiveType_I64,
-    PrimitiveType_B32,
+    PrimitiveType_Int,
+    PrimitiveType_UInt,
+    PrimitiveType_Bool,
+    PrimitiveType_Float,
     PrimitiveType_String,
 };
+
+String StringFromPrimitive(PrimitiveType type);
 
 enum VKind {
     VKind_Nil,
@@ -72,6 +77,7 @@ struct Object {
 
 struct ObjectData_Array {
     U32 count;
+    U32 capacity;
     U8* data;
 };
 
@@ -86,7 +92,15 @@ struct ObjectData_String {
     U64 size;
 };
 
-inline_fn VType MakePrimitive(const char* name, PrimitiveType type, I32 base_index) {
+inline_fn VType MakeSpecialType(const char* name, VKind kind, I32 base_index) {
+    VType vtype = {};
+    vtype.base_name = name;
+    vtype.kind = kind;
+    vtype.base_index = base_index;
+    return vtype;
+}
+
+inline_fn VType MakePrimitive(const char* name, PrimitiveType type, I32 base_index = -1) {
     VType vtype = {};
     vtype.base_name = name;
     vtype.kind = VKind_Primitive;
@@ -95,12 +109,15 @@ inline_fn VType MakePrimitive(const char* name, PrimitiveType type, I32 base_ind
     return vtype;
 }
 
-#define VType_Nil (VType{ "Nil", VKind_Nil })
-#define VType_Void (VType{ "void", VKind_Void })
-#define VType_Any (VType{ "Any", VKind_Any })
-#define VType_Int MakePrimitive("Int", PrimitiveType_I64, 0)
-#define VType_Bool MakePrimitive("Bool", PrimitiveType_B32, 1)
-#define VType_String MakePrimitive("String", PrimitiveType_String, 2)
+#define VType_Nil MakeSpecialType("Nil", VKind_Nil, 0)
+#define VType_Void MakeSpecialType("void", VKind_Void, 0)
+#define VType_Any MakeSpecialType("Any", VKind_Any, 1)
+
+#define VType_Int  MakePrimitive("Int", PrimitiveType_Int, 2)
+#define VType_UInt MakePrimitive("UInt", PrimitiveType_UInt, 3)
+#define VType_Bool MakePrimitive("Bool", PrimitiveType_Bool, 4)
+#define VType_Float MakePrimitive("Float", PrimitiveType_Float, 5)
+#define VType_String MakePrimitive("String", PrimitiveType_String, 6)
 
 #define VType_Type TypeFromName(program, "Type")
 #define VType_Result TypeFromName(program, "Result")
@@ -143,8 +160,11 @@ struct Value {
             I32 index;
             I32 reference_op; // 0 -> None; 1 -> Take Reference; -1 -> Dereference
         } reg;
-        I64 literal_int;
+        
+        I64 literal_sint;
+        U64 literal_uint;
         B32 literal_bool;
+        F64 literal_float;
         String literal_string;
         VType literal_type;
         struct {
@@ -173,29 +193,34 @@ enum UnitKind {
     UnitKind_FunctionCall,
     UnitKind_Return,
     UnitKind_Jump,
-    UnitKind_BinaryOperation,
-    // Int Arithmetic
-    // Int Logic
-    // Bool Logic
-    // String Logic
-    // Enum Logic
-    // String Concat
-    // String-Codepoint Concat
-    // Path Concat
-    // Array Concat
-    // Array Append
-    // Op Overflow -> Function Call?
-    
-    UnitKind_SignOperation,
     UnitKind_Child,
     UnitKind_ResultEval,
+    
+    UnitKind_Add, UnitKind_Sub, UnitKind_Mul,
+    UnitKind_Div, UnitKind_Mod,
+    
+    UnitKind_Eql, UnitKind_Neq,
+    UnitKind_Gtr, UnitKind_Lss,
+    UnitKind_Geq, UnitKind_Leq,
+    
+    UnitKind_Or, UnitKind_And, UnitKind_Not,
+    UnitKind_Neg,
+    
+    UnitKind_Cast,
+    UnitKind_BitCast,
+    
+    UnitKind_Is,
 };
 
 struct Unit {
     UnitKind kind;
     U32 line;
     I32 dst_index;
-    Value src;
+    Value src0;
+    Value src1;
+    
+    PrimitiveType op_dst_type;
+    
     union {
         struct {
             FunctionDefinition* fn;
@@ -208,18 +233,9 @@ struct Unit {
         } jump;
         
         struct {
-            Value src1;
-            BinaryOperator op;
-        } binary_op;
-        
-        struct {
-            BinaryOperator op;
-        } sign_op;
-        
-        struct {
-            Value child_index;
             B32 child_is_member;
         } child;
+        
     };
 };
 
@@ -381,17 +397,25 @@ U32 VTypeGetSize(VType vtype);
 B32 VTypeNeedsInternalRelease(Program* program, VType vtype);
 String VTypeGetName(Program* program, VType vtype);
 
+VType TypeChooseMostSignificantPrimitive(VType t0, VType t1);
+
 VType TypeFromIndex(Program* program, U32 index);
 VType TypeFromName(Program* program, String name);
 VType vtype_from_dimension(VType element, U32 dimension);
 VType vtype_from_reference(VType base_type);
+VType TypeFromPrimitive(Program* program, PrimitiveType ptype);
 B32 TypeIsEnum(VType vtype);
 B32 TypeIsArray(VType vtype);
 B32 TypeIsStruct(VType vtype);
 B32 TypeIsReference(VType vtype);
 B32 TypeIsString(VType type);
+
 B32 TypeIsInt(VType type);
+B32 TypeIsUInt(VType type);
+B32 TypeIsAnyInt(VType type);
 B32 TypeIsBool(VType type);
+B32 TypeIsFloat(VType type);
+
 B32 TypeIsAny(VType type);
 B32 TypeIsVoid(VType type);
 B32 TypeIsNil(VType type);
@@ -400,8 +424,7 @@ VariableTypeChild TypeGetChild(Program* program, VType vtype, String name);
 VariableTypeChild vtype_get_member(VType vtype, String member);
 VariableTypeChild VTypeGetProperty(Program* program, VType vtype, String property);
 Array<VariableTypeChild> VTypeGetProperties(Program* program, VType vtype);
-VType TypeFromBinaryOperation(Program* program, VType left, VType right, BinaryOperator op);
-VType TypeFromSignOperation(Program* program, VType src, BinaryOperator op);
+
 Array<VType> vtypes_from_definitions(Arena* arena, Array<ObjectDefinition> defs);
 
 B32 ValueIsCompiletime(Value value);
@@ -419,8 +442,10 @@ Value ValueFromRegister(I32 index, VType vtype, B32 is_lvalue);
 Value ValueFromReference(Value value);
 Value ValueFromDereference(Program* program, Value value);
 Value ValueFromInt(I64 value);
-Value ValueFromEnum(VType vtype, I64 value);
+Value ValueFromUInt(U64 value);
 Value ValueFromBool(B32 value);
+Value ValueFromFloat(F64 value);
+Value ValueFromEnum(VType vtype, I64 value);
 Value ValueFromString(Arena* arena, String value);
 Value ValueFromStringArray(Arena* arena, Program* program, Array<Value> values);
 Value ValueFromType(Program* program, VType type);

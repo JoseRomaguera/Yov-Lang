@@ -7,7 +7,14 @@
 
 // DEBUG
 
-#define DEV_ASAN DEV && 1
+#define DEV_ASAN DEV && 0
+#define DEV_UNSORTED_REPORTS DEV && 0
+
+#define LOG_FLOW_ENABLED   DEV && 0
+#define LOG_TYPE_ENABLED   DEV && 0
+#define LOG_IR_ENABLED     DEV && 0
+#define LOG_MEMORY_ENABLED DEV && 0
+#define LOG_TRACE_ENABLED  DEV && 0
 
 //-
 
@@ -128,6 +135,7 @@ typedef volatile U32 Mutex;
 
 #define countof(x) (sizeof(x) / sizeof(x[0]))
 #define arrayof(x) { x, countof(x) }
+#define bufferof(x) RBuffer{ (U8*)&(x), sizeof(x) }
 
 #define foreach(it, count) for (U32 (it) = 0; (it) < (count); (it)++)
 
@@ -492,9 +500,14 @@ B32 StrEquals(String s0, String s1);
 B32 StrStarts(String str, String with);
 B32 StrEnds(String str, String with);
 B32 U32FromString(U32* dst, String str);
+B32 U64FromString(U64* dst, String str);
+B32 F64FromString(F64* dst, String str);
 B32 U32FromChar(U32* dst, char c);
 B32 I64FromString(String str, I64* out);
 B32 I32FromString(String str, I32* out);
+String StrFromU64(Arena* arena, U64 value, U32 base = 10);
+String StrFromI64(Arena* arena, I64 value, U32 base = 10);
+String StrFromF64(Arena* arena, F64 value, U32 decimals);
 String StringFromCodepoint(Arena* arena, U32 codepoint);
 String StringFromMemory(U64 bytes);
 String StringFromEllapsedTime(F64 seconds);
@@ -513,9 +526,9 @@ inline_fn B32 operator!=(String s0, String s1) { return !StrEquals(s0, s1); }
 inline_fn String STR(String str) { return str; }
 inline_fn String STR(const char* cstr) { return StrFromCStr(cstr); }
 
-B32 codepoint_is_separator(U32 codepoint);
-B32 codepoint_is_number(U32 codepoint);
-B32 codepoint_is_text(U32 codepoint);
+B32 CodepointIsSeparator(U32 codepoint);
+B32 CodepointIsNumber(U32 codepoint);
+B32 CodepointIsText(U32 codepoint);
 
 #define StrFormat(arena, str, ...) string_format_ex(arena, str, __VA_ARGS__)
 
@@ -595,12 +608,6 @@ void PrintEx(PrintLevel level, String str, ...);
 void LogInternal(String tag, String str, ...);
 
 #define PrintF(str, ...) PrintEx(PrintLevel_InfoReport, str, __VA_ARGS__)
-
-#define LOG_FLOW_ENABLED DEV && 0
-#define LOG_TYPE_ENABLED DEV && 0
-#define LOG_IR_ENABLED DEV && 1
-#define LOG_MEMORY_ENABLED DEV && 0
-#define LOG_TRACE_ENABLED DEV && 0
 
 #if LOG_FLOW_ENABLED
 #define LogFlow(str, ...) LogInternal("FLOW", str, __VA_ARGS__)

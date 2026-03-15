@@ -27,16 +27,23 @@ main :: func
     // Strings
     {
         str0: String;
-        str0 += "Hello";
+        str0 += "ello";
         str0 += " " + "World";
-        assert(str0 == "Hello World");
+        
+        codepoint : UInt = '!';
+        str0 += codepoint;
+        
+        codepoint = 'H';
+        str0 = codepoint + str0;
+        
+        assert(str0 == "Hello World!");
         
         path0 := "foo0/foo1/foo2" / "../foo.txt";
         assert(path0 == "foo0/foo1/foo.txt");
         
         inter0 := "str0.size = {str0.size}";
         inter1 := "str0 is empty = {str0.size == 0}";
-        assert(inter0 == "str0.size = 11");
+        assert(inter0 == "str0.size = 12");
         assert(inter1 == "str0 is empty = false");
     }
     
@@ -54,12 +61,23 @@ main :: func
         assert(En0.B.value == En0.C.value);
     }
     
+    // Array iteration mutation
+    {
+        arr := {1,2,3};
+        
+        for (v,i: arr) {
+            arr[i] *= 2;
+        }
+        
+        assert(arr[2] == 6);
+    }
+    
     // Intrinsics
     
     path := env("PATH");
-    paths := str_split(path, ";");
+    paths := StrSplit(path, ";");
     
     for (p: paths) {
-        p = path_resolve(p);
+        p = PathResolve(p);
     }
 }

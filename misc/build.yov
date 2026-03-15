@@ -92,7 +92,8 @@ main :: func
             cflags += {
                 "std:c++17", "nologo",
                 "WX", "W2", "we4305", "we4244", "wd4146",
-                "GR-", "Os", "MD"
+                "GR-", "Os", "MD",
+                "we4062"
             };
             
             if (param_optimize) cflags += "O2";

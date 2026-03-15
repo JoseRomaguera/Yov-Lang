@@ -1,4 +1,9 @@
 
+ITERATIONS  : UInt : 1;
+REPEAT      : UInt : 1;
+SHOW_PRINTS : Bool : false;
+
+
 test_count : Int = 0;
 failed_count : Int = 0;
 
@@ -7,7 +12,7 @@ main :: func
     set_cd("../");
     
     println("Running tests...");
-    for (it := 0; it < 10; it += 1) {
+    for (it := 0; it < REPEAT; it += 1) {
         run_all_tests();
         if (failed_count > 0) break;
     }
@@ -33,11 +38,10 @@ run_all_tests :: func
 
 run_test :: func (name: String, args: String, expected_code: Int)
 {
-    calls.redirect_stdout = RedirectStdout.Ignore;
+    if (SHOW_PRINTS) calls.redirect_stdout = RedirectStdout.Console;
+    else calls.redirect_stdout = RedirectStdout.Ignore;
     
-    iterations :: 5;
-    
-    for (it := 0; it < iterations; it += 1) {
+    for (it := 0; it < ITERATIONS; it += 1) {
         test_count += 1;
         out, res := call_script(name, args, "-no_user");
         
@@ -50,6 +54,6 @@ run_test :: func (name: String, args: String, expected_code: Int)
         
     }
     
-    if (iterations == 1) println("Test succeded: {name}");
-    else println("Test succeded x{iterations}: {name}");
+    if (ITERATIONS == 1) println("Test succeded: {name}");
+    else println("Test succeded x{ITERATIONS}: {name}");
 }

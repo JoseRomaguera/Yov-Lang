@@ -669,7 +669,7 @@ void FrontDefineDefinitions(LaneContext* lane, FrontContext* front)
             FrontDefineFunction(front, code);
             
             FunctionDefinition* def = FunctionFromIndex(front->program, code->index);
-            Assert(def->stage == DefinitionStage_Defined);
+            //Assert(def->stage == DefinitionStage_Defined);
         }
         else {
             FrontDefineArg(front, code);
@@ -872,6 +872,8 @@ void FrontResolveDefinitions(LaneContext* lane, FrontContext* front)
 {
     Program* program = front->program;
     
+    LaneBarrier(lane);
+    
     while (front->resolve_count < front->definitions.count)
     {
         RangeU32 range = LaneDistributeUniformWork(lane, front->definitions.count);
@@ -914,11 +916,11 @@ void FrontResolveDefinitions(LaneContext* lane, FrontContext* front)
             {
                 if (front->last_resolve_count == front->resolve_count) {
                     InvalidCodepath();
-                    front->resolve_count = front->definitions.count;
+                    AtomicStore32(&front->resolve_count, front->definitions.count);
                 }
                 else {
                     front->last_resolve_count = front->resolve_count;
-                    front->resolve_count = 0;
+                    AtomicStore32(&front->resolve_count, 0);
                 }
             }
             
@@ -968,7 +970,7 @@ void FrontDefineEnum(FrontContext* front, CodeDefinition* code)
         
         Location expression_location = NO_CODE;
         
-        if (assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_binary_operator == BinaryOperator_None) {
+        if (assignment_token.kind == TokenKind_Assignment && assignment_token.assignment_operator == OperatorKind_None) {
             SkipToken(parser, assignment_token);
             
             expression_location = FetchUntil(parser, false, TokenKind_CloseBrace, TokenKind_Comma);
@@ -1180,12 +1182,12 @@ void FrontResolveEnum(FrontContext* front, EnumDefinition* def)
             ir = MakeIR(context.arena, program, array_from_pooled_array(context.arena, ir_context->local_registers), group, NULL);
             if (!ir.success) return;
             
-            if (ir.value.kind != ValueKind_Literal || !TypeIsInt(ir.value.vtype)) {
+            if (ir.value.kind != ValueKind_Literal || !TypeIsAnyInt(ir.value.vtype)) {
                 ReportErrorFront(expression_location, "Enum value expects an Int literal");
                 return;
             }
             
-            values[i] = ir.value.literal_int;
+            values[i] = ir.value.literal_sint;
         }
     }
     
@@ -1298,8 +1300,8 @@ internal_fn B32 ValidateArgName(Reporter* reporter, String name, Location locati
         U32 codepoint = StrGetCodepoint(name, &cursor);
         
         B32 valid = false;
-        if (codepoint_is_text(codepoint)) valid = true;
-        if (codepoint_is_number(codepoint)) valid = true;
+        if (CodepointIsText(codepoint)) valid = true;
+        if (CodepointIsNumber(codepoint)) valid = true;
         if (codepoint == '-') valid = true;
         if (codepoint == '_') valid = true;
         
@@ -1357,7 +1359,7 @@ void FrontResolveArg(FrontContext* front, CodeDefinition* code)
         }
         
         Token assignment_token = ConsumeToken(parser);
-        if (assignment_token.kind != TokenKind_Assignment || assignment_token.assignment_binary_operator != BinaryOperator_None)
+        if (assignment_token.kind != TokenKind_Assignment || assignment_token.assignment_operator != OperatorKind_None)
         {
             ReportErrorFront(assignment_token.location, "Expecting a property assignment");
             return;

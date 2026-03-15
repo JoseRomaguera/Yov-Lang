@@ -6,7 +6,7 @@ main :: func
     assert(5 * 5 == +25 && (5 + 12) / 2 == 8);
     assert(false || (2 % 1 != 1 && "Test" == "Test"));
     assert("Hello".size == -((+2+3) * -1));
-    assert(str_split(path_resolve("f0" / "f1" + "\\test\\foo.x"), "/").count == 4);
+    assert(StrSplit(PathResolve("f0" / "f1" + "\\test\\foo.x"), "/").count == 4);
     assert("Yov".size == "Sex".size);
     
     
@@ -59,8 +59,6 @@ main :: func
         a, b = -fn_return_two();
         assert(a == -12 && b == -12);
     }
-    
-    assert(I64 == Int);
 }
 
 fn_return_one :: func -> Int {
