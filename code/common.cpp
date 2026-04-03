@@ -2,7 +2,7 @@
 
 void AssertionFailed(const char* text, const char* file, U32 line)
 {
-    OsPrint(PrintLevel_ErrorReport, text);
+    PrintEx(PrintLevel_ErrorReport, text);
     *((U8*)0) = 0;
 }
 
@@ -43,18 +43,35 @@ B32 DateLessThan(Date d0, Date d1) {
 
 //- ARENA 
 
-Arena* ArenaAlloc(U64 capacity, U32 alignment)
+#if DEV
+#define PROFILE_ARENA(_arena) do { \
+String name = (_arena)->debug_name; \
+PROFILE_PLOT(name.data, (_arena)->memory_position); \
+} while(0)
+#else
+#define PROFILE_ARENA(_arena) EmptyFunction()
+#endif
+
+Arena* ArenaAlloc(U64 capacity, U32 alignment, String debug_name)
 {
+    PROFILE_FUNCTION;
     alignment = Max(alignment, 1);
     Arena* arena = (Arena*)OsHeapAllocate(sizeof(Arena));
     arena->reserved_pages = PagesFromBytes(capacity);
     arena->memory = OsReserveVirtualMemory(arena->reserved_pages, false);
     arena->alignment = alignment;
+#if DEV
+    arena->debug_name = StrHeapCopy(debug_name);
+#endif
     return arena;
 }
 
 void ArenaFree(Arena* arena) {
+    PROFILE_FUNCTION;
     if (arena == NULL) return;
+    
+    arena->memory_position = 0;
+    PROFILE_ARENA(arena);
     
 #if DEV_ASAN
     ArenaProtectAndReset(arena);
@@ -67,6 +84,10 @@ void ArenaFree(Arena* arena) {
 
 void* ArenaPush(Arena* arena, U64 size)
 {
+    PROFILE_FUNCTION;
+    
+    PROFILE_ARENA(arena);
+    
     MutexLockGuard(&arena->mutex);
     U64 position = arena->memory_position;
     position = U64DivideHigh(position, arena->alignment) * arena->alignment;
@@ -91,11 +112,15 @@ void* ArenaPush(Arena* arena, U64 size)
     }
     
     arena->memory_position = end_position;
+    
+    PROFILE_ARENA(arena);
     return (U8*)arena->memory + position;
 }
 
 void ArenaPopTo(Arena* arena, U64 position)
 {
+    PROFILE_FUNCTION;
+    PROFILE_ARENA(arena);
 #if DEV_ASAN
     if (position == 0) ArenaProtectAndReset(arena);
     return;
@@ -107,6 +132,8 @@ void ArenaPopTo(Arena* arena, U64 position)
     U64 bytes_poped = arena->memory_position - position;
     arena->memory_position = position;
     MemoryZero((U8*)arena->memory + arena->memory_position, bytes_poped);
+    
+    PROFILE_ARENA(arena);
 }
 
 #if DEV
@@ -168,6 +195,7 @@ void FileInfoSetPath(FileInfo* info, String path)
 
 F64 TimerNow()
 {
+    PROFILE_FUNCTION;
     U64 time = OsTimerGet() - system_info.timer_start;
     return time / (F64)system_info.timer_frequency;
 }
@@ -183,6 +211,7 @@ internal_fn I32 lane_entry_point(void* data)
 
 LaneGroup* LaneGroupStart(Arena* arena, LaneFn* fn, void* user_data, U32 lane_count)
 {
+    PROFILE_FUNCTION;
     U32 max_lane_count = Max(system_info.logical_cores, 2) - 1;
     
     lane_count = Min(lane_count, max_lane_count);
@@ -209,6 +238,7 @@ LaneGroup* LaneGroupStart(Arena* arena, LaneFn* fn, void* user_data, U32 lane_co
 
 void LaneGroupWait(LaneGroup* group)
 {
+    PROFILE_FUNCTION;
     foreach(i, group->threads.count) {
         OsThreadWait(group->threads[i], U32_MAX);
     }
@@ -216,24 +246,35 @@ void LaneGroupWait(LaneGroup* group)
 
 void LaneBarrier(LaneContext* lane)
 {
+    PROFILE_FUNCTION;
     volatile U32* counter = &lane->group->barrier_counter;
     
     U32 barrier_index = (AtomicIncrement32(counter) - 1) / lane->count;
     
     U32 target = (barrier_index + 1) * lane->count;
     
-    while (*counter < target) {
-        OsThreadYield();
+    U32 spins = 0;
+    
+    while (*counter < target)
+    {
+        _mm_pause();
+        spins++;
+        if (spins > 100) {
+            spins = 0;
+            OsThreadYield();
+        }
     }
 }
 
 B32 LaneNarrow(LaneContext* lane, U32 index)
 {
+    PROFILE_FUNCTION;
     return index % lane->count == lane->id;
 }
 
 void LaneSyncPtr(LaneContext* lane, void** ptr, U32 index)
 {
+    PROFILE_FUNCTION;
     if (LaneNarrow(lane, index)) {
         lane->group->sync.ptr = *ptr;
     }
@@ -257,6 +298,7 @@ RangeU32 LaneDistributeUniformWork(LaneContext* lane, U32 count)
 
 void LaneTaskStart(LaneContext* lane, U32 count)
 {
+    PROFILE_FUNCTION;
     if (LaneNarrow(lane)) {
         lane->group->task_total = count;
         lane->group->task_next = 0;
@@ -279,6 +321,7 @@ void LaneTaskAdd(LaneGroup* group, U32 count)
 
 B32 LaneTaskFetch(LaneGroup* group, U32* index)
 {
+    PROFILE_FUNCTION;
     *index = group->task_total;
     while (group->task_next < group->task_total) {
         U32 value = group->task_next;
@@ -309,6 +352,8 @@ B32 MutexTryLock(Mutex* mutex)
 
 void MutexLock(Mutex* mutex)
 {
+    PROFILE_FUNCTION;
+    
     U32 spins = 0;
     
     while (!MutexTryLock(mutex))
@@ -595,12 +640,21 @@ Array<String> StrArrayCopy(Arena* arena, Array<String> src)
 
 String StrHeapCopy(String src)
 {
+    if (src.size == 0) return {};
     String dst;
     dst.size = src.size;
     dst.data = (char*)OsHeapAllocate(dst.size + 1);
     MemoryCopy(dst.data, src.data, dst.size);
     dst.data[dst.size] = '\0';
     return dst;
+}
+
+void StrHeapFree(String* str)
+{
+    if (str->data != NULL) {
+        OsHeapFree(str->data);
+    }
+    *str = {};
 }
 
 String StrSub(String str, U64 offset, U64 size) {
@@ -629,32 +683,91 @@ B32 StrEnds(String str, String with) {
     return StrEquals(StrSub(str, str.size - with.size, with.size), with);
 }
 
-B32 U32FromString(U32* dst, String str)
+B32 U32FromString(U32* dst, String str, U32 base)
 {
 	U64 v; 
-    B32 res = U64FromString(&v, str);
+    B32 res = U64FromString(&v, str, base);
     if (v > U32_MAX) return false;
     *dst = (U32)v;
     return res;
 }
 
-B32 U64FromString(U64* dst, String str)
+B32 U64FromString(U64* dst, String str, U32 base)
 {
     if (str.size == 0) return false;
     
     U64 value = 0;
     defer (*dst = value);
     
-    for (U64 i = 0; i < str.size; ++i)
+    if (base == 10)
     {
-        char c = str[i];
-        if (c < '0' || c > '9') return false;
-        
-        U64 digit = (U64)(c - '0');
-        
-        if (value > (U64_MAX - digit) / 10) return false;
-        
-        value = value * 10 + digit;
+        for (U64 i = 0; i < str.size; ++i)
+        {
+            char c = str[i];
+            if (c < '0' || c > '9') return false;
+            
+            U64 digit = (U64)(c - '0');
+            
+            if (value > (U64_MAX - digit) / 10) return false;
+            
+            value = value * 10 + digit;
+        }
+    }
+    else if (base == 16)
+    {
+        for (U64 i = 0; i < str.size; ++i)
+        {
+            char c = str[i];
+            U64 digit = 0;
+            
+            if (c >= '0' && c <= '9') {
+                digit = (U64)(c - '0');
+            }
+            else if (c >= 'a' && c <= 'f') {
+                digit = (U64)(c - 'a' + 10);
+            }
+            else if (c >= 'A' && c <= 'F') {
+                digit = (U64)(c - 'A' + 10);
+            }
+            else {
+                return false;
+            }
+            
+            if (value > (U64_MAX >> 4)) return false;
+            
+            value = (value << 4) | digit; 
+        }
+    }
+    else if (base == 2)
+    {
+        for (U64 i = 0; i < str.size; ++i)
+        {
+            char c = str[i];
+            if (c < '0' || c > '1') return false;
+            
+            U64 digit = (U64)(c - '0');
+            
+            if (value > (U64_MAX >> 1)) return false;
+            
+            value = (value << 1) | digit;
+        }
+    }
+    else if (base == 8)
+    {
+        for (U64 i = 0; i < str.size; ++i)
+        {
+            char c = str[i];
+            if (c < '0' || c > '7') return false;
+            
+            U64 digit = (U64)(c - '0');
+            
+            if (value > (U64_MAX >> 3)) return false;
+            
+            value = (value << 3) | digit;
+        }
+    }
+    else {
+        return false; 
     }
     
     return true;
@@ -699,10 +812,10 @@ B32 F64FromString(F64* dst, String str)
 B32 U32FromChar(U32* dst, char c)
 {
     *dst = 0;
-	I32 v = c - '0';
+    I32 v = c - '0';
     if (v < 0 || v > 9) return false;
     *dst = v;
-	return true;
+    return true;
 }
 
 B32 I64FromString(String str, I64* out)
@@ -715,53 +828,53 @@ B32 I64FromString(String str, I64* out)
     }
     
     U32 digits = (U32)str.size;
-	*out = 0;
+    *out = 0;
     
-	if (digits == 0) return false;
+    if (digits == 0) return false;
     
-	U64 mul = 10;
-	foreach(i, digits - 1) mul *= 10;
+    U64 mul = 10;
+    foreach(i, digits - 1) mul *= 10;
     
-	foreach(i, digits) 
+    foreach(i, digits) 
     {
-		mul /= 10;
-		
-		char c = str[i];
-		I64 v = c - '0';
+        mul /= 10;
+        
+        char c = str[i];
+        I64 v = c - '0';
         if (v < 0 || v > 9) return false;
         
-		v *= mul;
-		*out += v;
-	}
+        v *= mul;
+        *out += v;
+    }
     
     if (negative) *out = -(*out);
     
-	return true;
+    return true;
 }
 
 B32 I32FromString(String str, I32* out)
 {
     U32 digits = (U32)str.size;
-	*out = 0;
+    *out = 0;
     
-	if (digits == 0) return false;
+    if (digits == 0) return false;
     
-	U32 mul = 10;
-	foreach(i, digits - 1) mul *= 10;
+    U32 mul = 10;
+    foreach(i, digits - 1) mul *= 10;
     
-	foreach(i, digits) 
+    foreach(i, digits) 
     {
-		mul /= 10;
-		
-		char c = str[i];
-		I32 v = c - '0';
+        mul /= 10;
+        
+        char c = str[i];
+        I32 v = c - '0';
         if (v < 0 || v > 9) return false;
         
-		v *= mul;
-		*out += v;
-	}
+        v *= mul;
+        *out += v;
+    }
     
-	return true;
+    return true;
 }
 
 String StrFromU64(Arena* arena, U64 value, U32 base)
@@ -1056,7 +1169,7 @@ String string_format_with_args(Arena* arena, String string, va_list args)
 String string_format_ex(Arena* arena, String string, ...)
 {
     va_list args;
-	va_start(args, string);
+    va_start(args, string);
     String result = string_format_with_args(arena, string, args);
     va_end(args);
     return result;
@@ -1074,7 +1187,7 @@ U32 StrGetCodepoint(String str, U64* cursor_ptr)
     U32 c = 0;
     char b = *it;
     
-	U32 byte_count;
+    U32 byte_count;
     if ((b & 0xF0) == 0xF0) byte_count = 4;
     else if ((b & 0xE0) == 0xE0) byte_count = 3;
     else if ((b & 0xC0) == 0xC0) byte_count = 2;
@@ -1276,7 +1389,7 @@ inline_fn void _string_builder_push_buffer(StringBuilder* builder) {
 void appendf_ex(StringBuilder* builder, String str, ...)
 {
     va_list args;
-	va_start(args, str);
+    va_start(args, str);
     String result = string_format_with_args(context.arena, str, args);
     va_end(args);
     
@@ -1523,14 +1636,43 @@ B32 LocationIsValid(Location location) {
 void PrintEx(PrintLevel level, String str, ...)
 {
     va_list args;
-	va_start(args, str);
+    va_start(args, str);
     String result = string_format_with_args(context.arena, str, args);
     va_end(args);
-    OsPrint(level, result);
+    
+    if (system_info.supports_ansi_seq)
+    {
+        B32 reset = true;
+        
+        switch (level)
+        {
+            case PrintLevel_DevLog: OsConsoleWrite(ANSI_FG_YELLOW); break;
+            case PrintLevel_WarningReport: OsConsoleWrite(ANSI_FG_GREEN); break;
+            case PrintLevel_ErrorReport: OsConsoleWrite(ANSI_FG_RED); break;
+            
+            case PrintLevel_InfoReport:
+            case PrintLevel_UserCode:
+            reset = true;
+            break;
+        }
+        
+        OsConsoleWrite(result);
+        
+        if (reset) {
+            OsConsoleWrite(ANSI_RESET);
+        }
+    }
+    else {
+        OsConsoleWrite(result);
+    }
+    
+    OsConsoleFlush();
 }
 
 void LogInternal(String tag, String str, ...)
 {
+    PROFILE_FUNCTION;
+    
     va_list args;
     va_start(args, str);
     String result = string_format_with_args(context.arena, str, args);
@@ -1543,7 +1685,7 @@ void LogInternal(String tag, String str, ...)
     append(&builder, result);
     append(&builder, "\n");
     
-    OsPrint(PrintLevel_DevLog, string_from_builder(context.arena, &builder));
+    PrintEx(PrintLevel_DevLog, string_from_builder(context.arena, &builder));
 }
 
 YovSystemInfo system_info; 
@@ -1551,7 +1693,14 @@ per_thread_var YovThreadContext context;
 
 void InitializeThread()
 {
-    context.arena = ArenaAlloc(Gb(16), 8);
+    context.thread_index = AtomicIncrement32(&system_info.thread_counter);
+    char thread_id[32];
+    CStrFromU64(thread_id, context.thread_index);
+    
+    char arena_name[128] = "Arena Thread ";
+    CStrAppend(arena_name, thread_id, sizeof(arena_name));
+    
+    context.arena = ArenaAlloc(Gb(16), 8, arena_name);
 }
 
 void ShutdownThread()
@@ -1586,6 +1735,7 @@ void ReportErrorEx(Reporter* reporter, Location location, U32 line, String path,
     if (!reporter->exit_code_is_set) {
         reporter->exit_code = -1;
     }
+    PROFILE_LOG(formatted_text);
     MutexUnlock(&reporter->mutex);
 }
 
@@ -1669,6 +1819,9 @@ internal_fn Array<ScriptArg> GenerateScriptArgs(Arena* arena, Reporter* reporter
 
 Input* InputFromArgs(Arena* arena, Reporter* reporter)
 {
+    PROFILE_FRAME_MARK;
+    PROFILE_FUNCTION;
+    
     Input* input = ArenaPushStruct<Input>(arena);
     input->caller_dir = StrCopy(arena, system_info.working_path);
     

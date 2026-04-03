@@ -18,6 +18,34 @@
 
 //-
 
+#if TRACY_ENABLE
+
+#include "Tracy.hpp"
+#ifdef stdout
+#undef stdout
+#endif
+
+#define PROFILE_FRAME_MARK       FrameMark
+#define PROFILE_FUNCTION         ZoneScoped
+#define PROFILE_SCOPE(_name)     ZoneScopedN(_name)
+#define PROFILE_LOG(_str)        do { String str = _str; TracyMessage(str.data, str.size); } while(0)
+#define PROFILE_PLOT(_name, _y)  TracyPlot(_name, (int64_t)(_y));
+
+#define PROFILE_ALLOC(_name, _ptr, _size) TracyAllocN(_ptr, _size, _name);
+#define PROFILE_FREE(_name, _ptr) TracyFreeN(_ptr, _name);
+
+#else
+
+#define PROFILE_FRAME_MARK
+#define PROFILE_FUNCTION
+#define PROFILE_SCOPE(_name)
+#define PROFILE_LOG(_str)
+#define PROFILE_PLOT(_name, _y)
+#define PROFILE_ALLOC(_name, _ptr, _size)
+#define PROFILE_FREE(_name, _size)
+
+#endif
+
 #include <stdint.h>
 #include <stdarg.h>
 #include <cstring>
@@ -265,6 +293,9 @@ B32 DateLessThan(Date d0, Date d1);
 //- ARENA
 
 struct Arena {
+#if DEV
+    String debug_name;
+#endif
     void* memory;
     U64 memory_position;
     U32 reserved_pages;
@@ -273,7 +304,7 @@ struct Arena {
     Mutex mutex;
 };
 
-Arena* ArenaAlloc(U64 capacity, U32 alignment);
+Arena* ArenaAlloc(U64 capacity, U32 alignment, String debug_name);
 void ArenaFree(Arena* arena);
 
 void* ArenaPush(Arena* arena, U64 size);
@@ -315,8 +346,10 @@ enum PrintLevel {
     PrintLevel_ErrorReport,
 };
 
-void OsPrint(PrintLevel level, String text);
-void OsConsoleClear();
+void OsConsoleConfigure(B32 raw_reads);
+void OsConsoleWrite(String text);
+void OsConsoleFlush();
+String OsConsoleRead(Arena* arena);
 
 void* OsHeapAllocate(U64 size);
 void  OsHeapFree(void* address);
@@ -495,12 +528,13 @@ String StrAlloc(Arena* arena, U64 size);
 String StrCopy(Arena* arena, String src);
 Array<String> StrArrayCopy(Arena* arena, Array<String> src);
 String StrHeapCopy(String src);
+void StrHeapFree(String* str);
 String StrSub(String str, U64 offset, U64 size);
 B32 StrEquals(String s0, String s1);
 B32 StrStarts(String str, String with);
 B32 StrEnds(String str, String with);
-B32 U32FromString(U32* dst, String str);
-B32 U64FromString(U64* dst, String str);
+B32 U32FromString(U32* dst, String str, U32 base = 10);
+B32 U64FromString(U64* dst, String str, U32 base = 10);
 B32 F64FromString(F64* dst, String str);
 B32 U32FromChar(U32* dst, char c);
 B32 I64FromString(String str, I64* out);
@@ -604,6 +638,37 @@ inline_fn Location LocationStartScript(I32 script_id) { return LocationMake(0, 0
 
 //- REPORTER 
 
+#define ANSI_CLEAR             "\x1b[2J"
+#define ANSI_HOME              "\x1b[H"
+#define ANSI_HIDE_CURSOR       "\x1b[?25l"
+#define ANSI_SHOW_CURSOR       "\x1b[?25h"
+#define ANSI_RESET             "\x1b[0m"
+#define ANSI_ALT_BUFFER_ON     "\x1b[?1049h"
+#define ANSI_ALT_BUFFER_OFF    "\x1b[?1049l"
+
+#define ANSI_FG_BLACK              "\x1b[30m"
+#define ANSI_FG_RED                "\x1b[31m"
+#define ANSI_FG_GREEN              "\x1b[32m"
+#define ANSI_FG_YELLOW             "\x1b[33m"
+#define ANSI_FG_BLUE               "\x1b[34m"
+#define ANSI_FG_MAGENTA            "\x1b[35m"
+#define ANSI_FG_CYAN               "\x1b[36m"
+#define ANSI_FG_WHITE              "\x1b[37m"
+#define ANSI_FG_GRAY               "\x1b[90m"
+
+#define ANSI_BG_BLACK              "\x1b[40m"
+#define ANSI_BG_RED                "\x1b[41m"
+#define ANSI_BG_GREEN              "\x1b[42m"
+#define ANSI_BG_YELLOW             "\x1b[43m"
+#define ANSI_BG_BLUE               "\x1b[44m"
+#define ANSI_BG_MAGENTA            "\x1b[45m"
+#define ANSI_BG_CYAN               "\x1b[46m"
+#define ANSI_BG_WHITE              "\x1b[47m"
+
+#define ANSI_TEXT_BOLD             "\x1b[1m"
+#define ANSI_TEXT_UNDERLINE        "\x1b[4m"
+#define ANSI_TEXT_REVERSED         "\x1b[7m"
+
 void PrintEx(PrintLevel level, String str, ...);
 void LogInternal(String tag, String str, ...);
 
@@ -612,32 +677,32 @@ void LogInternal(String tag, String str, ...);
 #if LOG_FLOW_ENABLED
 #define LogFlow(str, ...) LogInternal("FLOW", str, __VA_ARGS__)
 #else
-#define LogFlow(str, ...) EmptyFunction(str, __VA_ARGS__)
+#define LogFlow(str, ...) EmptyFunction(str)
 #endif
 
 #if LOG_TYPE_ENABLED
 #define LogType(str, ...) LogInternal("TYPE", STR(str), __VA_ARGS__)
 #else
-#define LogType(str, ...) EmptyFunction(str, __VA_ARGS__)
+#define LogType(str, ...) EmptyFunction(str)
 #endif
 
 #if LOG_IR_ENABLED
 #define LogIR(str, ...) LogInternal("IR", STR(str), __VA_ARGS__)
 #else
-#define LogIR(str, ...) EmptyFunction(str, __VA_ARGS__)
+#define LogIR(str, ...) EmptyFunction(str)
 #endif
 
 
 #if LOG_MEMORY_ENABLED
 #define LogMemory(str, ...) LogInternal("MEMORY", STR(str), __VA_ARGS__)
 #else
-#define LogMemory(str, ...) EmptyFunction(str, __VA_ARGS__)
+#define LogMemory(str, ...) EmptyFunction(str)
 #endif
 
 #if LOG_TRACE_ENABLED
 #define LogTrace(str, ...) LogInternal("TRACE", STR(str), __VA_ARGS__)
 #else
-#define LogTrace(str, ...) EmptyFunction(str, __VA_ARGS__)
+#define LogTrace(str, ...) EmptyFunction(str)
 #endif
 
 #define SEPARATOR_STRING "========================="
@@ -665,17 +730,21 @@ struct YovSettings {
 
 struct YovThreadContext {
     Arena* arena;
+    U32 thread_index;
 };
 
 struct YovSystemInfo {
     U64 page_size;
     U32 logical_cores;
+    B32 supports_ansi_seq;
     
     U64 timer_start;
     U64 timer_frequency;
     
     String working_path;
     String executable_path;
+    
+    volatile U32 thread_counter;
 };
 
 extern YovSystemInfo system_info; 

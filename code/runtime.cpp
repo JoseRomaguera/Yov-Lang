@@ -2,11 +2,15 @@
 
 void ExecuteProgram(Program* program, Reporter* reporter, RuntimeSettings settings)
 {
+    PROFILE_FRAME_MARK;
+    
     Runtime* runtime = RuntimeAlloc(program, reporter, settings);
+    
+    runtime->started_time = OsTimerGet();
     
     RuntimeInitializeGlobals(runtime);
     
-    RuntimeStart(runtime, "main");
+    RuntimeStart(runtime, "Main");
     RuntimeStepAll(runtime);
     
     RuntimeFree(runtime);
@@ -14,7 +18,7 @@ void ExecuteProgram(Program* program, Reporter* reporter, RuntimeSettings settin
 
 Runtime* RuntimeAlloc(Program* program, Reporter* reporter, RuntimeSettings settings)
 {
-    Arena* arena = ArenaAlloc(Gb(16), 8);
+    Arena* arena = ArenaAlloc(Gb(16), 8, "Arena Runtime");
     Runtime* runtime = ArenaPushStruct<Runtime>(arena);
     runtime->arena = arena;
     runtime->program = program;
@@ -45,6 +49,8 @@ void RuntimeFree(Runtime* runtime)
 
 void RuntimeInitializeGlobals(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     LogFlow("Starting Init Globals");
     F64 start_time = TimerNow();
     
@@ -95,6 +101,7 @@ void RuntimeInitializeGlobals(Runtime* runtime)
         ref_member_set_string(runtime, ref, "cd", program->script_dir);
         ref_member_set_string(runtime, ref, "script_dir", program->script_dir);
         ref_member_set_string(runtime, ref, "caller_dir", program->caller_dir);
+        RefMemberSetUInt(runtime, ref, "seed", OsTimerGet());
         
         // Args
 #if 0 // TODO(Jose): 
@@ -145,6 +152,8 @@ void RuntimeInitializeGlobals(Runtime* runtime)
 
 void RuntimeStart(Runtime* runtime, String function_name)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
@@ -170,6 +179,8 @@ void RuntimeStart(Runtime* runtime, String function_name)
 
 void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR ir, Array<Value> params)
 {
+    PROFILE_FUNCTION;
+    
     Assert(ir.parameter_count == params.count);
     
     if (runtime->stack_counter >= runtime->stack.count) {
@@ -207,8 +218,9 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
             Value param = params[param_index++];
             Reference ref = RefFromValue(runtime, prev_scope, param);
             
-            if (is_null(RuntimeLoad(runtime, scope, register_index)))
+            if (is_null(RuntimeLoad(runtime, scope, register_index))) {
                 RuntimeStore(runtime, scope, register_index, object_alloc(runtime, ref.vtype));
+            }
             
             RunCopy(runtime, register_index, ref);
         }
@@ -217,6 +229,8 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
 
 void RuntimePopScope(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
@@ -254,6 +268,8 @@ void RuntimePopScope(Runtime* runtime)
 
 B32 RuntimeStep(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     Scope* scope = RuntimeGetCurrentScope(runtime);
     
@@ -271,6 +287,8 @@ B32 RuntimeStep(Runtime* runtime)
 
 B32 RuntimeStepInto(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     String ref_path = RuntimeGetCurrentFile(runtime);
     U32 ref_line = RuntimeGetCurrentLine(runtime);
     
@@ -293,6 +311,8 @@ B32 RuntimeStepInto(Runtime* runtime)
 
 B32 RuntimeStepOver(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     U32 ref_line = RuntimeGetCurrentLine(runtime);
     U32 ref_depth = runtime->stack_counter;
     
@@ -315,6 +335,8 @@ B32 RuntimeStepOver(Runtime* runtime)
 
 B32 RuntimeStepOut(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     U32 ref_depth = runtime->stack_counter;
     
     while (1)
@@ -335,11 +357,14 @@ B32 RuntimeStepOut(Runtime* runtime)
 
 void RuntimeStepAll(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
     while (RuntimeStep(runtime)) {}
 }
 
 void RuntimePrintScriptHelp(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     StringBuilder builder = string_builder_make(context.arena);
     
@@ -519,10 +544,13 @@ RedirectStdout RuntimeGetCallsRedirectStdout(Runtime* runtime)
 
 Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     
     if (value.kind == ValueKind_None) return ref_from_object(null_obj);
     if (value.kind == ValueKind_Literal) {
+        PROFILE_SCOPE("Literal");
         if (TypeIsInt(value.vtype)) return AllocSInt(runtime, value.literal_sint);
         if (TypeIsUInt(value.vtype)) return AllocUInt(runtime, value.literal_sint);
         if (TypeIsBool(value.vtype)) return AllocBool(runtime, value.literal_bool);
@@ -543,6 +571,8 @@ Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
     
     if (value.kind == ValueKind_Array)
     {
+        PROFILE_SCOPE("Array");
+        
         Array<Value> values = value.array.values;
         B32 is_empty = value.array.is_empty;
         
@@ -570,11 +600,13 @@ Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
     }
     
     if (value.kind == ValueKind_ZeroInit) {
+        PROFILE_SCOPE("ZeroInit");
         return object_alloc(runtime, value.vtype);
     }
     
     if (value.kind == ValueKind_StringComposition)
     {
+        PROFILE_SCOPE("StringComposition");
         if (TypeIsString(value.vtype))
         {
             Array<Value> sources = value.string_composition;
@@ -597,6 +629,8 @@ Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
     
     if (value.kind == ValueKind_LValue || value.kind == ValueKind_Register)
     {
+        PROFILE_SCOPE("Register");
+        
         Reference ref = RuntimeLoad(runtime, scope, ValueGetRegister(value));
         
         I32 op = value.reg.reference_op;
@@ -626,12 +660,15 @@ Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
 
 void RunInstruction(Runtime* runtime, Unit unit)
 {
+    PROFILE_FUNCTION;
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
     Scope* scope = RuntimeGetCurrentScope(runtime);
     Reference src0 = RefFromValue(runtime, scope, unit.src0);
     Reference src1 = RefFromValue(runtime, scope, unit.src1);
+    
+    LogTrace("RUN: %S", StringFromUnit(context.arena, program, 0, 0, 0, unit));
     
     I32 dst_index = unit.dst_index;
     
@@ -673,34 +710,8 @@ void RunInstruction(Runtime* runtime, Unit unit)
         
         case UnitKind_Child:
         {
-            B32 child_is_member = unit.child.child_is_member;
-            Reference child_index_obj = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src1);
-            Reference src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src0);
-            
-            if (is_unknown(src) || is_unknown(child_index_obj)) return;
-            
-            if (!RefIsAnyInt(child_index_obj)) {
-                ReportErrorRT("Expecting an integer");
-                return;
-            }
-            
-            U64 child_index = RefGetUInt(child_index_obj);
-            
-            if (is_null(src)) {
-                ReportNullRef();
-                return;
-            }
-            
-            U32 child_count = RefGetChildCount(runtime, src, child_is_member);
-            
-            if (child_index >= child_count) {
-                ReportErrorRT("Out of bounds");
-                return;
-            }
-            
-            Reference child = ref_get_child(runtime, src, (U32)child_index, child_is_member);
-            RuntimeStore(runtime, NULL, dst_index, child);
-            
+            B32 is_member = unit.child.child_is_member;
+            RunChild(runtime, dst_index, src0, src1, is_member);
             return;
         }
         
@@ -808,6 +819,7 @@ void RunInstruction(Runtime* runtime, Unit unit)
 
 void RunStore(Runtime* runtime, I32 dst_index, Reference src)
 {
+    PROFILE_FUNCTION;
     if (is_unknown(src)) {
         InvalidCodepath();
         return;
@@ -817,6 +829,8 @@ void RunStore(Runtime* runtime, I32 dst_index, Reference src)
 
 void RunCopy(Runtime* runtime, I32 dst_index, Reference src)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
@@ -849,6 +863,8 @@ void RunCopy(Runtime* runtime, I32 dst_index, Reference src)
 
 void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Array<Value> parameters)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
@@ -880,13 +896,45 @@ void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Ar
     }
 }
 
+internal_fn Reference _RunChild(Runtime* runtime, Reference src, Reference index, B32 is_member)
+{
+    if (is_null(src)) {
+        ReportNullRef();
+        return ref_from_object(null_obj);
+    }
+    
+    if (!RefIsAnyInt(index)) {
+        ReportErrorRT("Expecting an integer");
+        return ref_from_object(null_obj);
+    }
+    
+    U64 child_index = RefIsUInt(index) ? RefGetUInt(index) : RefGetInt(index);
+    U32 child_count = RefGetChildCount(runtime, src, is_member);
+    
+    if (child_index >= child_count) {
+        ReportErrorRT("Out of bounds");
+        return ref_from_object(null_obj);
+    }
+    
+    return ref_get_child(runtime, src, (U32)child_index, is_member);
+}
+
+void RunChild(Runtime* runtime, I32 dst_index, Reference src, Reference index, B32 is_member)
+{
+    PROFILE_FUNCTION;
+    Reference child = _RunChild(runtime, src, index, is_member);
+    RuntimeStore(runtime, NULL, dst_index, child);
+}
+
 void RunReturn(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
     RuntimePopScope(runtime);
 }
 
 void RunJump(Runtime* runtime, Reference ref, I32 condition, I32 offset)
 {
+    PROFILE_FUNCTION;
     Program* program = runtime->program;
     Reporter* reporter = runtime->reporter;
     
@@ -944,6 +992,7 @@ internal_fn Reference _RunAdd(Runtime* runtime, PrimitiveType type, Reference le
 
 void RunAdd(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunAdd(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -976,6 +1025,7 @@ internal_fn Reference _RunSub(Runtime* runtime, PrimitiveType type, Reference le
 
 void RunSub(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunSub(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1008,6 +1058,7 @@ internal_fn Reference _RunMul(Runtime* runtime, PrimitiveType type, Reference le
 
 void RunMul(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunMul(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1059,6 +1110,7 @@ internal_fn Reference _RunDiv(Runtime* runtime, PrimitiveType type, Reference le
 
 void RunDiv(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunDiv(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1111,6 +1163,7 @@ internal_fn Reference _RunMod(Runtime* runtime, PrimitiveType type, Reference le
 
 void RunMod(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunMod(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1145,6 +1198,7 @@ internal_fn Reference _RunEql(Runtime* runtime, PrimitiveType ptype, Reference l
 
 void RunEql(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunEql(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1179,6 +1233,7 @@ internal_fn Reference _RunNeq(Runtime* runtime, PrimitiveType ptype, Reference l
 
 void RunNeq(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunNeq(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1213,6 +1268,7 @@ internal_fn Reference _RunGtr(Runtime* runtime, PrimitiveType ptype, Reference l
 
 void RunGtr(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunGtr(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1247,6 +1303,7 @@ internal_fn Reference _RunLss(Runtime* runtime, PrimitiveType ptype, Reference l
 
 void RunLss(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunLss(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1281,6 +1338,7 @@ internal_fn Reference _RunGeq(Runtime* runtime, PrimitiveType ptype, Reference l
 
 void RunGeq(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunGeq(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1315,6 +1373,7 @@ internal_fn Reference _RunLeq(Runtime* runtime, PrimitiveType ptype, Reference l
 
 void RunLeq(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunLeq(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1349,6 +1408,7 @@ internal_fn Reference _RunOr(Runtime* runtime, PrimitiveType ptype, Reference le
 
 void RunOr(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunOr(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1383,6 +1443,7 @@ internal_fn Reference _RunAnd(Runtime* runtime, PrimitiveType ptype, Reference l
 
 void RunAnd(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunAnd(runtime, type, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1413,6 +1474,7 @@ internal_fn Reference _RunNeg(Runtime* runtime, PrimitiveType ptype, Reference s
 
 void RunNeg(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunNeg(runtime, type, src);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1443,6 +1505,7 @@ internal_fn Reference _RunNot(Runtime* runtime, PrimitiveType ptype, Reference s
 
 void RunNot(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunNot(runtime, type, src);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1483,6 +1546,7 @@ internal_fn Reference _RunCast(Runtime* runtime, PrimitiveType ptype, Reference 
 
 void RunCast(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunCast(runtime, type, src);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1520,6 +1584,7 @@ internal_fn Reference _RunBitCast(Runtime* runtime, PrimitiveType ptype, Referen
 
 void RunBitCast(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference src)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunBitCast(runtime, type, src);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1545,6 +1610,7 @@ Reference _RunIs(Runtime* runtime, Reference left, Reference right)
 
 void RunIs(Runtime* runtime, I32 dst_index, Reference left, Reference right)
 {
+    PROFILE_FUNCTION;
     Reference result = _RunIs(runtime, left, right);
     RuntimeStore(runtime, NULL, dst_index, result);
 }
@@ -1709,6 +1775,8 @@ Reference RunUnaryOperation(Runtime* runtime, VType dst_type, Reference src, Una
 
 void RuntimeStore(Runtime* runtime, Scope* scope, I32 register_index, Reference ref)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     
     if (scope == NULL) scope = RuntimeGetCurrentScope(runtime);
@@ -1735,6 +1803,8 @@ void RuntimeStore(Runtime* runtime, Scope* scope, I32 register_index, Reference 
 
 void RuntimeStoreGlobal(Runtime* runtime, String identifier, Reference ref)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     
     I32 global_index = GlobalIndexFromIdentifier(program, identifier);
@@ -1749,6 +1819,8 @@ void RuntimeStoreGlobal(Runtime* runtime, String identifier, Reference ref)
 
 void RuntimeStoreReturn(Runtime* runtime, Scope* scope, I32 dst_index, Array<Reference> refs)
 {
+    PROFILE_FUNCTION;
+    
     if (dst_index < 0) return;
     
     foreach(i, refs.count) {
@@ -1759,6 +1831,8 @@ void RuntimeStoreReturn(Runtime* runtime, Scope* scope, I32 dst_index, Array<Ref
 
 Reference RuntimeLoad(Runtime* runtime, Scope* scope, I32 register_index)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     
     if (scope == NULL) scope = RuntimeGetCurrentScope(runtime);
@@ -1774,6 +1848,8 @@ Reference RuntimeLoad(Runtime* runtime, Scope* scope, I32 register_index)
 
 Reference RuntimeLoadGlobal(Runtime* runtime, String identifier)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     
     I32 global_index = GlobalIndexFromIdentifier(program, identifier);
@@ -1791,6 +1867,8 @@ String StrFromObject(Arena* arena, Runtime* runtime, Object* object, B32 raw) {
 
 String StrFromRef(Arena* arena, Runtime* runtime, Reference ref, B32 raw)
 {
+    PROFILE_FUNCTION;
+    
     if (is_null(ref)) {
         return "null";
     }
@@ -1983,6 +2061,7 @@ Reference ref_get_property(Runtime* runtime, Reference ref, U32 index)
 
 U32 RefGetChildCount(Runtime* runtime, Reference ref, B32 is_member)
 {
+    PROFILE_FUNCTION;
     if (is_member) return RefGetMemberCount(ref);
     else return RefGetPropertyCount(runtime, ref);
 }
@@ -2039,6 +2118,7 @@ Reference AllocString(Runtime* runtime, String value)
 
 Reference AllocArray(Runtime* runtime, VType element_vtype, U32 count)
 {
+    PROFILE_FUNCTION;
     VType vtype = vtype_from_dimension(element_vtype, 1);
     
     if (vtype.kind != VKind_Array) {
@@ -2525,6 +2605,14 @@ void ref_member_set_string(Runtime* runtime, Reference ref, String member, Strin
     else ref_string_set(runtime, member_ref, v);
 }
 
+void RefMemberSetUInt(Runtime* runtime, Reference ref, String member, U64 v)
+{
+    I32 index = vtype_get_member(ref.vtype, member).index;
+    Reference member_ref = ref_get_member(runtime, ref, index);
+    if (is_unknown(member_ref)) return;
+    else RefSetUInt(member_ref, v);
+}
+
 void ref_assign_Result(Runtime* runtime, Reference ref, Result res)
 {
     Program* program = runtime->program;
@@ -2652,6 +2740,7 @@ U32 object_generate_id(Runtime* runtime) {
 
 Reference object_alloc(Runtime* runtime, VType vtype)
 {
+    PROFILE_FUNCTION;
     Program* program = runtime->program;
     Assert(VTypeValid(vtype));
     
@@ -2731,6 +2820,8 @@ void object_decrement_ref(Object* obj)
 
 void ref_release_internal(Runtime* runtime, Reference ref, B32 release_refs)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     VType vtype = ref.vtype;
     
@@ -2783,6 +2874,8 @@ void ref_release_internal(Runtime* runtime, Reference ref, B32 release_refs)
 
 void RefCopy(Runtime* runtime, Reference dst, Reference src)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = runtime->program;
     
     if (is_unknown(dst) || is_null(dst)) {
@@ -2870,6 +2963,8 @@ Reference ref_alloc_and_copy(Runtime* runtime, Reference src)
 
 void* object_dynamic_allocate(Runtime* runtime, U64 size)
 {
+    PROFILE_FUNCTION;
+    
     if (size == 0) return NULL;
     
     B32 use_gc = true;
@@ -2896,6 +2991,8 @@ void* object_dynamic_allocate(Runtime* runtime, U64 size)
 
 void object_dynamic_free(Runtime* runtime, void* ptr)
 {
+    PROFILE_FUNCTION;
+    
     if (ptr == NULL) return;
     
     B32 use_gc = true;
@@ -2916,6 +3013,8 @@ void object_free_unused_memory(Runtime* runtime)
 
 void ObjectFreeAll(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
+    
     Object* obj = runtime->gc.object_list;
     
     while (obj != NULL)
@@ -2929,12 +3028,14 @@ void ObjectFreeAll(Runtime* runtime)
 
 void* gc_allocate(Runtime* runtime, U64 size)
 {
+    PROFILE_FUNCTION;
     runtime->gc.allocation_count++;
     return OsHeapAllocate(size);
 }
 
 void gc_free(Runtime* runtime, void* ptr)
 {
+    PROFILE_FUNCTION;
     Assert(runtime->gc.allocation_count > 0);
     runtime->gc.allocation_count--;
     OsHeapFree(ptr);
@@ -2942,6 +3043,7 @@ void gc_free(Runtime* runtime, void* ptr)
 
 void gc_free_unused(Runtime* runtime)
 {
+    PROFILE_FUNCTION;
     U32 free_count;
     do {
         Object* obj = runtime->gc.object_list;

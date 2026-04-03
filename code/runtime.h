@@ -40,6 +40,8 @@ struct Runtime {
         Reference context;
         Reference calls;
     } common_globals;
+    
+    U64 started_time;
 };
 
 Runtime* RuntimeAlloc(Program* program, Reporter* reporter, RuntimeSettings settings);
@@ -87,6 +89,7 @@ void RunCopy(Runtime* runtime, I32 dst_index, Reference src);
 void RunReturn(Runtime* runtime);
 void RunJump(Runtime* runtime, Reference ref, I32 condition, I32 offset);
 void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Array<Value> parameters);
+void RunChild(Runtime* runtime, I32 dst_index, Reference src, Reference index, B32 is_member);
 
 void RunAdd(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
 void RunSub(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
@@ -199,6 +202,7 @@ void RefSetUIntMember(Runtime* runtime, Reference ref, String member, U64 v);
 void ref_member_set_bool(Runtime* runtime, Reference ref, String member, B32 v);
 void set_enum_index_member(Runtime* runtime, Reference ref, String member, I64 v);
 void ref_member_set_string(Runtime* runtime, Reference ref, String member, String v);
+void RefMemberSetUInt(Runtime* runtime, Reference ref, String member, U64 v);
 
 enum CopyMode {
     CopyMode_NoOverride,

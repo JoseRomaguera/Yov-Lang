@@ -26,13 +26,13 @@ print_all :: arg {
 
 Foo :: enum { A, B, C }
 
-main :: func
+Main :: func
 {
-    println("foo = {foo}");
-    println("opt_foo = {opt_foo}");
-    println("print_all = {print_all}");
+    PrintLn("foo = {foo}");
+    PrintLn("opt_foo = {opt_foo}");
+    PrintLn("print_all = {print_all}");
     
-    if (print_all) println("All the defined args: {context.args}");
+    if (print_all) PrintLn("All the defined args: {context.args}");
     
     if (foo == .B)
     {

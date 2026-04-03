@@ -23,6 +23,7 @@ Context :: struct {
     caller_dir: String;
     args: String[];
     types: Type[];
+    seed: UInt;
 }
 
 OSKind :: enum {
@@ -43,29 +44,63 @@ CallsContext :: struct {
 
 // Core
 
-typeof  :: func(object: Any) -> Type;
-print   :: func(object: Any);
-println :: func(object: Any);
-exit    :: func(exit_code: Int);
-set_cd  :: func(cd: String) -> Result;
-assert  :: func(result: Bool) -> Result;
-failed :: func(message: String, exit_code: Int) -> Result;
+Typeof  :: func(object: Any) -> Type;
+Print   :: func(object: Any);
+PrintLn :: func(object: Any);
+Exit    :: func(exit_code: Int);
+SetCD   :: func(cd: String) -> Result;
+Assert  :: func(result: Bool) -> Result;
+Failed  :: func(message: String, exit_code: Int) -> Result;
 
-sleep :: func(millis: UInt);
+SleepMs :: func(ms: UInt);
+Sleep   :: func(sec: Float);
 
-env            :: func(name: String) -> (value: String, result: Result);
-env_path       :: func(name: String) -> (value: String, result: Result);
-env_path_array :: func(name: String) -> (value: String[], result: Result);
+Env          :: func(name: String) -> (value: String, result: Result);
+EnvPath      :: func(name: String) -> (value: String, result: Result);
+EnvPathArray :: func(name: String) -> (value: String[], result: Result);
 
 ArrayAppendBack         :: func(dst: Any, src: Any);
 // TODO: ArrayAppendFront        :: func(dst: Any, src: Any);
 ArrayAppendElementBack  :: func(dst: Any, src: Any);
 // TODO: ArrayAppendElementFront :: func(dst: Any, src: Any);
+ArrayRemove :: func(dst: Any, index: UInt);
+ArrayUnorderedRemove :: func(dst: Any, index: UInt);
 
 // Console
 
-console_write :: func(value: String);
-console_clear :: func;
+ANSI_CLEAR       : String : "\x1b[2J";
+ANSI_HOME        : String : "\x1b[H";
+ANSI_HIDE_CURSOR : String : "\x1b[?25l";
+ANSI_SHOW_CURSOR : String : "\x1b[?25h";
+ANSI_RESET       : String : "\x1b[0m";
+ANSI_ALT_BUFFER_ON : String : "\x1b[?1049h";
+ANSI_ALT_BUFFER_OFF : String : "\x1b[?1049l";
+
+ANSI_FG_BLACK   : String : "\x1b[30m";
+ANSI_FG_RED     : String : "\x1b[31m";
+ANSI_FG_GREEN   : String : "\x1b[32m";
+ANSI_FG_YELLOW  : String : "\x1b[33m";
+ANSI_FG_BLUE    : String : "\x1b[34m";
+ANSI_FG_MAGENTA : String : "\x1b[35m";
+ANSI_FG_CYAN    : String : "\x1b[36m";
+ANSI_FG_WHITE   : String : "\x1b[37m";
+ANSI_FG_GRAY    : String : "\x1b[90m";
+
+ANSI_BG_BLACK   : String : "\x1b[40m";
+ANSI_BG_RED     : String : "\x1b[41m";
+ANSI_BG_GREEN   : String : "\x1b[42m";
+ANSI_BG_YELLOW  : String : "\x1b[43m";
+ANSI_BG_BLUE    : String : "\x1b[44m";
+ANSI_BG_MAGENTA : String : "\x1b[45m";
+ANSI_BG_CYAN    : String : "\x1b[46m";
+ANSI_BG_WHITE   : String : "\x1b[47m";
+
+ANSI_TEXT_BOLD : String : "\x1b[1m";
+
+ConsoleConfigure :: func(raw_reads: Bool);
+ConsoleWrite :: func(value: String);
+ConsoleFlush :: func;
+ConsoleRead :: func() -> String;
 
 // External Calls
 
@@ -73,9 +108,9 @@ CallOutput :: struct {
     stdout: String;
 }
 
-call        :: func(command: String) -> (out: CallOutput, result: Result);
-call_exe    :: func(path: String, arguments: String) -> (out: CallOutput, result: Result);
-call_script :: func(path: String, arguments: String, yov_arguments: String) -> (out: CallOutput, result: Result);
+Call        :: func(command: String) -> (out: CallOutput, result: Result);
+CallExe    :: func(path: String, arguments: String) -> (out: CallOutput, result: Result);
+CallScript :: func(path: String, arguments: String, yov_arguments: String) -> (out: CallOutput, result: Result);
 
 // String Utils
 
@@ -88,15 +123,29 @@ StrFromCodepoint :: func(cp: UInt) -> String;
 PathAppend  :: func(path0: String, path1: String) -> String;
 PathResolve :: func(path: String) -> String;
 
-// JSON
+// Time
 
-json_route :: func(json: String, route: String) -> (out: String, res: Result);
+TimeTicks   :: func() -> UInt;
+TimeElapsed :: func() -> Float;
+
+// Math
+
+MinI :: func(v0: Int, v1: Int) -> Int { if (v0 < v1) return v0; return v1; }
+MaxI :: func(v0: Int, v1: Int) -> Int { if (v0 < v1) return v1; return v0; }
+MinU :: func(v0: UInt, v1: UInt) -> UInt { if (v0 < v1) return v0; return v1; }
+MaxU :: func(v0: UInt, v1: UInt) -> UInt { if (v0 < v1) return v1; return v0; }
+MinF :: func(v0: Float, v1: Float) -> Float { if (v0 < v1) return v0; return v1; }
+MaxF :: func(v0: Float, v1: Float) -> Float { if (v0 < v1) return v1; return v0; }
+
+Random :: func() -> UInt;
+RandomRange :: func(min: Int, max: Int) -> Int;
+Random01 :: func() -> Float;
 
 // Yov
 
-yov_require     :: func(major: UInt, minor: UInt) -> Result;
-yov_require_min :: func(major: UInt, minor: UInt) -> Result;
-yov_require_max :: func(major: UInt, minor: UInt) -> Result;
+YovRequire     :: func(major: UInt, minor: UInt) -> Result;
+YovRequireMin :: func(major: UInt, minor: UInt) -> Result;
+YovRequireMax :: func(major: UInt, minor: UInt) -> Result;
 
 ObjectDefinition :: struct {
     identifier: String;
@@ -130,10 +179,10 @@ YovParseOutput :: struct {
     reports: String[];
 }
 
-yov_parse :: func(path: String) -> YovParseOutput;
+YovParse :: func(path: String) -> YovParseOutput;
 
 // User
-ask_yesno :: func(text: String) -> Bool;
+AskYesNo :: func(text: String) -> Bool;
 
 // File System
 
@@ -147,20 +196,21 @@ FileInfo :: struct {
     is_directory: Bool;
 }
 
-exists             :: func(path: String) -> Bool;
-create_directory   :: func(path: String, recursive: Bool) -> Result;
-delete_directory   :: func(path: String) -> Result;
-copy_directory     :: func(dst: String, src: String) -> Result;
-move_directory     :: func(dst: String, src: String) -> Result;
-copy_file          :: func(dst: String, src: String, mode: CopyMode) -> Result;
-move_file          :: func(dst: String, src: String) -> Result;
-delete_file        :: func(path: String) -> Result;
-read_entire_file   :: func(path: String) -> (content: String, result: Result);
-write_entire_file  :: func(path: String, content: String) -> Result;
-file_get_info      :: func(path: String) -> (info: FileInfo, result: Result);
-dir_get_files_info :: func(path: String) -> (infos: FileInfo[], result: Result);
+Exists      :: func(path: String) -> Bool;
+DirCreate   :: func(path: String, recursive: Bool) -> Result;
+DirDelete   :: func(path: String) -> Result;
+DirCopy     :: func(dst: String, src: String) -> Result;
+DirMove     :: func(dst: String, src: String) -> Result;
+FileCopy    :: func(dst: String, src: String, mode: CopyMode) -> Result;
+FileMove    :: func(dst: String, src: String) -> Result;
+FileDelete  :: func(path: String) -> Result;
+FileGetInfo :: func(path: String) -> (info: FileInfo, result: Result);
+DirGetInfo  :: func(path: String) -> (infos: FileInfo[], result: Result);
+
+ReadEntireFile  :: func(path: String) -> (content: String, result: Result);
+WriteEntireFile :: func(path: String, content: String) -> Result;
 
 // MSVC
 
-msvc_import_env_x64 :: func() -> Result;
-msvc_import_env_x86 :: func() -> Result;
+MsvcImportEnvX64 :: func() -> Result;
+MsvcImportEnvX86 :: func() -> Result;

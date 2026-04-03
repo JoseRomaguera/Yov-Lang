@@ -3,7 +3,7 @@ generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_nam
 {
     //println("Reading file: {src_path}");
     
-    raw := read_entire_file(src_path);
+    raw := ReadEntireFile(src_path);
     
     //println("Processing text");
     
@@ -23,6 +23,9 @@ generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_nam
                 continue;
             }
             
+            if (codepoint == '\\' || codepoint == '"') 
+                line += '\\';
+            
             line += codepoint;
         }
         if (line.size > 0) lines += line;
@@ -40,7 +43,7 @@ generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_nam
     
     //println("Writing file: {dst_path}");
     
-    write_entire_file(dst_path, code);
+    WriteEntireFile(dst_path, code);
     
     //println("Finished");
 }

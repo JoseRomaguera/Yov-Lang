@@ -2,6 +2,8 @@
 
 internal_fn void FrontRun(FrontContext* front, LaneContext* lane)
 {
+    PROFILE_FUNCTION;
+    
     {
         if (LaneNarrow(lane)) {
             LogFlow("Starting Read Locations & Imports Pass");
@@ -98,6 +100,7 @@ internal_fn void FrontRun(FrontContext* front, LaneContext* lane)
 
 internal_fn void FrontWide(LaneContext* lane)
 {
+    PROFILE_FUNCTION;
     FrontContext* front = (FrontContext*)lane->group->user_data;
     
     FrontRun(front, lane);
@@ -123,6 +126,9 @@ internal_fn void FrontWide(LaneContext* lane)
 
 Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
 {
+    PROFILE_FRAME_MARK;
+    PROFILE_FUNCTION;
+    
     Program* program = ArenaPushStruct<Program>(arena);
     program->arena = arena;
     program->script_dir = StrCopy(arena, PathGetFolder(input->main_script_path));
@@ -134,7 +140,7 @@ Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
     
     FrontContext* front = NULL;
     
-    Arena* front_arena = ArenaAlloc(Gb(32), 8);
+    Arena* front_arena = ArenaAlloc(Gb(32), 8, "Arena Front");
     front = ArenaPushStruct<FrontContext>(front_arena);
     front->arena = front_arena;
     front->program = program;
@@ -168,6 +174,7 @@ Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
 
 YovScript* FrontAddScript(FrontContext* front, String path)
 {
+    PROFILE_FUNCTION;
     Reporter* reporter = front->reporter;
     
     Assert(OsPathIsAbsolute(path));
@@ -206,6 +213,7 @@ YovScript* FrontAddScript(FrontContext* front, String path)
 
 YovScript* FrontAddCoreScript(FrontContext* front)
 {
+    PROFILE_FUNCTION;
     String text = YOV_CORE;
     
     MutexLockGuard(&front->mutex);
@@ -299,6 +307,7 @@ internal_fn B32 ExpectAndSkipBraces(Reporter* reporter, Parser* parser, I32 scri
 
 void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGroup* lane_group)
 {
+    PROFILE_FUNCTION;
     if (script == NULL) return;
     
     Reporter* reporter = front->reporter;
@@ -551,6 +560,7 @@ void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGr
 
 void FrontReadAllScripts(LaneContext* lane, FrontContext* front)
 {
+    PROFILE_FUNCTION;
     LaneGroup* group = lane->group;
     
     if (LaneNarrow(lane, 0)) {
@@ -583,6 +593,8 @@ void FrontReadAllScripts(LaneContext* lane, FrontContext* front)
 
 internal_fn U32 CountIdentifiers(Program* program, String identifier)
 {
+    PROFILE_FUNCTION;
+    
     U32 count = 0;
     
     foreach(i, program->definitions.count) {
@@ -594,6 +606,8 @@ internal_fn U32 CountIdentifiers(Program* program, String identifier)
 
 void FrontIdentifyDefinitions(LaneContext* lane, FrontContext* front)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = front->reporter;
     Program* program = front->program;
     
@@ -653,6 +667,8 @@ void FrontIdentifyDefinitions(LaneContext* lane, FrontContext* front)
 
 void FrontDefineDefinitions(LaneContext* lane, FrontContext* front)
 {
+    PROFILE_FUNCTION;
+    
     RangeU32 range = LaneDistributeUniformWork(lane, front->definitions.count);
     
     for (U32 i = range.min; i < range.max; ++i)
@@ -668,7 +684,7 @@ void FrontDefineDefinitions(LaneContext* lane, FrontContext* front)
         else if (code->type == DefinitionType_Function) {
             FrontDefineFunction(front, code);
             
-            FunctionDefinition* def = FunctionFromIndex(front->program, code->index);
+            //FunctionDefinition* def = FunctionFromIndex(front->program, code->index);
             //Assert(def->stage == DefinitionStage_Defined);
         }
         else {
@@ -682,6 +698,8 @@ void FrontDefineDefinitions(LaneContext* lane, FrontContext* front)
 
 internal_fn void DefineLangGlobal(FrontContext* front, String name, String type)
 {
+    PROFILE_FUNCTION;
+    
     Global global = {};
     global.identifier = name;
     global.vtype = TypeFromName(front->program, type);
@@ -694,6 +712,8 @@ internal_fn void DefineLangGlobal(FrontContext* front, String name, String type)
 
 void FrontDefineGlobals(LaneContext* lane, FrontContext* front)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     Reporter* reporter = front->reporter;
     
@@ -770,6 +790,8 @@ void FrontDefineGlobals(LaneContext* lane, FrontContext* front)
 
 void FrontResolveGlobals(LaneContext* lane, FrontContext* front)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = front->reporter;
     Program* program = front->program;
     
@@ -870,6 +892,8 @@ void FrontResolveGlobals(LaneContext* lane, FrontContext* front)
 
 void FrontResolveDefinitions(LaneContext* lane, FrontContext* front)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     
     LaneBarrier(lane);
@@ -939,6 +963,8 @@ void FrontResolveDefinitions(LaneContext* lane, FrontContext* front)
 
 void FrontDefineEnum(FrontContext* front, CodeDefinition* code)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     Reporter* reporter = front->reporter;
     
@@ -997,6 +1023,8 @@ void FrontDefineEnum(FrontContext* front, CodeDefinition* code)
 
 void FrontDefineStruct(FrontContext* front, CodeDefinition* code)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     Reporter* reporter = front->reporter;
     
@@ -1077,6 +1105,8 @@ void FrontDefineStruct(FrontContext* front, CodeDefinition* code)
 
 void FrontDefineFunction(FrontContext* front, CodeDefinition* code)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     Reporter* reporter = front->reporter;
     
@@ -1121,6 +1151,8 @@ void FrontDefineFunction(FrontContext* front, CodeDefinition* code)
 
 void FrontDefineArg(FrontContext* front, CodeDefinition* code)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     Reporter* reporter = front->reporter;
     
@@ -1149,6 +1181,8 @@ void FrontDefineArg(FrontContext* front, CodeDefinition* code)
 
 void FrontResolveEnum(FrontContext* front, EnumDefinition* def)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = front->reporter;
     Program* program = front->program;
     
@@ -1196,6 +1230,8 @@ void FrontResolveEnum(FrontContext* front, EnumDefinition* def)
 
 B32 FrontResolveStruct(FrontContext* front, StructDefinition* def)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     
     if (def->stage == DefinitionStage_Ready) {
@@ -1223,6 +1259,8 @@ B32 FrontResolveStruct(FrontContext* front, StructDefinition* def)
 
 void FrontResolveFunction(FrontContext* front, FunctionDefinition* def, CodeDefinition* code)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     Reporter* reporter = front->reporter;
     
@@ -1321,6 +1359,8 @@ internal_fn B32 ValidateArgName(Reporter* reporter, String name, Location locati
 
 void FrontResolveArg(FrontContext* front, CodeDefinition* code)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = front->program;
     Reporter* reporter = front->reporter;
     ArgDefinition* def = ArgFromIndex(program, code->index);

@@ -11,39 +11,31 @@
 #include "Windows.h"
 #include <shellapi.h>
 
-internal_fn void SetConsoleTextColor(HANDLE std, PrintLevel level)
+DWORD stdin_default_mode;
+DWORD stdout_default_mode;
+
+internal_fn B32 WindowsSupportsVirtualTerminalProcessing()
 {
-    CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
-    WORD saved_attributes;
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle == INVALID_HANDLE_VALUE) return false;
     
-    // Save current attributes
-    GetConsoleScreenBufferInfo(std, &consoleInfo);
-    saved_attributes = consoleInfo.wAttributes;
+    DWORD mode;
+    if (!GetConsoleMode(handle, &mode)) return false;
     
-    I32 att;
-    
-    if (level == PrintLevel_UserCode) {
-        att = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-    }
-    else if (level == PrintLevel_DevLog) {
-        att = FOREGROUND_GREEN;
-    }
-    else if (level == PrintLevel_InfoReport) {
-        att = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-    }
-    else if (level == PrintLevel_WarningReport) {
-        att = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-    }
-    else if (level == PrintLevel_ErrorReport) {
-        att = FOREGROUND_RED | FOREGROUND_INTENSITY;
+    if (!(mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+        mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        if (!SetConsoleMode(handle, mode)) {
+            return false;
+        }
     }
     
-    
-    SetConsoleTextAttribute(std, (WORD)att);
+    return true;
 }
 
 void SetupGlobals()
 {
+    PROFILE_FUNCTION;
+    
     SYSTEM_INFO info;
     GetSystemInfo(&info);
     system_info.page_size = info.dwAllocationGranularity;
@@ -79,53 +71,133 @@ void SetupGlobals()
     
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-}
-
-internal_fn HANDLE get_std_handle() {
-    return GetStdHandle(STD_OUTPUT_HANDLE);
+    
+    GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &stdin_default_mode);
+    GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &stdout_default_mode);
+    
+    system_info.supports_ansi_seq = WindowsSupportsVirtualTerminalProcessing();
+    OsConsoleConfigure(false);
 }
 
 void ShutdownGlobals()
 {
     ShutdownThread();
-    SetConsoleTextColor(get_std_handle(), PrintLevel_UserCode);
+    
+    SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), stdin_default_mode);
+    SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), stdout_default_mode);
 }
 
-void OsPrint(PrintLevel level, String text)
+void OsConsoleConfigure(B32 raw_reads)
 {
-    HANDLE std = get_std_handle();
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     
-    SetConsoleTextColor(std, level);
+    DWORD mode = stdin_default_mode;
+    if (raw_reads) mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
+    SetConsoleMode(in, mode);
     
-    String text0 = StrCopy(context.arena, text);
+    mode = stdout_default_mode;
     
+    if (system_info.supports_ansi_seq) {
+        // ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        mode |= 0x0004;
+    }
+    
+    SetConsoleMode(out, mode);
+}
+
+void OsConsoleWrite(String text)
+{
+    PROFILE_FUNCTION;
+    
+    HANDLE std = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD written;
-    WriteFile(std, text0.data, (U32)text0.size, &written, NULL);
-    FlushFileBuffers(std);
-    
-    //WriteConsoleA(std, text0.data, (U32)text0.size, &written, NULL);
-    //OutputDebugStringA(text0.data);
+    WriteFile(std, text.data, (U32)text.size, &written, NULL);
 }
 
-void OsConsoleClear()
+void OsConsoleFlush()
 {
-    HANDLE std = get_std_handle();
+    PROFILE_FUNCTION;
     
-    CONSOLE_SCREEN_BUFFER_INFO info;
-    GetConsoleScreenBufferInfo(std, &info);
-    DWORD count;
+    HANDLE std = GetStdHandle(STD_OUTPUT_HANDLE);
+    FlushFileBuffers(std);
+}
+
+internal_fn String ReadStdinBlocking(Arena* arena, HANDLE handle)
+{
+    char buffer[1024];
+    DWORD bytes_read;
     
-    COORD home = {0, 0};
-    FillConsoleOutputCharacter(std, ' ', info.dwSize.X * info.dwSize.Y, home, &count);
-    FillConsoleOutputAttribute(std, info.wAttributes, info.dwSize.X * info.dwSize.Y, home, &count);
-    SetConsoleCursorPosition(std, home);
+    BOOL success = ReadFile(handle, buffer, sizeof(buffer) - 1, &bytes_read, NULL);
+    
+    if (!success) {
+        return {};
+    }
+    
+    buffer[bytes_read] = '\0';
+    
+    return StrCopy(arena, buffer);
+}
+
+internal_fn String ReadConsoleNonBlocking(Arena* arena, HANDLE handle)
+{
+    INPUT_RECORD records[1024];
+    DWORD read_count = 0;
+    
+    if (!PeekConsoleInput(handle, records, countof(records), &read_count) || read_count == 0) {
+        return {};
+    }
+    
+    ReadConsoleInput(handle, records, read_count, &read_count);
+    
+    char buffer[1025];
+    U32 count = 0;
+    
+    for (DWORD i = 0; i < read_count; i++)
+    {
+        INPUT_RECORD* rec = &records[i];
+        
+        if (rec->EventType == KEY_EVENT) {
+            KEY_EVENT_RECORD key = rec->Event.KeyEvent;
+            
+            if (key.bKeyDown && key.uChar.AsciiChar) {
+                buffer[count++] = key.uChar.AsciiChar;
+            }
+        }
+    }
+    
+    buffer[count] = '\0';
+    return StrCopy(arena, buffer);
+}
+
+String OsConsoleRead(Arena* arena)
+{
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    
+    if (handle == INVALID_HANDLE_VALUE) {
+        return {};
+    }
+    
+    DWORD mode = 0;
+    GetConsoleMode(handle, &mode);
+    
+    B32 blocking = mode & ENABLE_LINE_INPUT;
+    
+    if (blocking) return ReadStdinBlocking(arena, handle);
+    else return ReadConsoleNonBlocking(arena, handle);
 }
 
 void* OsHeapAllocate(U64 size) {
-    return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size_t)size);
+    PROFILE_FUNCTION;
+    void* ptr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size_t)size);
+    //PROFILE_ALLOC("Heap", ptr, size);
+    return ptr;
 }
 
 void OsHeapFree(void* address) {
+    PROFILE_FUNCTION;
+    if (address == NULL) return;
+    //PROFILE_FREE("Heap", address);
     HeapFree(GetProcessHeap(), 0, address);
 }
 
@@ -182,6 +254,7 @@ OS_Thread OsThreadStart(ThreadFn* fn, RBuffer data)
 
 void OsThreadWait(OS_Thread thread, U32 millis)
 {
+    PROFILE_FUNCTION;
     DWORD dw_millis = millis;
     if (millis == U32_MAX) dw_millis = INFINITE;
     
@@ -189,6 +262,7 @@ void OsThreadWait(OS_Thread thread, U32 millis)
 }
 
 void OsThreadYield() {
+    PROFILE_FUNCTION;
     SwitchToThread();
 }
 
@@ -201,6 +275,7 @@ OS_Semaphore OsSemaphoreCreate(U32 initial_count, U32 max_count)
 
 void OsSemaphoreWait(OS_Semaphore semaphore, U32 millis)
 {
+    PROFILE_FUNCTION;
     Assert(semaphore.value);
     if (semaphore.value == 0) return;
     

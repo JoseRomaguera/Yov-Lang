@@ -8,7 +8,7 @@ Foo :: struct {
 global_val : Int;
 global_ref : Int&;
 
-main :: func
+Main :: func
 {
     global_val = 0;
     global_ref = &global_val;
@@ -16,36 +16,36 @@ main :: func
     val0 := 4;
     ref0 := &val0;
     
-    assert(val0 == ref0);
+    Assert(val0 == ref0);
     val0 = 5;
-    assert(val0 == ref0);
+    Assert(val0 == ref0);
     ref0 = 6;
-    assert(val0 == ref0);
+    Assert(val0 == ref0);
     
     
     ref0 = global_ref;
-    assert(val0 != ref0);
+    Assert(val0 != ref0);
     
     ref0 = 7;
-    assert(ref0 == global_ref && ref0 == global_val);
+    Assert(ref0 == global_ref && ref0 == global_val);
     
     foo0: Foo;
     foo0.ref = &val0;
     foo0.val = ref0;
     foo0.child = &foo0;
     
-    assert(foo0.ref == val0);
-    assert(foo0.val == 7 && foo0.val == foo0.child.val);
+    Assert(foo0.ref == val0);
+    Assert(foo0.val == 7 && foo0.val == foo0.child.val);
     
     foo1: Foo;
     foo1.child = &foo0;
     
-    assert(foo0.val == foo1.child.val && foo1.val != foo1.child.val);
+    Assert(foo0.val == foo1.child.val && foo1.val != foo1.child.val);
     
     {
         x := 5;
         inc(&x);
-        assert(x == 6);
+        Assert(x == 6);
     }
     
     {
@@ -55,7 +55,7 @@ main :: func
         
         c = 10;
         
-        assert(a == 10);
+        Assert(a == 10);
     }
 }
 

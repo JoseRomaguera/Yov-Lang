@@ -2,7 +2,7 @@
 
 //- CORE
 
-void Intrinsic_typeof(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Typeof(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Program* program = runtime->program;
     
@@ -19,25 +19,25 @@ void Intrinsic_typeof(Runtime* runtime, Array<Reference> params, Array<Reference
     returns[0] = type;
 }
 
-void Intrinsic_print(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Print(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String str = StrFromRef(context.arena, runtime, params[0]);
-    OsPrint(PrintLevel_UserCode, str);
+    PrintEx(PrintLevel_UserCode, str);
 }
 
-void Intrinsic_println(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_PrintLn(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String str = StrFromRef(context.arena, runtime, params[0]);
     PrintEx(PrintLevel_UserCode, "%S\n", str);
 }
 
-void Intrinsic_exit(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Exit(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     I64 exit_code = RefGetSInt(params[0]);
     RuntimeExit(runtime, (I32)exit_code);
 }
 
-void Intrinsic_set_cd(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_SetCD(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Reference ref = RuntimeGetCurrentDirRef(runtime);
     String path = get_string(params[0]);
@@ -59,7 +59,7 @@ void Intrinsic_set_cd(Runtime* runtime, Array<Reference> params, Array<Reference
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_assert(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Assert(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     B32 result = RefGetBool(params[0]);
     
@@ -71,7 +71,7 @@ void Intrinsic_assert(Runtime* runtime, Array<Reference> params, Array<Reference
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_failed(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Failed(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String message = get_string(params[0]);
     I64 exit_code = RefGetSInt(params[1]);
@@ -80,13 +80,35 @@ void Intrinsic_failed(Runtime* runtime, Array<Reference> params, Array<Reference
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_sleep(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_SleepMs(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     U64 millis = RefGetUInt(params[0]);
     OsThreadSleep(millis);
 }
 
-void Intrinsic_env(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Sleep(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    F64 sec = RefGetFloat(params[0]);
+    
+    U64 start = OsTimerGet();
+    
+    U64 nanos = (U64)(sec * 1000000000.0);
+    
+    U64 millis = nanos / 1000000;
+    if (millis >= 2) {
+        OsThreadSleep(millis - 1);
+    }
+    
+    U64 seconds_in_timer_freq = (U64)(sec * (F64)system_info.timer_frequency);
+    
+    U64 end = start + seconds_in_timer_freq;
+    
+    while (OsTimerGet() < end) {
+        OsThreadYield();
+    }
+}
+
+void Intrinsic_Env(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
@@ -96,7 +118,7 @@ void Intrinsic_env(Runtime* runtime, Array<Reference> params, Array<Reference> r
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_env_path(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_EnvPath(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
@@ -110,7 +132,7 @@ void Intrinsic_env_path(Runtime* runtime, Array<Reference> params, Array<Referen
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_env_path_array(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
@@ -162,12 +184,10 @@ void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params,
 {
     Program* program = runtime->program;
     
-#if DEV
     VType array_type = VTypeNext(program, params[0].vtype);
     VType element_type = VTypeNext(program, array_type);
     Assert(TypeIsReference(params[0].vtype) && TypeIsArray(array_type));
     Assert(TypeEquals(program, element_type, params[1].vtype));
-#endif
     
     Reference dst = RefDereference(runtime, params[0]);
     Reference src = params[1];
@@ -180,17 +200,102 @@ void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params,
     ref_set_member(runtime, dst, dst_index, src);
 }
 
-//- CONSOLE 
-
-void Intrinsic_console_write(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String str = get_string(params[0]);
-    OsPrint(PrintLevel_UserCode, str);
+    Program* program = runtime->program;
+    
+    if (!TypeIsReference(params[0].vtype) || !TypeIsArray(VTypeNext(program, params[0].vtype))) {
+        ReportErrorRT("First parameter is not an array reference");
+        return;
+    }
+    
+    VType array_type = VTypeNext(program, params[0].vtype);
+    VType element_type = VTypeNext(program, array_type);
+    
+    Reference dst = RefDereference(runtime, params[0]);
+    U64 index = RefGetUInt(params[1]);
+    
+    ObjectData_Array* dst_array = RefGetArray(dst);
+    
+    if (index >= dst_array->count) {
+        ReportErrorRT("Array out of bounds");
+        return;
+    }
+    
+    U32 element_size = VTypeGetSize(element_type);
+    
+    ref_release_internal(runtime, ref_get_member(runtime, dst, (U32)index), true);
+    
+    dst_array->count--;
+    for (U32 i = (U32)index; i < dst_array->count; i++)
+    {
+        U8* e0 = dst_array->data + (i + 0) * element_size;
+        U8* e1 = dst_array->data + (i + 1) * element_size;
+        MemoryCopy(e0, e1, element_size);
+    }
 }
 
-void Intrinsic_console_clear(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    OsConsoleClear();
+    Program* program = runtime->program;
+    
+    if (!TypeIsReference(params[0].vtype) || !TypeIsArray(VTypeNext(program, params[0].vtype))) {
+        ReportErrorRT("First parameter is not an array reference");
+        return;
+    }
+    
+    VType array_type = VTypeNext(program, params[0].vtype);
+    VType element_type = VTypeNext(program, array_type);
+    
+    Reference dst = RefDereference(runtime, params[0]);
+    U64 index = RefGetUInt(params[1]);
+    
+    ObjectData_Array* dst_array = RefGetArray(dst);
+    
+    if (index >= dst_array->count) {
+        ReportErrorRT("Array out of bounds");
+        return;
+    }
+    
+    U32 element_size = VTypeGetSize(element_type);
+    
+    ref_release_internal(runtime, ref_get_member(runtime, dst, (U32)index), true);
+    
+    U32 last_index = dst_array->count - 1;
+    
+    U8* e0 = dst_array->data + index * element_size;
+    U8* e1 = dst_array->data + last_index * element_size;
+    if (e0 != e1) {
+        MemoryCopy(e0, e1, element_size);
+    }
+    
+    dst_array->count--;
+}
+
+//- CONSOLE 
+
+void Intrinsic_ConsoleConfigure(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    B32 raw_reads = RefGetBool(params[0]);
+    
+    OsConsoleConfigure(raw_reads);
+}
+
+void Intrinsic_ConsoleWrite(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    String str = get_string(params[0]);
+    OsConsoleWrite(str);
+}
+
+void Intrinsic_ConsoleFlush(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    OsConsoleFlush();
+}
+
+void Intrinsic_ConsoleRead(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    String str = OsConsoleRead(context.arena);
+    returns[0] = AllocString(runtime, str);
 }
 
 //- EXTERNAL CALLS
@@ -205,7 +310,7 @@ internal_fn void ReturnFromExternalCall(Runtime* runtime, CallOutput res, Array<
     returns[1] = ref_from_Result(runtime, res.result);
 }
 
-void Intrinsic_call(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Call(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     CallOutput res = {};
     
@@ -222,7 +327,7 @@ void Intrinsic_call(Runtime* runtime, Array<Reference> params, Array<Reference> 
     ReturnFromExternalCall(runtime, res, returns);
 }
 
-void Intrinsic_call_exe(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_CallExe(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String exe_name = get_string(params[0]);
     String args = get_string(params[1]);
@@ -240,7 +345,7 @@ void Intrinsic_call_exe(Runtime* runtime, Array<Reference> params, Array<Referen
     ReturnFromExternalCall(runtime, res, returns);
 }
 
-void Intrinsic_call_script(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_CallScript(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String script_name = get_string(params[0]);
     String args = get_string(params[1]);
@@ -334,87 +439,74 @@ void Intrinsic_PathResolve(Runtime* runtime, Array<Reference> params, Array<Refe
     returns[0] = AllocString(runtime, res);
 }
 
-struct JsonProperty {
-    String name;
-    String value;
-};
-
-internal_fn U64 json_skip(String json, U64 cursor)
+internal_fn U64 RuntimeRandom(Runtime* runtime)
 {
-    if (cursor != 0) {
-        while (cursor < json.size && json[cursor] != ',') cursor++;
+    Program* program = runtime->program;
+    
+    Reference seed_ref = ref_get_member(runtime, runtime->common_globals.context, vtype_get_member(VType_Context, "seed").index);
+    U64 seed = RefGetUInt(seed_ref);
+    
+    seed += 0x9E3779B97F4A7C15;
+    
+    U64 z = seed;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
+    U64 result = z ^ (z >> 31);
+    
+    RefSetUInt(seed_ref, seed);
+    return result;
+}
+
+void Intrinsic_Random(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    returns[0] = AllocUInt(runtime, RuntimeRandom(runtime));
+}
+
+void Intrinsic_RandomRange(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    I64 min = RefGetInt(params[0]);
+    I64 max = RefGetInt(params[1]);
+    
+    if (max < min) {
+        Swap(min, max);
     }
-    if (cursor >= json.size) return cursor;
-    while (cursor < json.size && json[cursor] != '\"') cursor++;
-    return cursor;
-}
-
-internal_fn JsonProperty json_get_property(String json, U64 cursor)
-{
-    while (cursor < json.size && json[cursor] != ':') cursor++;
-    if (cursor >= json.size) return {};
     
-    U64 separator = cursor;// TODO(Jose): 
-}
-
-internal_fn B32 json_access(String* dst, String json, String searching_name)
-{
-    *dst = {};
+    I64 range = max - min;
+    I64 result = min;
+    U64 random = RuntimeRandom(runtime);
     
-    U64 cursor = 0;
-    
-    while (cursor < json.size)
+    if (range <= 0)
     {
-        if (json[cursor] == '\"')
-        {
-            U64 name_begin = cursor + 1;
-            U64 name_end = name_begin;
-            
-            while (name_end < json.size && json[name_end] != '\"')
-                name_end++;
-            
-            String name = StrSub(json, name_begin, name_end - name_begin);
-            
-            if (StrEquals(name, searching_name)) {
-                // TODO(Jose): 
-                return true;
-            }
-        }
-        
-        cursor = json_skip(json, cursor);
+        random %= (U64)range;
+        result = random + min;
     }
     
-    return false;
+    returns[0] = AllocSInt(runtime, result);
 }
 
-void Intrinsic_json_route(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Random01(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    String json = get_string(params[0]);
-    String route = get_string(params[1]);
-    
-    Array<String> names = StrSplit(context.arena, route, "/");
-    
-    B32 success = true;
-    foreach(i, names.count)
-    {
-        String last_json = json;
-        json = {};
-        if (!json_access(&json, last_json, names[i])) {
-            success = false;
-            break;
-        }
-    }
-    
-    Result res = RESULT_SUCCESS;
-    if (!success) res = ResultMakeFailed("Json route not found");
-    
-    returns[0] = AllocString(runtime, json);
-    returns[1] = ref_from_Result(runtime, res);
+    U64 random = RuntimeRandom(runtime);
+    U64 bits = (random >> 12) | 0x3FF0000000000000;
+    F64 result = *(F64*)&bits; 
+    returns[0] = AllocFloat(runtime, result - 1.0);
+}
+
+void Intrinsic_TimeTicks(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    returns[0] = AllocUInt(runtime, OsTimerGet());
+}
+
+void Intrinsic_TimeElapsed(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    U64 time = OsTimerGet() - runtime->started_time;
+    F64 elapsed = time / (F64)system_info.timer_frequency;
+    returns[0] = AllocFloat(runtime, elapsed);
 }
 
 //- YOV
 
-void Intrinsic_yov_require(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovRequire(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     U64 major = RefGetUInt(params[0]);
     U64 minor = RefGetUInt(params[1]);
@@ -429,7 +521,7 @@ void Intrinsic_yov_require(Runtime* runtime, Array<Reference> params, Array<Refe
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_yov_require_min(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovRequireMin(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     U64 major = RefGetUInt(params[0]);
     U64 minor = RefGetUInt(params[1]);
@@ -446,7 +538,7 @@ void Intrinsic_yov_require_min(Runtime* runtime, Array<Reference> params, Array<
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_yov_require_max(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovRequireMax(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     U64 major = RefGetUInt(params[0]);
     U64 minor = RefGetUInt(params[1]);
@@ -463,7 +555,7 @@ void Intrinsic_yov_require_max(Runtime* runtime, Array<Reference> params, Array<
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_yov_parse(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovParse(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
 #if 0 // TODO(Jose): 
     SCRATCH();
@@ -502,21 +594,21 @@ void Intrinsic_yov_parse(Runtime* runtime, Array<Reference> params, Array<Refere
 
 //- MISC
 
-void Intrinsic_ask_yesno(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_AskYesNo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String content = get_string(params[0]);
     B32 result = RuntimeAskYesNo(runtime, "Ask", content);
     returns[0] = AllocBool(runtime, result);
 }
 
-void Intrinsic_exists(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Exists(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String path = get_string(params[0]);
     B32 result = OsPathExists(path);
     returns[0] = AllocBool(runtime, result);
 }
 
-void Intrinsic_create_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirCreate(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     B32 recursive = RefGetBool(params[1]);
@@ -530,7 +622,7 @@ void Intrinsic_create_directory(Runtime* runtime, Array<Reference> params, Array
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_delete_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirDelete(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
@@ -543,7 +635,7 @@ void Intrinsic_delete_directory(Runtime* runtime, Array<Reference> params, Array
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_copy_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirCopy(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -557,7 +649,7 @@ void Intrinsic_copy_directory(Runtime* runtime, Array<Reference> params, Array<R
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_move_directory(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirMove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -571,7 +663,7 @@ void Intrinsic_move_directory(Runtime* runtime, Array<Reference> params, Array<R
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_copy_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileCopy(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -584,7 +676,7 @@ void Intrinsic_copy_file(Runtime* runtime, Array<Reference> params, Array<Refere
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_move_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileMove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -596,7 +688,7 @@ void Intrinsic_move_file(Runtime* runtime, Array<Reference> params, Array<Refere
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_delete_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileDelete(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
@@ -607,32 +699,7 @@ void Intrinsic_delete_file(Runtime* runtime, Array<Reference> params, Array<Refe
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_write_entire_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
-{
-    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
-    String content = get_string(params[1]);
-    // TODO(Jose): B32 append = get_bool(params[2]);
-    
-    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Write entire file:\n'%S'", path));
-    if (!res.failed) res = OsWriteEntireFile(path, { content.data, content.size });
-    
-    returns[0] = ref_from_Result(runtime, res);
-}
-
-void Intrinsic_read_entire_file(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
-{
-    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
-    
-    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Read entire file:\n'%S'", path));
-    RBuffer content{};
-    if (!res.failed) res = OsReadEntireFile(context.arena, path, &content);
-    String content_str = StrMake((char*)content.data, content.size);
-    
-    returns[0] = AllocString(runtime, content_str);
-    returns[1] = ref_from_Result(runtime, res);
-}
-
-void Intrinsic_file_get_info(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileGetInfo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Program* program = runtime->program;
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
@@ -647,7 +714,7 @@ void Intrinsic_file_get_info(Runtime* runtime, Array<Reference> params, Array<Re
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_dir_get_files_info(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirGetInfo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Program* program = runtime->program;
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
@@ -667,15 +734,40 @@ void Intrinsic_dir_get_files_info(Runtime* runtime, Array<Reference> params, Arr
     returns[1] = ref_from_Result(runtime, res);
 }
 
+void Intrinsic_WriteEntireFile(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
+    String content = get_string(params[1]);
+    // TODO(Jose): B32 append = get_bool(params[2]);
+    
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Write entire file:\n'%S'", path));
+    if (!res.failed) res = OsWriteEntireFile(path, { content.data, content.size });
+    
+    returns[0] = ref_from_Result(runtime, res);
+}
+
+void Intrinsic_ReadEntireFile(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
+    
+    Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Read entire file:\n'%S'", path));
+    RBuffer content{};
+    if (!res.failed) res = OsReadEntireFile(context.arena, path, &content);
+    String content_str = StrMake((char*)content.data, content.size);
+    
+    returns[0] = AllocString(runtime, content_str);
+    returns[1] = ref_from_Result(runtime, res);
+}
+
 //- MSVC
 
-void Intrinsic_msvc_import_env_x64(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_MsvcImportEnvX64(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Result res = MSVCImportEnv(MSVC_Env_x64);
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_msvc_import_env_x86(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_MsvcImportEnvX86(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
     Result res = MSVCImportEnv(MSVC_Env_x86);
     returns[0] = ref_from_Result(runtime, res);
@@ -689,29 +781,36 @@ struct IntrinsicRegistry {
 };
 
 IntrinsicRegistry intrinsics[] = {
-    { Intrinsic_typeof, "typeof" },
-    { Intrinsic_print, "print" },
-    { Intrinsic_println, "println" },
-    { Intrinsic_exit, "exit" },
-    { Intrinsic_set_cd, "set_cd" },
-    { Intrinsic_assert, "assert" },
-    { Intrinsic_failed, "failed" },
-    { Intrinsic_sleep, "sleep" },
-    { Intrinsic_env, "env" },
-    { Intrinsic_env_path, "env_path" },
-    { Intrinsic_env_path_array, "env_path_array" },
+    { Intrinsic_Typeof, "Typeof" },
+    { Intrinsic_Print, "Print" },
+    { Intrinsic_PrintLn, "PrintLn" },
+    { Intrinsic_Exit, "Exit" },
+    { Intrinsic_SetCD, "SetCD" },
+    { Intrinsic_Assert, "Assert" },
+    { Intrinsic_Failed, "Failed" },
+    { Intrinsic_SleepMs, "SleepMs" },
+    { Intrinsic_Sleep, "Sleep" },
+    { Intrinsic_Env, "Env" },
+    { Intrinsic_EnvPath, "EnvPath" },
+    { Intrinsic_EnvPathArray, "EnvPathArray" },
     
     { Intrinsic_ArrayAppendBack, "ArrayAppendBack" },
     // TODO(Jose): { Intrinsic_ArrayAppendFront, "ArrayAppendFront" },
     { Intrinsic_ArrayAppendElementBack, "ArrayAppendElementBack" },
     // TODO(Jose): { Intrinsic_ArrayAppendElementFront, "ArrayAppendElementFront" },
+    { Intrinsic_ArrayRemove, "ArrayRemove" },
+    { Intrinsic_ArrayUnorderedRemove, "ArrayUnorderedRemove" },
     
     
-    { Intrinsic_console_write, "console_write" },
-    { Intrinsic_console_clear, "console_clear" },
-    { Intrinsic_call, "call" },
-    { Intrinsic_call_exe, "call_exe" },
-    { Intrinsic_call_script, "call_script" },
+    { Intrinsic_ConsoleConfigure, "ConsoleConfigure" },
+    { Intrinsic_ConsoleWrite, "ConsoleWrite" },
+    { Intrinsic_ConsoleFlush, "ConsoleFlush" },
+    { Intrinsic_ConsoleRead, "ConsoleRead" },
+    { Intrinsic_Call, "Call" },
+    { Intrinsic_CallExe, "CallExe" },
+    { Intrinsic_CallScript, "CallScript" },
+    
+    { Intrinsic_StrAppend, "TimerOsClock" },
     
     { Intrinsic_StrAppend, "StrAppend" },
     { Intrinsic_StrEquals, "StrEquals" },
@@ -722,26 +821,35 @@ IntrinsicRegistry intrinsics[] = {
     { Intrinsic_PathAppend, "PathAppend" },
     { Intrinsic_PathResolve, "PathResolve" },
     
-    { Intrinsic_json_route, "json_route" },
-    { Intrinsic_yov_require, "yov_require" },
-    { Intrinsic_yov_require_min, "yov_require_min" },
-    { Intrinsic_yov_require_max, "yov_require_max" },
-    { Intrinsic_yov_parse, "yov_parse" },
-    { Intrinsic_ask_yesno, "ask_yesno" },
-    { Intrinsic_exists, "exists" },
-    { Intrinsic_create_directory, "create_directory" },
-    { Intrinsic_delete_directory, "delete_directory" },
-    { Intrinsic_copy_directory, "copy_directory" },
-    { Intrinsic_move_directory, "move_directory" },
-    { Intrinsic_copy_file, "copy_file" },
-    { Intrinsic_move_file, "move_file" },
-    { Intrinsic_delete_file, "delete_file" },
-    { Intrinsic_write_entire_file, "write_entire_file" },
-    { Intrinsic_read_entire_file, "read_entire_file" },
-    { Intrinsic_file_get_info, "file_get_info" },
-    { Intrinsic_dir_get_files_info, "dir_get_files_info" },
-    { Intrinsic_msvc_import_env_x64, "msvc_import_env_x64" },
-    { Intrinsic_msvc_import_env_x86, "msvc_import_env_x86" },
+    { Intrinsic_TimeTicks, "TimeTicks" },
+    { Intrinsic_TimeElapsed, "TimeElapsed" },
+    
+    { Intrinsic_Random, "Random" },
+    { Intrinsic_RandomRange, "RandomRange" },
+    { Intrinsic_Random01, "Random01" },
+    
+    { Intrinsic_YovRequire, "YovRequire" },
+    { Intrinsic_YovRequireMin, "YovRequireMin" },
+    { Intrinsic_YovRequireMax, "YovRequireMax" },
+    { Intrinsic_YovParse, "YovParse" },
+    { Intrinsic_AskYesNo, "AskYesNo" },
+    
+    { Intrinsic_Exists, "Exists" },
+    { Intrinsic_DirCreate, "DirCreate" },
+    { Intrinsic_DirDelete, "DirDelete" },
+    { Intrinsic_DirCopy, "DirCopy" },
+    { Intrinsic_DirMove, "DirMove" },
+    { Intrinsic_FileCopy, "FileCopy" },
+    { Intrinsic_FileMove, "FileMove" },
+    { Intrinsic_FileDelete, "FileDelete" },
+    { Intrinsic_FileGetInfo, "FileGetInfo" },
+    { Intrinsic_DirGetInfo, "DirGetInfo" },
+    
+    { Intrinsic_WriteEntireFile, "WriteEntireFile" },
+    { Intrinsic_ReadEntireFile, "ReadEntireFile" },
+    
+    { Intrinsic_MsvcImportEnvX64, "MsvcImportEnvX64" },
+    { Intrinsic_MsvcImportEnvX86, "MsvcImportEnvX86" },
     
 };
 

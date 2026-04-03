@@ -7,53 +7,53 @@ SHOW_PRINTS : Bool : false;
 test_count : Int = 0;
 failed_count : Int = 0;
 
-main :: func
+Main :: func
 {
-    set_cd("../");
+    SetCD("../");
     
-    println("Running tests...");
+    PrintLn("Running tests...");
     for (it := 0; it < REPEAT; it += 1) {
-        run_all_tests();
+        RunAllTests();
         if (failed_count > 0) break;
     }
     
-    println("Failed: {failed_count}/{test_count}");
-    exit(failed_count);
+    PrintLn("Failed: {failed_count}/{test_count}");
+    Exit(failed_count);
 }
 
-run_all_tests :: func
+RunAllTests :: func
 {
-    run_test("examples/basics.yov", "", 0);
-    run_test("examples/default_definitions.yov", "", 0);
-    run_test("examples/errors.yov", "", 0);
-    run_test("examples/external_calls.yov", "", 0);
-    run_test("examples/file_system.yov", "", 0);
-    run_test("examples/script_args.yov", "-foo=A", 0);
+    RunTest("examples/basics.yov", "", 0);
+    RunTest("examples/default_definitions.yov", "", 0);
+    RunTest("examples/errors.yov", "", 0);
+    RunTest("examples/external_calls.yov", "", 0);
+    RunTest("examples/file_system.yov", "", 0);
+    RunTest("examples/script_args.yov", "-foo=A", 0);
     
-    run_test("tests/basics.yov", "", 0);
-    run_test("tests/expressions.yov", "", 0);
-    run_test("tests/references.yov", "", 0);
-    run_test("tests/any.yov", "", 0);
+    RunTest("tests/basics.yov", "", 0);
+    RunTest("tests/expressions.yov", "", 0);
+    RunTest("tests/references.yov", "", 0);
+    RunTest("tests/any.yov", "", 0);
 }
 
-run_test :: func (name: String, args: String, expected_code: Int)
+RunTest :: func (name: String, args: String, expected_code: Int)
 {
     if (SHOW_PRINTS) calls.redirect_stdout = RedirectStdout.Console;
-    else calls.redirect_stdout = RedirectStdout.Ignore;
+    else calls.redirect_stdout = RedirectStdout.Script;
     
     for (it := 0; it < ITERATIONS; it += 1) {
         test_count += 1;
-        out, res := call_script(name, args, "-no_user");
+        out, res := CallScript(name, args, "-no_user");
         
         if (res.code != expected_code) {
             failed_count += 1;
-            println("-> Test failed: {name}");
-            println(out.stdout);
+            PrintLn("-> Test failed: {name}");
+            PrintLn(out.stdout);
             return;
         }
         
     }
     
-    if (ITERATIONS == 1) println("Test succeded: {name}");
-    else println("Test succeded x{ITERATIONS}: {name}");
+    if (ITERATIONS == 1) PrintLn("Test succeded: {name}");
+    else PrintLn("Test succeded x{ITERATIONS}: {name}");
 }

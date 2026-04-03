@@ -248,6 +248,8 @@ B32 VTypeValid(VType vtype) {
 
 VType VTypeNext(Program* program, VType vtype)
 {
+    PROFILE_FUNCTION;
+    
     if (vtype.kind == VKind_Array) {
         if (vtype.array_dimensions == 1) return TypeFromIndex(program, vtype.base_index);
         vtype.array_dimensions--;
@@ -324,6 +326,8 @@ B32 VTypeNeedsInternalRelease(Program* program, VType vtype)
 
 String VTypeGetName(Program* program, VType vtype)
 {
+    PROFILE_FUNCTION;
+    
     if (vtype.kind == VKind_Array)
     {
         U64 needed_size = vtype.base_name.size + (vtype.array_dimensions * 2);
@@ -487,6 +491,8 @@ Array<VType> vtypes_from_definitions(Arena* arena, Array<ObjectDefinition> defs)
 
 void DefinitionIdentify(Program* program, U32 index, DefinitionType type, String identifier, Location location)
 {
+    PROFILE_FUNCTION;
+    
     if (index >= program->definitions.count) {
         InvalidCodepath();
         return;
@@ -1561,6 +1567,8 @@ String StringFromUnitKind(Arena* arena, UnitKind unit)
 
 String StringFromUnit(Arena* arena, Program* program, U32 index, U32 index_digits, U32 line_digits, Unit unit)
 {
+    PROFILE_FUNCTION;
+    
     StringBuilder builder = string_builder_make(context.arena);
     
     String index_str = StrFormat(context.arena, "%u", index);

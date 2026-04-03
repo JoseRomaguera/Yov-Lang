@@ -8,9 +8,9 @@ Animal :: enum {
     Cat, Dog, Human = 10
 }
 
-main :: func
+Main :: func
 {
-    println("\n-> DEFINITIONS");
+    PrintLn("\n-> DEFINITIONS");
     
     integer0 : Int; // Zero initialization by default
     integer1: Int = 5;
@@ -19,7 +19,7 @@ main :: func
     
     //==============================================
     
-    println("\n-> BASIC TYPES");
+    PrintLn("\n-> BASIC TYPES");
     
     integer: Int = 10;
     unsigned_integer: UInt = 20;
@@ -29,13 +29,13 @@ main :: func
     
     //==============================================
     
-    println("\n-> EXPRESIONS");
+    PrintLn("\n-> EXPRESIONS");
     
     expresion_result := (integer + 10) * 2 == 40 && boolean;
     
     //==============================================
     
-    println("\n-> CASTINGS");
+    PrintLn("\n-> CASTINGS");
     
     // Implicit 
     impl_float_from_int : Float = integer;
@@ -50,44 +50,44 @@ main :: func
     
     //==============================================
     
-    println("\n-> STRING LITERALS");
+    PrintLn("\n-> STRING LITERALS");
     
     string_literal := "Last expresion is: {expresion_result}";
-    println(string_literal);
+    PrintLn(string_literal);
     
     path := "some_path/test0" / "../test1"; // Append and resolve paths using '/'
-    println("Path = " + path); // Append strings using '+'
+    PrintLn("Path = " + path); // Append strings using '+'
     
-    println("Insert any expression inside braces: {5+5/2 == integer}");
-    print("Special Chars: \\, \{, \}, \", \t, \n");
+    PrintLn("Insert any expression inside braces: {5+5/2 == integer}");
+    Print("Special Chars: \\, \{, \}, \", \t, \n");
     
     //==============================================
     
-    println("\n-> STRUCTS");
+    PrintLn("\n-> STRUCTS");
     
     foo: Foo;
-    println("foo = {foo}");
-    println("Members = {foo.member0}, {foo.member1}");
-    println("Foo.name = {Foo.name}");
+    PrintLn("foo = {foo}");
+    PrintLn("Members = {foo.member0}, {foo.member1}");
+    PrintLn("Foo.name = {Foo.name}");
     
     //==============================================
     
-    println("\n-> ENUMS");
+    PrintLn("\n-> ENUMS");
     
     animal0 := Animal.Cat;
     animal1: Animal = .Human;
     
-    println("animal0 = {animal0}");
-    println("animal1.index = {animal1.index}");
-    println("animal1.value = {animal1.value}");
-    println("animal1.name = {animal1.name}");
-    println("enum name = {Animal.name}");
-    println("enum count = {Animal.count}");
-    println("enum array = {Animal.array}");
+    PrintLn("animal0 = {animal0}");
+    PrintLn("animal1.index = {animal1.index}");
+    PrintLn("animal1.value = {animal1.value}");
+    PrintLn("animal1.name = {animal1.name}");
+    PrintLn("enum name = {Animal.name}");
+    PrintLn("enum count = {Animal.count}");
+    PrintLn("enum array = {Animal.array}");
     
     //==============================================
     
-    println("\n-> REFERENCES");
+    PrintLn("\n-> REFERENCES");
     
     foo0: Foo; // 'foo0' contains a valid object by default
     foo1 := Foo(); // 'Foo()' is an expression that creates a default object of 'Foo'
@@ -95,100 +95,100 @@ main :: func
     foo3 := &foo1; // 'foo3' stores the reference of 'foo1', now refers to the same object
     
     foo3.member0 = 10;
-    println("'foo2' references 'foo1' = {foo2.member0 == foo1.member0}");
-    println("'foo3' references 'foo1' = {foo3.member0 == foo1.member0}");
+    PrintLn("'foo2' references 'foo1' = {foo2.member0 == foo1.member0}");
+    PrintLn("'foo3' references 'foo1' = {foo3.member0 == foo1.member0}");
     
     //==============================================
     
-    println("\n-> IF-STATEMENT");
+    PrintLn("\n-> IF-STATEMENT");
     
-    say_it := ask_yesno("Say Hello World?");
+    say_it := AskYesNo("Say Hello World?");
     
     if (say_it) {
-        println("Hello World");
+        PrintLn("Hello World");
     }
     else {
-        println("Not saying Hello World :(");
+        PrintLn("Not saying Hello World :(");
     }
     
     //==============================================
     
-    println("\n-> Loops");
+    PrintLn("\n-> Loops");
     
     j := 0;
     while (j < 3) {
-        println("While: {j}");
+        PrintLn("While: {j}");
         j+= 1;
     }
     
     for (i := 0; i < 3; i += 1) {
-        println("For: {i}");
+        PrintLn("For: {i}");
     }
     
     for (value: Animal.array) {
-        println("For Each: {value}");
+        PrintLn("For Each: {value}");
     }
     
     for (value, index: Animal.array) {
-        println("For Each({index}) = {value}");
+        PrintLn("For Each({index}) = {value}");
     }
     
     for (i := 0; true; i += 1) {
         if (i % 2 == 0) {
-            println("Continue on {i}");
+            PrintLn("Continue on {i}");
             continue;
         }
         if (i == 5) {
-            println("Break on {i}");
+            PrintLn("Break on {i}");
             break;
         }
     }
     
     //==============================================
     
-    println("\n-> Arrays");
+    PrintLn("\n-> Arrays");
     
     words := { "This", "is" } + { "a" };
     words += { "dynamic", "array" };
     words += "!";
     
-    println("words = {words}");
-    println("words.count = {words.count}");
+    PrintLn("words = {words}");
+    PrintLn("words.count = {words.count}");
     
     empty_array: Int[];
     array_with_defaults := [5]->Int;
     array_with_defaults[2] = 20;
     
-    println("empty_array = {empty_array}");
-    println("array_with_defaults = {array_with_defaults}");
+    PrintLn("empty_array = {empty_array}");
+    PrintLn("array_with_defaults = {array_with_defaults}");
     
     //==============================================
     
-    println("\n-> Functions");
+    PrintLn("\n-> Functions");
     
-    basic_function();
-    ret0 := function_with_return();
-    ret1 := function_with_params(5, 5);
-    println("Functions return: {ret0}, {ret1}");
+    BasicFunction();
+    ret0 := FunctionWithReturn();
+    ret1 := FunctionWithParams(5, 5);
+    PrintLn("Functions return: {ret0}, {ret1}");
     
     ret_ref := 10;
-    println("Value before: {ret_ref}");
-    function_with_refs(&ret_ref);
-    println("Value after: {ret_ref}");
+    PrintLn("Value before: {ret_ref}");
+    FunctionWithRefs(&ret_ref);
+    PrintLn("Value after: {ret_ref}");
 }
 
-basic_function :: func {
-    println("Hello from function");
+BasicFunction :: func {
+    PrintLn("Hello from function");
 }
 
-function_with_return :: func -> Int {
+FunctionWithReturn :: func -> Int {
     return 25;
 }
 
-function_with_params :: func (a: Int, b: Int) -> Int {
+FunctionWithParams :: func (a: Int, b: Int) -> Int {
     return a * b;
 }
 
-function_with_refs :: func (a: Int&) {
+FunctionWithRefs :: func (a: Int&) {
     a *= 2;
 }

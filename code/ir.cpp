@@ -2,6 +2,7 @@
 
 inline_fn IR_Unit* ir_unit_alloc(IR_Context* ir, UnitKind kind, Location location)
 {
+    PROFILE_FUNCTION;
     IR_Unit* unit = ArenaPushStruct<IR_Unit>(ir->arena);
     unit->src0 = ValueNone();
     unit->src1 = ValueNone();
@@ -67,6 +68,7 @@ IR_Group IRFromSingle(IR_Unit* unit, Value value)
 #if DEV
 internal_fn void DEV_validate_IR_Group(IR_Group out)
 {
+    PROFILE_FUNCTION;
     U32 count = 0;
     IR_Unit* unit = out.first;
     while (unit != NULL) {
@@ -80,6 +82,8 @@ internal_fn void DEV_validate_IR_Group(IR_Group out)
 
 IR_Group IRAppend(IR_Group o0, IR_Group o1)
 {
+    PROFILE_FUNCTION;
+    
     IR_Group out = {};
     out.success = o0.success && o1.success;
     if (!out.success) return IRFailed();
@@ -135,6 +139,7 @@ inline_fn IR_Group ir_append_5(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o
 
 internal_fn IR_Group ir_from_result_eval(IR_Context* ir, Value src, Location location)
 {
+    PROFILE_FUNCTION;
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_ResultEval, location);
     unit->src0 = src;
     return IRFromSingle(unit);
@@ -142,6 +147,7 @@ internal_fn IR_Group ir_from_result_eval(IR_Context* ir, Value src, Location loc
 
 IR_Group IRFromDefineObject(IR_Context* ir, RegisterKind register_kind, String identifier, VType vtype, B32 constant, Location location)
 {
+    PROFILE_FUNCTION;
     Assert(TypeIsAny(vtype) || VTypeValid(vtype));
     
     I32 register_index = IRRegisterAlloc(ir, vtype, register_kind, constant);
@@ -153,6 +159,7 @@ IR_Group IRFromDefineObject(IR_Context* ir, RegisterKind register_kind, String i
 
 IR_Group IRFromDefineTemporal(IR_Context* ir, VType vtype, Location location)
 {
+    PROFILE_FUNCTION;
     Assert(VTypeValid(vtype));
     
     I32 register_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
@@ -162,6 +169,8 @@ IR_Group IRFromDefineTemporal(IR_Context* ir, VType vtype, Location location)
 
 IR_Group IRFromReference(IR_Context* ir, B32 expects_lvalue, Value value, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = ir->reporter;
     
     if (TypeIsReference(value.vtype)) {
@@ -188,6 +197,8 @@ IR_Group IRFromReference(IR_Context* ir, B32 expects_lvalue, Value value, Locati
 
 IR_Group IRFromDereference(IR_Context* ir, Value value, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     if (value.vtype.kind != VKind_Reference) {
         InvalidCodepath();
@@ -199,6 +210,8 @@ IR_Group IRFromDereference(IR_Context* ir, Value value, Location location)
 
 internal_fn Value ValueFromSymbol(IR_Context* ir, String identifier, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Symbol symbol = ir_find_symbol(ir, identifier);
     
@@ -228,9 +241,10 @@ internal_fn Value ValueFromSymbol(IR_Context* ir, String identifier, Location lo
 
 IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
-    Symbol symbol = ir_find_symbol(ir, identifier);
     
     Value value = ValueFromSymbol(ir, identifier, location);
     
@@ -251,6 +265,8 @@ IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location)
 
 IR_Group IRFromCall(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext expr_context, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -272,6 +288,8 @@ IR_Group IRFromCall(IR_Context* ir, String identifier, Array<Value> parameters, 
 
 IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value> parameters, ExpresionContext expr_context, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = ir->reporter;
     Program* program = ir->program;
     
@@ -348,6 +366,8 @@ IR_Group IRFromDefaultInitializer(IR_Context* ir, VType vtype, Location location
 
 IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Assert(dst.kind == ValueKind_LValue || dst.kind == ValueKind_Register);
     
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Store, location);
@@ -359,6 +379,8 @@ IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location)
 
 IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Assert(dst.kind == ValueKind_LValue || dst.kind == ValueKind_Register);
     
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Copy, location);
@@ -370,6 +392,8 @@ IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location)
 
 IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, OperatorKind op, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -457,6 +481,8 @@ IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value s
 
 IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Value> destinations, Value src, OperatorKind op, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -496,6 +522,8 @@ IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Valu
 
 IR_Group IRFromOp(IR_Context* ir, UnitKind kind, VType dst_type, Value src0, Value src1, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Assert(dst_type.kind == VKind_Primitive);
     Value dst = ValueFromRegister(IRRegisterAlloc(ir, dst_type, RegisterKind_Local, false), dst_type, false);
     
@@ -509,6 +537,8 @@ IR_Group IRFromOp(IR_Context* ir, UnitKind kind, VType dst_type, Value src0, Val
 
 internal_fn IR_Group IRFromArrayAppend(IR_Context* ir, Value array, Value src, B32 reuse_array, B32 front, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     VType element_type = VTypeNext(program, array.vtype);
     B32 src_is_element = !TypeIsArray(src.vtype) || TypeEquals(program, element_type, src.vtype);
@@ -550,6 +580,8 @@ internal_fn IR_Group IRFromArrayAppend(IR_Context* ir, Value array, Value src, B
 
 IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorKind op, B32 reuse_left, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -750,6 +782,11 @@ IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorK
         
         // String from codepoint
         {
+            if (TypeIsInt(cp.vtype)) {
+                out = IRAppend(out, IRFromCasting(ir, cp, VType_UInt, false, location));
+                cp = out.value;
+            }
+            
             Array<Value> params = array_make<Value>(context.arena, 1);
             params[0] = cp;
             
@@ -803,6 +840,8 @@ IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorK
 
 IR_Group IRFromSignOperator(IR_Context* ir, Value src, OperatorKind op, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -834,6 +873,8 @@ IR_Group IRFromSignOperator(IR_Context* ir, Value src, OperatorKind op, Location
 
 IR_Group IRFromCasting(IR_Context* ir, Value src, VType type, B32 bitcast, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -848,12 +889,16 @@ IR_Group IRFromCasting(IR_Context* ir, Value src, VType type, B32 bitcast, Locat
 
 IR_Group IRFromOptionalCasting(IR_Context* ir, Value src, VType type, Location location)
 {
+    PROFILE_FUNCTION;
+    
     if (TypeEquals(ir->program, src.vtype, type)) return IRFromNone(src);
     return IRFromCasting(ir, src, type, false, location);
 }
 
 IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, VType vtype, Location location)
 {
+    PROFILE_FUNCTION;
+    
     IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Child, location);
     unit->dst_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
     unit->src0 = src;
@@ -866,6 +911,8 @@ IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, VTyp
 
 IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, ExpresionContext expr_context, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -935,6 +982,8 @@ IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, Expresi
 
 IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR_Group failure, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = ir->reporter;
     
     if (!TypeIsBool(condition.vtype)) {
@@ -966,6 +1015,8 @@ IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR
 
 IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group content, IR_Group update, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = ir->reporter;
     
     if (!init.success|| !update.success || !condition.success || !content.success)
@@ -1017,6 +1068,8 @@ IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group 
 
 IR_Group IRFromFlowModifier(IR_Context* ir, B32 is_break, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = ir->reporter;
     
     IR_LoopingScope* scope = ir_get_looping_scope(ir);
@@ -1033,6 +1086,8 @@ IR_Group IRFromFlowModifier(IR_Context* ir, B32 is_break, Location location)
 
 IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -1254,6 +1309,8 @@ internal_fn Unit UnitMake(Arena* arena, IR_Unit* unit)
 
 IR MakeIR(Arena* arena, Program* program, Array<Register> local_registers, IR_Group group, YovScript* script)
 {
+    PROFILE_FUNCTION;
+    
     Array<IR_Unit*> units = array_make<IR_Unit*>(context.arena, group.unit_count);
     {
         IR_Unit* unit = group.first;

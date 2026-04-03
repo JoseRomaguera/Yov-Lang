@@ -3,7 +3,9 @@
 
 I64 CompileAndRunFromArgs()
 {
-    Arena* arena = ArenaAlloc(Gb(32), 8);
+    PROFILE_FUNCTION;
+    
+    Arena* arena = ArenaAlloc(Gb(32), 8, "Arena Main");
     defer (ArenaFree(arena));
     
     Reporter* reporter = ReporterAlloc(arena);
@@ -41,7 +43,7 @@ I32 StepPressed() {
 
 I64 CompileAndDebugFromArgs()
 {
-    Arena* arena = ArenaAlloc(Gb(32), 8);
+    Arena* arena = ArenaAlloc(Gb(32), 8, "Arena Main");
     defer (ArenaFree(arena));
     
     Reporter* reporter = ReporterAlloc(arena);
@@ -94,6 +96,8 @@ I64 CompileAndDebugFromArgs()
 
 int main()
 {
+    PROFILE_FUNCTION;
+    
     SetupGlobals();
     
     I64 exit_code = CompileAndRunFromArgs();

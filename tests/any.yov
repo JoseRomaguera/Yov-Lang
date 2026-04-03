@@ -1,56 +1,56 @@
 
-main :: func
+Main :: func
 {
     a: Any;
     
     b: Any = 10;
-    assert(b is Int);
+    Assert(b is Int);
     
-    println(b);
-    println(custom_string(b));
+    PrintLn(b);
+    PrintLn(CustomString(b));
     
     b = "Hello";
-    assert(b is String);
+    Assert(b is String);
     
     if (b == "Hello") {
-        println(b);
-        println(custom_string(b));
+        PrintLn(b);
+        PrintLn(CustomString(b));
     }
     else {
-        assert(false);
+        Assert(false);
     }
     
     b = true;
     
-    println(custom_string(b));
+    PrintLn(CustomString(b));
     
-    println(return_any(0));
+    PrintLn(ReturnAny(0));
     
-    r0 := return_any(0);
+    r0 := ReturnAny(0);
     if (r0 is Int) {
         r0 += 5;
-        assert(r0 == 6);
+        Assert(r0 == 6);
     }
-    else assert(false);
+    else Assert(false);
     
-    r1 := return_any(1);
-    if (r1 is String) assert(r1 == "A");
-    else assert(false);
+    r1 := ReturnAny(1);
+    if (r1 is String) Assert(r1 == "A");
+    else Assert(false);
     
-    r0 = return_any(0);
+    r0 = ReturnAny(0);
     if (r0 is Int) {
         r0 += 5;
-        println(r0);
-        assert(r0 == 6);
+        PrintLn(r0);
+        Assert(r0 == 6);
     }
-    else assert(false);
+    else Assert(false);
     
-    r1 = return_tuple(1);
-    if (r1 is String) assert(r1 == "A");
-    else assert(false);
+    r1 = ReturnTuple(1);
+    if (r1 is String) Assert(r1 == "A");
+    else Assert(false);
 }
 
-custom_string :: func (v: Any) -> String
+CustomString :: func (v: Any) -> String
 {
     if (v is Int) {
         r := v + 0;
@@ -61,11 +61,11 @@ custom_string :: func (v: Any) -> String
         return "String: {r}";
     }
     else {
-        return "Unknown type: {typeof(v).name}";
+        return "Unknown type: {Typeof(v).name}";
     }
 }
 
-return_any :: func (i: Int) -> Any
+ReturnAny :: func (i: Int) -> Any
 {
     if (i == 0) return 1;
     if (i == 1) return "A";
@@ -73,8 +73,8 @@ return_any :: func (i: Int) -> Any
     return -1;
 }
 
-return_tuple :: func (i: Int) -> (a: Any, b: Int)
+ReturnTuple :: func (i: Int) -> (a: Any, b: Int)
 {
     b = i;
-    a = return_any(b);
+    a = ReturnAny(b);
 }

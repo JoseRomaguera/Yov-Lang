@@ -8,11 +8,11 @@ output :: arg -> Int {
     default = 0;
 }
 
-main :: func
+Main :: func
 {
     if (callee) {
-        print("Output from external script");
-        exit(output);
+        PrintLn("Output from external script");
+        Exit(output);
     }
     
     res: Result;
@@ -23,9 +23,9 @@ main :: func
     calls.redirect_stdout = RedirectStdout.Console;
     
     // Run a raw command using 'call'
-    println("-> 'call'");
-    out, res = call("{yov.path} external_calls.yov -callee");
-    println("\nresult = {res}, {out}\n");
+    PrintLn("-> 'call'");
+    out, res = Call("{yov.path} external_calls.yov -callee");
+    PrintLn("\nresult = {res}, {out}\n");
     
     // Suppress output from external calls
     calls.redirect_stdout = RedirectStdout.Ignore;
@@ -34,19 +34,19 @@ main :: func
     
     // Use 'call_exe' to invoke an executable without specifying its extension
     // The correct file is automatically chosen based on the OS
-    println("-> 'call_exe'");
-    out, res = call_exe("{yov_path_without_extension}", "external_calls.yov -callee");
-    println("output = {out}\nresult = {res}\n");
+    PrintLn("-> 'call_exe'");
+    out, res = CallExe("{yov_path_without_extension}", "external_calls.yov -callee");
+    PrintLn("output = {out}\nresult = {res}\n");
     
     // Capture and return the output of the call
     calls.redirect_stdout = RedirectStdout.Script;
     
     // Use 'call_script' to run another Yov script
-    println("-> 'call_script' (output = 0)");
-    out, res = call_script("external_calls.yov", "-callee -output=0", "");
-    println("output = {out}\nresult = {res}\n");
+    PrintLn("-> 'call_script' (output = 0)");
+    out, res = CallScript("external_calls.yov", "-callee -output=0", "");
+    PrintLn("output = {out}\nresult = {res}\n");
     
-    println("-> 'call_script' (output = 10)");
-    out, res = call_script("external_calls.yov", "-callee -output=10", "");
-    println("output = {out}\nresult = {res}\n");
+    PrintLn("-> 'call_script' (output = 10)");
+    out, res = CallScript("external_calls.yov", "-callee -output=10", "");
+    PrintLn("output = {out}\nresult = {res}\n");
 }

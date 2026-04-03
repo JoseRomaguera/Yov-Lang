@@ -345,6 +345,8 @@ ExpresionContext ExpresionContext_from_vtype(VType vtype, U32 assignment_count) 
 
 IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_context)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     Location location = LocationFromParser(parser);
@@ -424,6 +426,28 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     else if (codepoint == '"') append(&builder, "\"");
                     else if (codepoint == '{') append(&builder, "{");
                     else if (codepoint == '}') append(&builder, "}");
+                    else if (codepoint == 'x') {
+                        if (cursor + 2 > raw.size) {
+                            ReportErrorFront(token.location, "Expecting hexadecimal number after \\x");
+                        }
+                        else
+                        {
+                            String hexa = StrSub(raw, cursor, 2);
+                            U32 v;
+                            if (!U32FromString(&v, hexa, 16)) {
+                                ReportErrorFront(token.location, "Invalid hexadecimal number '%S'", hexa);
+                            }
+                            else {
+                                U8 lit = (U8)v;
+                                String s = {};
+                                s.data = (char*)&lit;
+                                s.size = 1;
+                                append(&builder, s);
+                            }
+                            
+                            cursor += 2;
+                        }
+                    }
                     else {
                         String sequence = StringFromCodepoint(context.arena, codepoint);
                         report_invalid_escape_sequence(token.location, sequence);
@@ -503,6 +527,13 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             else if (StrEquals(raw, "\\n")) v = '\n';
             else if (StrEquals(raw, "\\r")) v = '\r';
             else if (StrEquals(raw, "\\t")) v = '\t';
+            else if (StrStarts(raw, "\\x")) {
+                String hexa = StrSub(raw, 2, raw.size - 2);
+                if (!U32FromString(&v, hexa, 16)) {
+                    ReportErrorFront(token.location, "Invalid hexadecimal number '%S'", hexa);
+                    return {};
+                }
+            }
             else
             {
                 U64 cursor = 0;
@@ -553,6 +584,49 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             Location call_code = LocationFromTokens(tokens);
             return ReadFunctionCall(ir, expr_context, ParserSub(parser, call_code));
         }
+    }
+    
+    // Explicit castings
+    if (tokens.count > 0 && (tokens[0].kind == TokenKind_CastKeyword || tokens[0].kind == TokenKind_BitCastKeyword))
+    {
+        if (tokens.count < 5 || tokens[1].kind != TokenKind_OpenParenthesis)
+        {
+            ReportErrorFront(location, "Wrong format for explicit casting");
+            return IRFailed();
+        }
+        
+        Token keyword_token = tokens[0];
+        
+        I32 end_parenthesis_index = -1;
+        for (I32 i = 2; i < tokens.count; i++)
+        {
+            if (tokens[i].kind == TokenKind_CloseParenthesis) {
+                end_parenthesis_index = i;
+                break;
+            }
+        }
+        
+        if (end_parenthesis_index < 0) {
+            ReportErrorFront(location, "Closing parenthesis not found");
+            return IRFailed();
+        }
+        
+        B32 bitcast = keyword_token.kind == TokenKind_BitCastKeyword;
+        
+        Array<Token> type_tokens = array_subarray(tokens, 2, end_parenthesis_index - 2);
+        Array<Token> src_tokens = array_subarray(tokens, end_parenthesis_index + 1, tokens.count - end_parenthesis_index - 1);
+        
+        VType type = ReadObjectType(ParserSub(parser, LocationFromTokens(type_tokens)), reporter, program);
+        if (TypeIsNil(type)) return IRFailed();
+        
+        IR_Group out = ReadExpression(ir, ParserSub(parser, LocationFromTokens(src_tokens)), ExpresionContext_from_inference(1));
+        if (!out.success) return IRFailed();
+        
+        if (!TypeEquals(program, out.value.vtype, type)) {
+            out = IRAppend(out, IRFromCasting(ir, out.value, type, bitcast, location));
+        }
+        
+        return out;
     }
     
     // Binary operations & Signs
@@ -765,49 +839,6 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         }
     }
     
-    // Explicit castings
-    if (tokens.count > 0 && (tokens[0].kind == TokenKind_CastKeyword || tokens[0].kind == TokenKind_BitCastKeyword))
-    {
-        if (tokens.count < 5 || tokens[1].kind != TokenKind_OpenParenthesis)
-        {
-            ReportErrorFront(location, "Wrong format for explicit casting");
-            return IRFailed();
-        }
-        
-        Token keyword_token = tokens[0];
-        
-        I32 end_parenthesis_index = -1;
-        for (I32 i = 2; i < tokens.count; i++)
-        {
-            if (tokens[i].kind == TokenKind_CloseParenthesis) {
-                end_parenthesis_index = i;
-                break;
-            }
-        }
-        
-        if (end_parenthesis_index < 0) {
-            ReportErrorFront(location, "Closing parenthesis not found");
-            return IRFailed();
-        }
-        
-        B32 bitcast = keyword_token.kind == TokenKind_BitCastKeyword;
-        
-        Array<Token> type_tokens = array_subarray(tokens, 2, end_parenthesis_index - 2);
-        Array<Token> src_tokens = array_subarray(tokens, end_parenthesis_index + 1, tokens.count - end_parenthesis_index - 1);
-        
-        VType type = ReadObjectType(ParserSub(parser, LocationFromTokens(type_tokens)), reporter, program);
-        if (TypeIsNil(type)) return IRFailed();
-        
-        IR_Group out = ReadExpression(ir, ParserSub(parser, LocationFromTokens(src_tokens)), ExpresionContext_from_inference(1));
-        if (!out.success) return IRFailed();
-        
-        if (!TypeEquals(program, out.value.vtype, type)) {
-            out = IRAppend(out, IRFromCasting(ir, out.value, type, bitcast, location));
-        }
-        
-        return out;
-    }
-    
     // Array Expresions
     if (tokens.count >= 2 && (tokens[0].kind == TokenKind_OpenBrace || tokens[0].kind == TokenKind_OpenBracket))
     {
@@ -973,6 +1004,8 @@ internal_fn B32 CastingNeeded(Program* program, VType dst_type, VType src_type)
 
 IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionContext expr_context)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = ir->reporter;
     Program* program = ir->program;
     IR_Group out = ReadExpression(ir, parser, expr_context);
@@ -1052,6 +1085,8 @@ void CheckForAnyAssumptions(IR_Context* ir, IR_Unit* unit, Value value)
 
 IR_Group ReadCode(IR_Context* ir, Parser* parser)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
@@ -1264,6 +1299,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 Location iterator_location = LocationFromParser(parser, parser->range.max);
                 
                 IR_Group iterator = ReadExpressionWithCasting(ir, ParserSub(parser, iterator_location), ExpresionContext_from_inference(1));
+                out = IRAppend(out, iterator);
                 
                 if (!TypeIsArray(iterator.value.vtype)) {
                     ReportErrorFront(location, "Invalid iterator for a for each statement");
@@ -1353,6 +1389,8 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
 
 IR_Group ReadSentence(IR_Context* ir, Parser* parser)
 {
+    PROFILE_FUNCTION;
+    
     Reporter* reporter = ir->reporter;
     Location location = LocationFromParser(parser);
     SentenceKind kind = GuessSentenceKind(parser);
@@ -1460,6 +1498,8 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
 
 IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser* parser)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     Location location = LocationFromParser(parser);
@@ -1530,6 +1570,8 @@ internal_fn PooledArray<String> ExtractObjectIdentifiers(Parser* parser, Reporte
 
 ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Reporter* reporter, Program* program, B32 require_single, RegisterKind register_kind)
 {
+    PROFILE_FUNCTION;
+    
     Location location = LocationFromParser(parser);
     
     ObjectDefinitionResult res = {};
@@ -1601,6 +1643,8 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Report
 
 ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, IR_Context* ir, B32 require_single, RegisterKind register_kind)
 {
+    PROFILE_FUNCTION;
+    
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     Location location = LocationFromParser(parser);
@@ -1791,6 +1835,8 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
 
 ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter* reporter, Program* program, RegisterKind register_kind)
 {
+    PROFILE_FUNCTION;
+    
     ObjectDefinitionResult res = {};
     res.out = IRFromNone();
     
@@ -1831,6 +1877,8 @@ ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter
 
 ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR_Context* ir, RegisterKind register_kind)
 {
+    PROFILE_FUNCTION;
+    
     ObjectDefinitionResult res = {};
     res.out = IRFromNone();
     
@@ -1871,6 +1919,8 @@ ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR
 
 IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VType> expected_vtypes, Parser* parser)
 {
+    PROFILE_FUNCTION;
+    
     IR_Group out = IRFromNone();
     PooledArray<Value> list = pooled_array_make<Value>(context.arena, 8);
     
@@ -1904,6 +1954,8 @@ IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VTy
 
 VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program)
 {
+    PROFILE_FUNCTION;
+    
     Location location = LocationFromParser(parser);
     Array<Token> tokens = ConsumeAllTokens(parser);
     
@@ -2190,6 +2242,8 @@ internal_fn Token TokenFromAssignment(String text, U64 cursor, OperatorKind op, 
 
 Token ReadToken(String text, U64 start_cursor, I32 script_id)
 {
+    PROFILE_FUNCTION;
+    
     U32 c0, c1;
     
     {
