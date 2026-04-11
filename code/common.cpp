@@ -777,15 +777,24 @@ B32 F64FromString(F64* dst, String str)
 {
     if (str.size == 0) return false;
     
+    U64 cursor = 0;
+    B32 negative = false;
+    
+    if (str[cursor] == '-') {
+        negative = true;
+        cursor++;
+        if (str.size <= 1) return false;
+    }
+    
     F64 value = 0.0;
     F64 frac_mul = 0.1;
     B32 seen_dot = false;
     
     defer (*dst = value);
     
-    for (U64 i = 0; i < str.size; ++i)
+    while (cursor < str.size)
     {
-        char c = str[i];
+        char c = str[cursor++];
         
         if (c == '.') {
             if (seen_dot) return false;
@@ -806,6 +815,8 @@ B32 F64FromString(F64* dst, String str)
         }
     }
     
+    if (negative) value = -value;
+    
     return true;
 }
 
@@ -818,7 +829,7 @@ B32 U32FromChar(U32* dst, char c)
     return true;
 }
 
-B32 I64FromString(String str, I64* out)
+B32 I64FromString(I64* out, String str)
 {
     B32 negative = false;
     if (str.size >= 2 && str[0] == '-') {
@@ -852,7 +863,7 @@ B32 I64FromString(String str, I64* out)
     return true;
 }
 
-B32 I32FromString(String str, I32* out)
+B32 I32FromString(I32* out, String str)
 {
     U32 digits = (U32)str.size;
     *out = 0;

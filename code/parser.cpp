@@ -369,23 +369,113 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         return {};
     }
     
+    // If Expression
+    if (tokens.count > 3 && tokens[0].kind == TokenKind_IfKeyword)
+    {
+        I32 then_index = -1;
+        I32 else_index = -1;
+        I32 depth = 0;
+        
+        for (U32 i = 0; i < tokens.count; i++) {
+            TokenKind t = tokens[i].kind;
+            if (depth == 0 && t == TokenKind_ThenKeyword) then_index = i;
+            if (depth == 0 && t == TokenKind_ElseKeyword) else_index = i;
+            
+            if (t == TokenKind_OpenParenthesis) depth++;
+            else if (t == TokenKind_CloseParenthesis) depth--;
+            if (t == TokenKind_OpenBracket) depth++;
+            else if (t == TokenKind_CloseBracket) depth--;
+        }
+        
+        if (then_index < 0) {
+            ReportErrorFront(location, "Then keyword not found for if expression");
+            return IRFailed();
+        }
+        
+        if (else_index < 0) {
+            ReportErrorFront(location, "Else keyword not found for if expression");
+            return IRFailed();
+        }
+        
+        if (else_index < then_index) {
+            ReportErrorFront(location, "Then keyword not found for if expression");
+            return IRFailed();
+        }
+        
+        Array<Token> condition_tokens = array_subarray(tokens, 1, then_index - 1);
+        Array<Token> left_tokens = array_subarray(tokens, then_index + 1, else_index - then_index - 1);
+        Array<Token> right_tokens = array_subarray(tokens, else_index + 1, tokens.count - else_index - 1);
+        
+        if (left_tokens.count == 0 || right_tokens.count == 0) {
+            ReportErrorFront(location, "Empty values for if expression");
+            return IRFailed();
+        }
+        
+        Location condition_location = LocationFromTokens(condition_tokens);
+        Location left_location = LocationFromTokens(left_tokens);
+        Location right_location = LocationFromTokens(right_tokens);
+        
+        IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, condition_location), ExpresionContext_from_vtype(VType_Bool, 1));
+        IR_Group left = ReadExpression(ir, ParserSub(parser, left_location), expr_context);
+        IR_Group right = ReadExpression(ir, ParserSub(parser, right_location), expr_context);
+        
+        if (!condition.success || !left.success || !right.success) return IRFailed();
+        
+        if (!TypeIsBool(condition.value.vtype)) {
+            ReportErrorFront(location, "Expecting a boolean for if expression");
+            return IRFailed();
+        }
+        
+        if (!TypeEquals(program, left.value.vtype, right.value.vtype)) {
+            ReportErrorFront(location, "Types missmatch");
+            return IRFailed();
+        }
+        
+        VType vtype = left.value.vtype;
+        if (TypeIsVoid(vtype) || TypeIsAny(vtype) || TypeIsNil(vtype)) {
+            ReportErrorFront(location, "Unknown type for if expression");
+            return IRFailed();
+        }
+        
+        // Assignments
+        IR_Group dst = IRFromDefineTemporal(ir, vtype, location);
+        Value dst_value = dst.value;
+        left = IRAppend(left, IRFromStore(ir, dst_value, left.value, location));
+        right = IRAppend(right, IRFromStore(ir, dst_value, right.value, location));
+        
+        // Conditional jumps
+        IR_Unit* exec_right_unit = IRUnitAlloc_Empty(ir, location);
+        IR_Unit* exit_unit = IRUnitAlloc_Empty(ir, location);
+        
+        Value cmp_value = condition.value;
+        IR_Group cmd_jump = IRFromSingle(IRUnitAlloc_Jump(ir, -1, cmp_value, exec_right_unit, location));
+        IR_Group exit_jump = IRFromSingle(IRUnitAlloc_Jump(ir, 0, ValueNone(), exit_unit, location));
+        
+        left = IRAppend(cmd_jump, left);
+        right = IRAppend4(exit_jump, IRFromSingle(exec_right_unit, right.value), right, IRFromSingle(exit_unit, right.value));
+        
+        // Mix & Return
+        IR_Group out = IRAppend4(condition, dst, left, right);
+        out.value = dst_value;
+        return out;
+    }
+    
     if (tokens.count == 1)
     {
         Token token = tokens[0];
         
         if (token.kind == TokenKind_IntLiteral)
         {
-            U64 v;
-            if (U64FromString(&v, token.value)) {
+            U64 unsigned_value;
+            if (U64FromString(&unsigned_value, token.value)) {
                 if (TypeIsUInt(expr_context.vtype)) {
-                    return IRFromNone(ValueFromUInt(v));
+                    return IRFromNone(ValueFromUInt(unsigned_value));
                 }
                 
-                return IRFromNone(ValueFromInt(v));
+                return IRFromNone(ValueFromInt(unsigned_value));
             }
-            else {
-                InvalidCodepath();
-            }
+            
+            InvalidCodepath();
         }
         else if (token.kind == TokenKind_FloatLiteral) {
             F64 v;
@@ -575,11 +665,40 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
     
     
     // Function call
-    if (tokens.count >= 3 && tokens[0].kind == TokenKind_Identifier && tokens[1].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
+    if (tokens.count >= 3 && tokens[0].kind == TokenKind_Identifier && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
     {
-        B32 couple = CheckTokensAreCouple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        B32 is_function_call = false;
         
-        if (couple)
+        if (tokens[1].kind == TokenKind_OpenParenthesis) {
+            is_function_call = CheckTokensAreCouple(tokens, 1, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        }
+        else
+        {
+            U32 open_parenthesis_index = tokens.count;
+            
+            // Check for generic type initialize
+            if (tokens[1].kind == TokenKind_OpenBracket) {
+                I32 depth = 1;
+                for (U32 i = 2; i < tokens.count; i++) {
+                    if (tokens[i].kind == TokenKind_OpenBracket) {
+                        depth++;
+                    }
+                    if (tokens[i].kind == TokenKind_CloseBracket) {
+                        depth--;
+                        if (depth == 0) {
+                            open_parenthesis_index = i + 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            is_function_call = open_parenthesis_index < tokens.count && 
+                tokens[open_parenthesis_index].kind == TokenKind_OpenParenthesis && 
+                CheckTokensAreCouple(tokens, open_parenthesis_index, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
+        }
+        
+        if (is_function_call)
         {
             Location call_code = LocationFromTokens(tokens);
             return ReadFunctionCall(ir, expr_context, ParserSub(parser, call_code));
@@ -647,7 +766,6 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         const I32 depth_mult = 8;
         
         I32 parenthesis_depth = 0;
-        I32 braces_depth = 0;
         I32 brackets_depth = 0;
         B32 preference_is_sign = false;
         
@@ -664,19 +782,6 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                 parenthesis_depth--;
                 if (parenthesis_depth < 0) {
                     report_common_missing_closing_parenthesis(token.location);
-                    return IRFailed();
-                }
-                continue;
-            }
-            
-            if (token.kind == TokenKind_CloseBrace) {
-                braces_depth++;
-                continue;
-            }
-            if (token.kind == TokenKind_OpenBrace) {
-                braces_depth--;
-                if (braces_depth < 0) {
-                    report_common_missing_closing_brace(token.location);
                     return IRFailed();
                 }
                 continue;
@@ -733,7 +838,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                 preference = member_preference;
             }
             
-            if (preference == I32_MAX || braces_depth != 0 || brackets_depth != 0) continue;
+            if (preference == I32_MAX || brackets_depth != 0) continue;
             
             preference += parenthesis_depth * depth_mult;
             
@@ -746,10 +851,6 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         
         if (parenthesis_depth > 0) {
             report_common_missing_opening_parenthesis(tokens[0].location);
-            return IRFailed();
-        }
-        if (braces_depth > 0) {
-            report_common_missing_opening_brace(tokens[0].location);
             return IRFailed();
         }
         
@@ -840,13 +941,8 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
     }
     
     // Array Expresions
-    if (tokens.count >= 2 && (tokens[0].kind == TokenKind_OpenBrace || tokens[0].kind == TokenKind_OpenBracket))
+    if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenBracket)
     {
-        B32 is_empty = tokens[0].kind == TokenKind_OpenBracket;
-        
-        TokenKind open_token_kind = is_empty ? TokenKind_OpenBracket : TokenKind_OpenBrace;
-        TokenKind close_token_kind = is_empty ? TokenKind_CloseBracket : TokenKind_CloseBrace;
-        
         I32 arrow_index = -1;
         foreach(i, tokens.count) {
             if (tokens[i].kind == TokenKind_Arrow) {
@@ -860,7 +956,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             close_index = arrow_index - 1;
         }
         
-        if (CheckTokensAreCouple(tokens, 0, close_index, open_token_kind, close_token_kind))
+        if (CheckTokensAreCouple(tokens, 0, close_index, TokenKind_OpenBracket, TokenKind_CloseBracket))
         {
             VType element_vtype = VType_Any;
             if (!TypeIsVoid(expr_context.vtype)) {
@@ -883,13 +979,13 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                 }
             }
             
-            VType expr_vtype = is_empty ? VType_UInt : element_vtype;
+            VType expr_vtype = element_vtype;
             
             Array<Token> expr_tokens = array_subarray(tokens, 1, close_index - 1);
             IR_Group out = ReadExpressionList(context.arena, ir, expr_vtype, {}, ParserSub(parser, LocationFromTokens(expr_tokens)));
             Array<Value> values = ValuesFromReturn(context.arena, out.value, true);
             
-            if (!is_empty && values.count > 0 && TypeIsAny(element_vtype)) {
+            if (values.count > 0 && TypeIsAny(element_vtype)) {
                 element_vtype = values[0].vtype;
                 expr_vtype = element_vtype;
             }
@@ -901,33 +997,13 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             
             foreach(i, values.count) {
                 if (!TypeEquals(program, values[i].vtype, expr_vtype)) {
-                    if (is_empty) {
-                        ReportErrorFront(location, "Expecting an integer for empty array expression but found a '%S'", VTypeGetName(program, values[i].vtype));
-                        return IRFailed();
-                    }
-                    else {
-                        ReportErrorFront(location, "Expecting an array of '%S' but found an '%S'", VTypeGetName(program, expr_vtype), VTypeGetName(program, values[i].vtype));
-                        return IRFailed();
-                    }
+                    ReportErrorFront(location, "Expecting an array of '%S' but found an '%S'", VTypeGetName(program, expr_vtype), VTypeGetName(program, values[i].vtype));
+                    return IRFailed();
                 }
             }
             
-            if (is_empty)
-            {
-                VType array_vtype = vtype_from_dimension(element_vtype, values.count);
-                Array<Value> dimensions = array_make<Value>(context.arena, array_vtype.array_dimensions);
-                
-                foreach(i, dimensions.count) {
-                    if (i < values.count) dimensions[i] = values[i];
-                    else dimensions[i] = ValueFromUInt(0);
-                }
-                
-                out.value = ValueFromEmptyArray(ir->arena, TypeFromIndex(ir->program, array_vtype.base_index), dimensions);
-            }
-            else {
-                VType array_vtype = vtype_from_dimension(element_vtype, 1);
-                out.value = ValueFromArray(ir->arena, array_vtype, values);
-            }
+            VType array_vtype = vtype_from_dimension(element_vtype, 1);
+            out.value = ValueFromArray(ir->arena, array_vtype, values);
             
             return out;
         }
@@ -993,7 +1069,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
     }
     
     String expresion_string = StringFromTokens(context.arena, tokens);
-    report_expr_syntactic_unknown(tokens[0].location, expresion_string);
+    report_expr_syntactic_unknown(location, expresion_string);
     return {};
 }
 
@@ -1126,50 +1202,91 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             defer(ir_scope_pop(ir));
             
             // Read expression
-            Location expression_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+            Location expression_location = FetchUntil(parser, false, TokenKind_OpenBrace, TokenKind_ThenKeyword);
             
             if (!LocationIsValid(expression_location)) {
-                ReportErrorFront(first_token.location, "Expecting parenthesis for if statement");
+                ReportErrorFront(first_token.location, "Expecting expression for if statement");
                 return IRFailed();
             }
             
-            IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
-            if (!expression.success) return IRFailed();
+            B32 has_then_keyword = false;
             
-            CheckForAnyAssumptions(ir, expression.last, expression.value);
-            
-            out = IRAppend(out, expression);
-            
-            // Read success code
-            Location success_location = FetchCode(parser);
-            
-            if (!LocationIsValid(success_location)) {
-                ReportErrorFront(first_token.location, "Expecting code for if statement");
-                return IRFailed();
+            if (PeekToken(parser).kind == TokenKind_ThenKeyword) {
+                AssumeToken(parser, TokenKind_ThenKeyword);
+                has_then_keyword = true;
             }
             
-            IR_Group success = ReadCode(ir, ParserSub(parser, success_location));
-            if (!success.success) return IRFailed();
+            B32 is_switch = false;
             
-            IR_Group failure = IRFromNone();
-            
-            // Failure code
-            if (PeekToken(parser).kind == TokenKind_ElseKeyword)
+            // Check for switch statement
+            if (!has_then_keyword)
             {
-                Token else_token = ConsumeToken(parser);
+                Parser* switch_expr_parser = ParserSub(parser, expression_location);
+                Array<Token> tokens = ConsumeAllTokens(switch_expr_parser);
                 
-                Location failure_location = FetchCode(parser);
+                if (tokens.count >= 2 && tokens[tokens.count - 1].kind == TokenKind_CompEquals)
+                {
+                    expression_location = LocationFromTokens(array_subarray(tokens, 0, tokens.count - 1));
+                    is_switch = true;
+                }
+            }
+            
+            // Switch statement
+            if (is_switch)
+            {
+                IR_Group expression = ReadExpression(ir, ParserSub(parser, expression_location), ExpresionContext_from_inference(1));
+                if (!expression.success) return IRFailed();
+                out = IRAppend(out, expression);
                 
-                if (!LocationIsValid(failure_location)) {
-                    ReportErrorFront(else_token.location, "Expecting code for else statement");
+                Location code_location = FetchCode(parser);
+                
+                if (!LocationIsValid(code_location)) {
+                    ReportErrorFront(first_token.location, "Expecting code for switch statement");
                     return IRFailed();
                 }
                 
-                failure = ReadCode(ir, ParserSub(parser, failure_location));
-                if (!failure.success) return IRFailed();
+                out = IRAppend(out, ReadSwitchCode(ir, ParserSub(parser, code_location), expression.value));
+                if (!out.success) return IRFailed();
             }
-            
-            out = IRAppend(out, IRFromIfStatement(ir, expression.value, success, failure, first_token.location));
+            else
+            {
+                IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+                if (!expression.success) return IRFailed();
+                
+                CheckForAnyAssumptions(ir, expression.last, expression.value);
+                
+                out = IRAppend(out, expression);
+                
+                Location success_location = FetchCode(parser);
+                
+                if (!LocationIsValid(success_location)) {
+                    ReportErrorFront(first_token.location, "Expecting code for if statement");
+                    return IRFailed();
+                }
+                
+                IR_Group success = ReadCode(ir, ParserSub(parser, success_location));
+                if (!success.success) return IRFailed();
+                
+                IR_Group failure = IRFromNone();
+                
+                // Failure code
+                if (PeekToken(parser).kind == TokenKind_ElseKeyword)
+                {
+                    Token else_token = ConsumeToken(parser);
+                    
+                    Location failure_location = FetchCode(parser);
+                    
+                    if (!LocationIsValid(failure_location)) {
+                        ReportErrorFront(else_token.location, "Expecting code for else statement");
+                        return IRFailed();
+                    }
+                    
+                    failure = ReadCode(ir, ParserSub(parser, failure_location));
+                    if (!failure.success) return IRFailed();
+                }
+                
+                out = IRAppend(out, IRFromIfStatement(ir, expression.value, success, failure, first_token.location));
+            }
         }
         else if (first_token.kind == TokenKind_ElseKeyword) {
             ReportErrorFront(first_token.location, "No if statement found");
@@ -1182,18 +1299,21 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             ir_looping_scope_push(ir, first_token.location);
             defer(ir_looping_scope_pop(ir));
             
-            // Read expression
-            Location expression_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+            Location expression_location = FetchUntil(parser, false, TokenKind_OpenBrace, TokenKind_ThenKeyword);
             
             if (!LocationIsValid(expression_location)) {
-                ReportErrorFront(first_token.location, "Expecting parenthesis for while statement");
+                ReportErrorFront(first_token.location, "Expecting expression for while statement");
                 return IRFailed();
             }
             
-            IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
-            if (!condition.success) return IRFailed();
+            if (PeekToken(parser).kind == TokenKind_ThenKeyword)
+                AssumeToken(parser, TokenKind_ThenKeyword);
             
-            // Read code
+            IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+            if (!expression.success) return IRFailed();
+            
+            CheckForAnyAssumptions(ir, expression.last, expression.value);
+            
             Location code_location = FetchCode(parser);
             
             if (!LocationIsValid(code_location)) {
@@ -1204,7 +1324,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             IR_Group code = ReadCode(ir, ParserSub(parser, code_location));
             if (!code.success) return IRFailed();
             
-            out = IRAppend(out, IRFromLoop(ir, IRFromNone(), condition, code, IRFromNone(), first_token.location));
+            out = IRAppend(out, IRFromLoop(ir, IRFromNone(), expression, code, IRFromNone(), first_token.location));
         }
         else if (first_token.kind == TokenKind_ForKeyword)
         {
@@ -1421,6 +1541,7 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
         
         Location dst_code = LocationMake(parser->cursor, dst_end_cursor, parser->script_id);
         out = IRAppend(out, ReadExpressionList(context.arena, ir, VType_Any, {}, ParserSub(parser, dst_code)));
+        if (!out.success) return IRFailed();
         
         MoveCursor(parser, dst_end_cursor);
         Token assignment_token = ConsumeToken(parser);
@@ -1496,6 +1617,212 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
     }
 }
 
+struct SwitchCase {
+    Array<Value> values;
+    IR_Group group;
+    Location location;
+};
+
+IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
+{
+    Program* program = ir->program;
+    Reporter* reporter = ir->reporter;
+    
+    VType type = src.vtype;
+    
+    Location location = LocationFromParser(parser);
+    
+    if (type.kind != VKind_Primitive && type.kind != VKind_Enum)
+    {
+        ReportErrorFront(location, "Invalid type '%S' for switch statement", VTypeGetName(program, type));
+        return IRFailed();
+    }
+    
+    AssumeToken(parser, TokenKind_OpenBrace);
+    
+    B32 has_default_case = false;
+    SwitchCase default_case = {};
+    PooledArray<SwitchCase> cases = pooled_array_make<SwitchCase>(context.arena, 16);
+    
+    while (1)
+    {
+        Token first_token = PeekToken(parser);
+        
+        if (first_token.kind == TokenKind_CloseBrace)
+        {
+            AssumeToken(parser, TokenKind_CloseBrace);
+            
+            if (PeekToken(parser).kind != TokenKind_None) {
+                ReportErrorFront(first_token.location, "Invalid closing brace");
+                return IRFailed();
+            }
+            
+            break;
+        }
+        
+        if (first_token.kind != TokenKind_CaseKeyword)
+        {
+            ReportErrorFront(first_token.location, "Expecting a case sentence");
+            return IRFailed();
+        }
+        
+        AssumeToken(parser, TokenKind_CaseKeyword);
+        
+        Location case_location = FetchUntil(parser, false, TokenKind_NextSentence);
+        if (!LocationIsValid(case_location)) {
+            report_expecting_semicolon(first_token.location);
+            return IRFailed();
+        }
+        AssumeToken(parser, TokenKind_NextSentence);
+        
+        IR_Group case_expression = ReadExpressionList(context.arena, ir, type, {}, ParserSub(parser, case_location));
+        if (!case_expression.success) return IRFailed();
+        
+        Array<Value> case_values = ValuesFromReturn(context.arena, case_expression.value, true);
+        for (U32 i = 0; i < case_values.count; i++)
+        {
+            Value case_value = case_values[i];
+            if (!TypeEquals(program, case_value.vtype, type)) {
+                ReportErrorFront(first_token.location, "Type missmatch, case is a '%S' not a '%S'", VTypeGetName(program, case_value.vtype), VTypeGetName(program, type));
+                return IRFailed();
+            }
+            
+            if (case_value.kind != ValueKind_Literal) {
+                ReportErrorFront(first_token.location, "Expecting a '%S' literal", VTypeGetName(program, type));
+                return IRFailed();
+            }
+        }
+        
+        Location code_location = FetchUntil(parser, false, TokenKind_CaseKeyword, TokenKind_CloseBrace);
+        if (!LocationIsValid(code_location)) {
+            InvalidCodepath();
+            return IRFailed();
+        }
+        
+        IR_Group code = ReadCode(ir, ParserSub(parser, code_location));
+        if (!code.success) return IRFailed();
+        
+        if (case_values.count == 0) {
+            if (has_default_case) {
+                ReportErrorFront(first_token.location, "Duplicated case");
+                return IRFailed();
+            }
+            has_default_case = true;
+        }
+        else
+        {
+            // Check for duplicated cases
+            for (U32 i = 0; i < case_values.count; i++)
+            {
+                Value case_value = case_values[i];
+                
+                for (auto it = pooled_array_make_iterator(&cases); it.valid; ++it)
+                {
+                    SwitchCase c = *it.value;
+                    
+                    for (U32 i = 0; i < c.values.count; i++)
+                    {
+                        if (CompiletimeEquals(program, c.values[i], case_value)) {
+                            ReportErrorFront(first_token.location, "Duplicated case");
+                            return IRFailed();
+                        }
+                    }
+                }
+            }
+        }
+        
+        SwitchCase c = {};
+        c.values = case_values;
+        c.group = code;
+        c.location = first_token.location;
+        
+        if (case_values.count == 0) {
+            default_case = c;
+        }
+        else {
+            array_add(&cases, c);
+        }
+    }
+    
+    // Check for all enum values
+    if (TypeIsEnum(type) && !has_default_case && cases.count != type._enum->values.count)
+    {
+        ReportErrorFront(location, "Missing some values for enum '%S'", VTypeGetName(program, type));
+        return IRFailed();
+    }
+    
+    IR_Group out = IRFromNone();
+    
+    if (ValueIsCompiletime(src))
+    {
+        B32 case_match = false;
+        
+        for (auto it = pooled_array_make_iterator(&cases); it.valid; ++it)
+        {
+            SwitchCase c = *it.value;
+            
+            for (U32 i = 0; i < c.values.count; i++)
+            {
+                if (CompiletimeEquals(program, src, c.values[i])) {
+                    case_match = true;
+                    out = IRAppend(out, c.group);
+                    break;
+                }
+            }
+        }
+        
+        if (!case_match && has_default_case) {
+            out = IRAppend(out, default_case.group);
+        }
+    }
+    else
+    {
+        IR_Unit* exit_unit = IRUnitAlloc_Empty(ir, LocationFromParser(parser));
+        
+        for (auto it = pooled_array_make_iterator(&cases); it.valid; ++it)
+        {
+            SwitchCase c = *it.value;
+            if (c.group.unit_count == 0) continue;
+            
+            IR_Unit* fail_unit = IRUnitAlloc_Empty(ir, LocationFromParser(parser));
+            
+            IR_Group cmp = IRFromNone();
+            if (c.values.count == 1) {
+                cmp = IRFromBinaryOperator(ir, src, c.values[0], OperatorKind_Equals, false, c.location);
+            }
+            else
+            {
+                cmp = IRAppend(cmp, IRFromDefineTemporal(ir, VType_Bool, c.location));
+                Value dst = cmp.value;
+                cmp = IRAppend(cmp, IRFromStore(ir, dst, ValueFromBool(false), c.location));
+                
+                for (U32 i = 0; i < c.values.count; i++)
+                {
+                    cmp = IRAppend(cmp, IRFromBinaryOperator(ir, src, c.values[i], OperatorKind_Equals, false, c.location));
+                    cmp = IRAppend(cmp, IRFromBinaryOperator(ir, dst, cmp.value, OperatorKind_LogicalOr, true, c.location));
+                    dst = cmp.value;
+                }
+            }
+            
+            if (!cmp.success || !TypeIsBool(cmp.value.vtype)) return IRFailed();
+            
+            IR_Group fail_jump = IRFromSingle(IRUnitAlloc_Jump(ir, -1, cmp.value, fail_unit, c.location));
+            IR_Group exit_jump = IRFromSingle(IRUnitAlloc_Jump(ir, 0, ValueNone(), exit_unit, c.location));
+            
+            out = IRAppend3(out, cmp, fail_jump);
+            out = IRAppend4(out, c.group, exit_jump, IRFromSingle(fail_unit));
+        }
+        
+        if (has_default_case) {
+            out = IRAppend(out, default_case.group);
+        }
+        
+        out = IRAppend(out, IRFromSingle(exit_unit));
+    }
+    
+    return out;
+}
+
 IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser* parser)
 {
     PROFILE_FUNCTION;
@@ -1504,35 +1831,80 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser*
     Reporter* reporter = ir->reporter;
     Location location = LocationFromParser(parser);
     
-    Token identifier_token = ConsumeToken(parser);
+    Token identifier_token = PeekToken(parser);
     Assert(identifier_token.kind == TokenKind_Identifier);
     String identifier = identifier_token.value;
     
-    Location expressions_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
-    
-    if (!LocationIsValid(expressions_location)) {
-        report_common_missing_closing_parenthesis(location);
-        return IRFailed();
-    }
-    
-    Array<VType> expected_vtypes = {};
-    
+    // NOTE(Jose): If this isn't true means it's a type default initialization
+    if (PeekToken(parser, identifier_token.skip_size).kind != TokenKind_OpenParenthesis || !TypeIsNil(TypeFromName(program, identifier)))
     {
-        FunctionDefinition* fn = FunctionFromIdentifier(program, identifier);
-        if (fn != NULL)
+        Location type_location = FetchUntil(parser, false, TokenKind_OpenParenthesis);
+        Assert(LocationIsValid(type_location));
+        
+        VType type = ReadObjectType(ParserSub(parser, type_location), reporter, program);
+        if (TypeIsNil(type)) return IRFailed();
+        
+        Location expressions_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+        IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, {}, ParserSub(parser, expressions_location));
+        if (!out.success) return IRFailed();
+        
+        Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
+        
+        if (TypeIsArray(type) && params.count > 0)
         {
-            expected_vtypes = array_make<VType>(context.arena, fn->parameters.count);
-            foreach(i, fn->parameters.count) {
-                expected_vtypes[i] = fn->parameters[i].vtype;
+            Array<Value> dimensions = array_make<Value>(context.arena, params.count);
+            VType element_vtype = VTypeNext(program, type);
+            
+            for (U32 i = 0; i < params.count; i++)
+            {
+                out = IRAppend(out, IRFromOptionalCasting(ir, params[i], VType_UInt, location));
+                params[i] = out.value;
+                
+                if (!TypeIsUInt(params[i].vtype)) {
+                    ReportErrorFront(expressions_location, "Expected unsigned integers for array dimensions");
+                    return IRFailed();
+                }
+                
+                dimensions[i] = params[i];
             }
+            
+            out.value = ValueFromEmptyArray(ir->arena, TypeFromIndex(program, type.base_index), dimensions);
         }
+        else
+        {
+            if (params.count != 0) {
+                ReportErrorFront(expressions_location, "No parameters supported");
+                return IRFailed();
+            }
+            
+            out = IRAppend(out, IRFromDefaultInitializer(ir, type, location));
+        }
+        
+        return out;
     }
-    
-    IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, expected_vtypes, ParserSub(parser, expressions_location));
-    Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
-    
-    IR_Group call = IRFromCall(ir, identifier, params, expr_context, location);
-    return IRAppend(out, call);
+    else
+    {
+        AssumeToken(parser, TokenKind_Identifier);
+        FunctionDefinition* fn = FunctionFromIdentifier(program, identifier);
+        if (fn == NULL) {
+            report_symbol_not_found(location, identifier);
+            return IRFailed();
+        }
+        
+        Array<VType> expected_vtypes = array_make<VType>(context.arena, fn->parameters.count);
+        foreach(i, fn->parameters.count) {
+            expected_vtypes[i] = fn->parameters[i].vtype;
+        }
+        
+        Location expressions_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+        IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, expected_vtypes, ParserSub(parser, expressions_location));
+        if (!out.success) return IRFailed();
+        
+        Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
+        
+        IR_Group call = IRFromFunctionCall(ir, fn, params, expr_context, location);
+        return IRAppend(out, call);
+    }
 }
 
 internal_fn PooledArray<String> ExtractObjectIdentifiers(Parser* parser, Reporter* reporter, B32 require_single)
@@ -1980,35 +2352,80 @@ VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program)
         tokens = array_subarray(tokens, 0, tokens.count - 1);
     }
     
-    U32 array_dimensions = 0;
-    if (tokens.count > 0)
+    U32 generic_params_expected = 0;
+    
+    if (identifier_token.value == "Array") generic_params_expected = 1;
+    
+    VType base_type = VType_Nil;
+    
+    if (generic_params_expected > 0)
     {
-        if (tokens.count % 2 != 0) {
+        if (tokens.count <= 2) {
+            ReportErrorFront(location, "Invalid type format");
+            return VType_Nil;
+        }
+        if (tokens[0].kind != TokenKind_OpenBracket || tokens[tokens.count - 1].kind != TokenKind_CloseBracket) {
+            ReportErrorFront(location, "Missing brackets for generic type: %S", identifier_token.value);
+            return VType_Nil;
+        }
+        
+        tokens = array_subarray(tokens, 1, tokens.count - 2);
+        Assert(tokens.count > 0);
+        
+        Array<VType> subtypes = array_make<VType>(context.arena, generic_params_expected);
+        U32 type_index = 0;
+        
+        while (tokens.count)
+        {
+            U32 end_index = tokens.count;
+            for (U32 i = 0; i < tokens.count; i++) {
+                if (tokens[i].kind == TokenKind_Comma) {
+                    end_index = i;
+                    break;
+                }
+            }
+            
+            Location subtype_location = LocationFromTokens(array_subarray(tokens, 0, end_index));
+            tokens = array_subarray(tokens, end_index, tokens.count - end_index);
+            
+            VType subtype = ReadObjectType(ParserSub(parser, subtype_location), reporter, program);
+            if (TypeIsNil(subtype)) return VType_Nil;
+            
+            if (subtype.kind != VKind_Primitive && !TypeIsStruct(subtype) && !TypeIsEnum(subtype)) {
+                ReportErrorFront(location, "Generics don't support generics as a pararameter");
+                return VType_Nil;
+            }
+            
+            if (type_index >= subtypes.count) {
+                ReportErrorFront(location, "Expected %u params for generic '%S'", generic_params_expected, identifier_token.value);
+                return VType_Nil;
+            }
+            
+            subtypes[type_index++] = subtype;
+        }
+        
+        // TODO(Jose): Only Arrays are supported right now
+        
+        base_type = vtype_from_dimension(subtypes[0], 1);
+    }
+    else
+    {
+        if (tokens.count != 0) {
             ReportErrorFront(location, "Invalid type format");
             return VType_Nil;
         }
         
-        foreach(i, tokens.count)
-        {
-            TokenKind kind = (i % 2 == 0) ? TokenKind_OpenBracket : TokenKind_CloseBracket;
-            if (tokens[i].kind != kind) {
-                ReportErrorFront(location, "Invalid type format");
-                return VType_Nil;
-            }
-        }
-        
-        array_dimensions = tokens.count / 2;
+        base_type = TypeFromName(program, identifier_token.value);
     }
     
-    VType vtype = TypeFromName(program, identifier_token.value);
-    if (TypeIsNil(vtype)) {
+    if (TypeIsNil(base_type)) {
         ReportErrorFront(location, "Unknown type");
         return VType_Nil;
     }
     
-    vtype = vtype_from_dimension(vtype, array_dimensions);
-    if (is_reference) vtype = vtype_from_reference(vtype);
-    return vtype;
+    VType type = base_type;
+    if (is_reference) type = vtype_from_reference(type);
+    return type;
 }
 
 
@@ -2035,6 +2452,8 @@ String DebugInfoFromToken(Arena* arena, Token token)
     if (k == TokenKind_Separator) return "separator";
     if (k == TokenKind_Identifier) return StrFormat(arena, "identifier: %S", token.value);
     if (k == TokenKind_IfKeyword) return "if";
+    if (k == TokenKind_ThenKeyword) return "then";
+    if (k == TokenKind_CaseKeyword) return "case";
     if (k == TokenKind_ElseKeyword) return "else";
     if (k == TokenKind_WhileKeyword) return "while";
     if (k == TokenKind_ForKeyword) return "for";
@@ -2151,6 +2570,10 @@ TokenKind TokenKindFromOpenScope(TokenKind open_token)
     return TokenKind_Error;
 }
 
+Location LocationFromToken(Token token) {
+    return LocationMake(token.cursor, token.cursor + token.skip_size, token.location.script_id);
+}
+
 Location LocationFromTokens(Array<Token> tokens)
 {
     if (tokens.count == 0) return {};
@@ -2191,6 +2614,8 @@ internal_fn Token TokenMakeDynamic(String text, U64 cursor, TokenKind kind, U64 
     if (kind == TokenKind_Identifier) {
         if (StrEquals("null", token.value)) kind = TokenKind_NullKeyword;
         else if (StrEquals("if", token.value)) kind = TokenKind_IfKeyword;
+        else if (StrEquals("then", token.value)) kind = TokenKind_ThenKeyword;
+        else if (StrEquals("case", token.value)) kind = TokenKind_CaseKeyword;
         else if (StrEquals("else", token.value)) kind = TokenKind_ElseKeyword;
         else if (StrEquals("while", token.value)) kind = TokenKind_WhileKeyword;
         else if (StrEquals("for", token.value)) kind = TokenKind_ForKeyword;
@@ -2373,19 +2798,11 @@ Token ReadToken(String text, U64 start_cursor, I32 script_id)
     if (c0 == '<') return TokenMakeFixed(text, start_cursor, TokenKind_CompLess, 1, script_id);
     if (c0 == '>') return TokenMakeFixed(text, start_cursor, TokenKind_CompGreater, 1, script_id);
     
-    if (c0 == '+') return TokenMakeFixed(text, start_cursor, TokenKind_PlusSign, 1, script_id);
-    if (c0 == '-') return TokenMakeFixed(text, start_cursor, TokenKind_MinusSign, 1, script_id);
-    if (c0 == '*') return TokenMakeFixed(text, start_cursor, TokenKind_Asterisk, 1, script_id);
-    if (c0 == '/') return TokenMakeFixed(text, start_cursor, TokenKind_Slash, 1, script_id);
-    if (c0 == '%') return TokenMakeFixed(text, start_cursor, TokenKind_Modulo, 1, script_id);
-    
-    if (c0 == '&') return TokenMakeFixed(text, start_cursor, TokenKind_Ampersand, 1, script_id);
-    if (c0 == '!') return TokenMakeFixed(text, start_cursor, TokenKind_Exclamation, 1, script_id);
-    
     if (CodepointIsNumber(c0))
     {
         U32 dot_count = 0;
         U64 cursor = start_cursor;
+        
         while (cursor < text.size) {
             U64 next_cursor = cursor;
             U32 codepoint = StrGetCodepoint(text, &next_cursor);
@@ -2429,6 +2846,15 @@ Token ReadToken(String text, U64 start_cursor, I32 script_id)
         }
         return TokenMakeDynamic(text, start_cursor, TokenKind_Identifier, cursor - start_cursor, script_id);
     }
+    
+    if (c0 == '+') return TokenMakeFixed(text, start_cursor, TokenKind_PlusSign, 1, script_id);
+    if (c0 == '-') return TokenMakeFixed(text, start_cursor, TokenKind_MinusSign, 1, script_id);
+    if (c0 == '*') return TokenMakeFixed(text, start_cursor, TokenKind_Asterisk, 1, script_id);
+    if (c0 == '/') return TokenMakeFixed(text, start_cursor, TokenKind_Slash, 1, script_id);
+    if (c0 == '%') return TokenMakeFixed(text, start_cursor, TokenKind_Modulo, 1, script_id);
+    
+    if (c0 == '&') return TokenMakeFixed(text, start_cursor, TokenKind_Ampersand, 1, script_id);
+    if (c0 == '!') return TokenMakeFixed(text, start_cursor, TokenKind_Exclamation, 1, script_id);
     
     return TokenMakeFixed(text, start_cursor, TokenKind_Error, 1, script_id);
 }

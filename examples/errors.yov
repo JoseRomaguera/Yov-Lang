@@ -8,12 +8,12 @@ Main :: func
     invalid := "\".txt";
     
     // Ignoring the error
-    if (DirCreate(invalid, false).failed) PrintLn("Failed but program continues");
+    if DirCreate(invalid, false).failed then PrintLn("Failed but program continues");
     
     // Receiving an error and asking the user if wants to continue
     result := DirCreate(invalid, false);
-    if (result.failed) {
-        if (AskYesNo("Failed, do you want to exit?")) {
+    if result.failed {
+        if AskYesNo("Failed, do you want to exit?") {
             PrintLn("All right, bye");
             Exit(0);
         }

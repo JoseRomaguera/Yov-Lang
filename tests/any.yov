@@ -34,7 +34,7 @@ Main :: func
     else Assert(false);
     
     r1 := ReturnAny(1);
-    if (r1 is String) Assert(r1 == "A");
+    if r1 is String then Assert(r1 == "A");
     else Assert(false);
     
     r0 = ReturnAny(0);
@@ -46,7 +46,7 @@ Main :: func
     else Assert(false);
     
     r1 = ReturnTuple(1);
-    if (r1 is String) Assert(r1 == "A");
+    if r1 is String then Assert(r1 == "A");
     else Assert(false);
 }
 
@@ -67,10 +67,12 @@ CustomString :: func (v: Any) -> String
 
 ReturnAny :: func (i: Int) -> Any
 {
-    if (i == 0) return 1;
-    if (i == 1) return "A";
-    if (i == 2) return false;
-    return -1;
+    if i == {
+        case 0; return 1;
+        case 1; return "A";
+        case 2; return false;
+        case; return -1;
+    }
 }
 
 ReturnTuple :: func (i: Int) -> (a: Any, b: Int)

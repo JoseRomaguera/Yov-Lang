@@ -1,6 +1,6 @@
 #include "front.h"
 
-inline_fn IR_Unit* ir_unit_alloc(IR_Context* ir, UnitKind kind, Location location)
+IR_Unit* IRUnitAlloc(IR_Context* ir, UnitKind kind, Location location)
 {
     PROFILE_FUNCTION;
     IR_Unit* unit = ArenaPushStruct<IR_Unit>(ir->arena);
@@ -12,14 +12,14 @@ inline_fn IR_Unit* ir_unit_alloc(IR_Context* ir, UnitKind kind, Location locatio
     return unit;
 }
 
-internal_fn IR_Unit* ir_alloc_empty(IR_Context* ir, Location location) {
-    return ir_unit_alloc(ir, UnitKind_Empty, location);
+IR_Unit* IRUnitAlloc_Empty(IR_Context* ir, Location location) {
+    return IRUnitAlloc(ir, UnitKind_Empty, location);
 }
 
-internal_fn IR_Unit* ir_alloc_jump(IR_Context* ir, I32 condition, Value src, IR_Unit* jump_to_unit, Location location)
+IR_Unit* IRUnitAlloc_Jump(IR_Context* ir, I32 condition, Value src, IR_Unit* jump_to_unit, Location location)
 {
     Assert(jump_to_unit != NULL);
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Jump, location);
+    IR_Unit* unit = IRUnitAlloc(ir, UnitKind_Jump, location);
     unit->src0 = src;
     unit->jump.condition = condition;
     unit->jump.unit = jump_to_unit;
@@ -121,11 +121,11 @@ IR_Group IRAppend(IR_Group o0, IR_Group o1)
     return out;
 }
 
-inline_fn IR_Group ir_append_3(IR_Group o0, IR_Group o1, IR_Group o2) {
+IR_Group IRAppend3(IR_Group o0, IR_Group o1, IR_Group o2) {
     IR_Group out = IRAppend(o0, o1);
     return IRAppend(out, o2);
 }
-inline_fn IR_Group ir_append_4(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3) {
+IR_Group IRAppend4(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3) {
     IR_Group out = IRAppend(o0, o1);
     out = IRAppend(out, o2);
     return IRAppend(out, o3);
@@ -140,7 +140,7 @@ inline_fn IR_Group ir_append_5(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o
 internal_fn IR_Group ir_from_result_eval(IR_Context* ir, Value src, Location location)
 {
     PROFILE_FUNCTION;
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_ResultEval, location);
+    IR_Unit* unit = IRUnitAlloc(ir, UnitKind_ResultEval, location);
     unit->src0 = src;
     return IRFromSingle(unit);
 }
@@ -263,29 +263,6 @@ IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location)
     return IRFailed();
 }
 
-IR_Group IRFromCall(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext expr_context, Location location)
-{
-    PROFILE_FUNCTION;
-    
-    Program* program = ir->program;
-    Reporter* reporter = ir->reporter;
-    
-    FunctionDefinition* fn = FunctionFromIdentifier(program, identifier);
-    
-    if (fn != NULL)
-    {
-        return IRFromFunctionCall(ir, fn, parameters, expr_context, location);
-    }
-    
-    VType call_vtype = TypeFromName(program, identifier);
-    if (!TypeIsNil(call_vtype)) {
-        return IRFromDefaultInitializer(ir, call_vtype, location);
-    }
-    
-    report_symbol_not_found(location, identifier);
-    return IRFailed();
-}
-
 IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value> parameters, ExpresionContext expr_context, Location location)
 {
     PROFILE_FUNCTION;
@@ -336,7 +313,7 @@ IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value>
             values[i] = ValueFromRegister(register_index, vtype, false);
         }
         
-        IR_Unit* unit = ir_unit_alloc(ir, UnitKind_FunctionCall, location);
+        IR_Unit* unit = IRUnitAlloc(ir, UnitKind_FunctionCall, location);
         unit->dst_index = first_register_index;
         unit->function_call.fn = fn;
         unit->function_call.parameters = array_copy(ir->arena, params);
@@ -359,6 +336,18 @@ IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value>
     return out;
 }
 
+IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parameters, ExpresionContext context, Location location)
+{
+    Reporter* reporter = ir->reporter;
+    
+    FunctionDefinition* fn = FunctionFromIdentifier(ir->program, name);
+    if (fn == NULL) {
+        report_symbol_not_found(location, name);
+        return IRFailed();
+    }
+    return IRFromFunctionCall(ir, fn, parameters, context, location);
+}
+
 IR_Group IRFromDefaultInitializer(IR_Context* ir, VType vtype, Location location) {
     Assert(VTypeValid(vtype));
     return IRFromNone(ValueFromZero(vtype));
@@ -370,7 +359,7 @@ IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location)
     
     Assert(dst.kind == ValueKind_LValue || dst.kind == ValueKind_Register);
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Store, location);
+    IR_Unit* unit = IRUnitAlloc(ir, UnitKind_Store, location);
     unit->dst_index = dst.reg.index;
     unit->src0 = src;
     
@@ -383,7 +372,7 @@ IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location)
     
     Assert(dst.kind == ValueKind_LValue || dst.kind == ValueKind_Register);
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Copy, location);
+    IR_Unit* unit = IRUnitAlloc(ir, UnitKind_Copy, location);
     unit->dst_index = dst.reg.index;
     unit->src0 = src;
     
@@ -465,13 +454,13 @@ IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value s
     IR_Unit* unit;
     if (mode == 1)
     {
-        unit = ir_unit_alloc(ir, UnitKind_Copy, location);
+        unit = IRUnitAlloc(ir, UnitKind_Copy, location);
         unit->dst_index = dst.reg.index;
         unit->src0 = src;
     }
     else
     {
-        unit = ir_unit_alloc(ir, UnitKind_Store, location);
+        unit = IRUnitAlloc(ir, UnitKind_Store, location);
         unit->dst_index = dst.reg.index;
         unit->src0 = src;
     }
@@ -527,7 +516,7 @@ IR_Group IRFromOp(IR_Context* ir, UnitKind kind, VType dst_type, Value src0, Val
     Assert(dst_type.kind == VKind_Primitive);
     Value dst = ValueFromRegister(IRRegisterAlloc(ir, dst_type, RegisterKind_Local, false), dst_type, false);
     
-    IR_Unit* unit = ir_unit_alloc(ir, kind, location);
+    IR_Unit* unit = IRUnitAlloc(ir, kind, location);
     unit->dst_index = dst.reg.index;
     unit->src0 = src0;
     unit->src1 = src1;
@@ -573,7 +562,7 @@ internal_fn IR_Group IRFromArrayAppend(IR_Context* ir, Value array, Value src, B
     Array<Value> params = array_make<Value>(context.arena, 2);
     params[0] = array;
     params[1] = src;
-    out = IRAppend(out, IRFromCall(ir, call, params, expr_ctx, location));
+    out = IRAppend(out, IRFromFunctionCallName(ir, call, params, expr_ctx, location));
     out = IRAppend(out, IRFromDereference(ir, array, location));
     return out;
 }
@@ -746,19 +735,19 @@ IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorK
         params[1] = right;
         
         if (op == OperatorKind_Addition) {
-            out = IRAppend(out, IRFromCall(ir, "StrAppend", params, expr_ctx, location));
+            out = IRAppend(out, IRFromFunctionCallName(ir, "StrAppend", params, expr_ctx, location));
             return out;
         }
         if (op == OperatorKind_Division) {
-            out = IRAppend(out, IRFromCall(ir, "PathAppend", params, expr_ctx, location));
+            out = IRAppend(out, IRFromFunctionCallName(ir, "PathAppend", params, expr_ctx, location));
             return out;
         }
         if (op == OperatorKind_Equals) {
-            out = IRAppend(out, IRFromCall(ir, "StrEquals", params, expr_ctx, location));
+            out = IRAppend(out, IRFromFunctionCallName(ir, "StrEquals", params, expr_ctx, location));
             return out;
         }
         if (op == OperatorKind_NotEquals) {
-            out = IRAppend(out, IRFromCall(ir, "StrEquals", params, expr_ctx, location));
+            out = IRAppend(out, IRFromFunctionCallName(ir, "StrEquals", params, expr_ctx, location));
             out = IRAppend(out, IRFromOp(ir, UnitKind_Not, out.value.vtype, out.value, ValueNone(), location));
             return out;
         }
@@ -791,7 +780,7 @@ IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorK
             params[0] = cp;
             
             ExpresionContext expr_ctx = ExpresionContext_from_vtype(VType_String, 1);
-            out = IRAppend(out, IRFromCall(ir, "StrFromCodepoint", params, expr_ctx, location));
+            out = IRAppend(out, IRFromFunctionCallName(ir, "StrFromCodepoint", params, expr_ctx, location));
             if (!out.success) return IRFailed();
             
             cp = out.value;
@@ -802,7 +791,7 @@ IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorK
         params[1] = front ? str : cp;
         
         ExpresionContext expr_ctx = ExpresionContext_from_inference(1);
-        out = IRAppend(out, IRFromCall(ir, "StrAppend", params, expr_ctx, location));
+        out = IRAppend(out, IRFromFunctionCallName(ir, "StrAppend", params, expr_ctx, location));
         return out;
     }
     
@@ -853,6 +842,17 @@ IR_Group IRFromSignOperator(IR_Context* ir, Value src, OperatorKind op, Location
         else if (op == OperatorKind_Substraction)
         {
             VType type = VType_Int;
+            
+            if (ValueIsCompiletime(src))
+            {
+                if (TypeIsInt(src.vtype)) {
+                    return IRFromNone(ValueFromInt(-src.literal_sint));
+                }
+                else if (TypeIsUInt(src.vtype)) {
+                    return IRFromNone(ValueFromInt(-((I64)src.literal_uint)));
+                }
+            }
+            
             return IRFromOp(ir, UnitKind_Neg, type, src, ValueNone(), location);
         }
         if (op == OperatorKind_LogicalNot) return IRFromOp(ir, UnitKind_Not, src.vtype, src, ValueNone(), location);
@@ -899,7 +899,7 @@ IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, VTyp
 {
     PROFILE_FUNCTION;
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Child, location);
+    IR_Unit* unit = IRUnitAlloc(ir, UnitKind_Child, location);
     unit->dst_index = IRRegisterAlloc(ir, vtype, RegisterKind_Local, false);
     unit->src0 = src;
     unit->src1 = index;
@@ -998,19 +998,19 @@ IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR
         return failure;
     }
     
-    IR_Unit* end_unit = ir_alloc_empty(ir, location);
+    IR_Unit* end_unit = IRUnitAlloc_Empty(ir, location);
     IR_Unit* failed_unit = end_unit;
     
     if (failure.unit_count > 0)
     {
-        IR_Unit* jump = ir_alloc_jump(ir, 0, ValueNone(), end_unit, location);
+        IR_Unit* jump = IRUnitAlloc_Jump(ir, 0, ValueNone(), end_unit, location);
         success = IRAppend(success, IRFromSingle(jump));
         
         failed_unit = failure.first;
     }
     
-    IR_Unit* jump = ir_alloc_jump(ir, -1, condition, failed_unit, location);
-    return ir_append_4(IRFromSingle(jump), success, failure, IRFromSingle(end_unit));
+    IR_Unit* jump = IRUnitAlloc_Jump(ir, -1, condition, failed_unit, location);
+    return IRAppend4(IRFromSingle(jump), success, failure, IRFromSingle(end_unit));
 }
 
 IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group content, IR_Group update, Location location)
@@ -1047,23 +1047,23 @@ IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group 
     // Condition
     if (!fixed_condition)
     {
-        IR_Unit* jump = ir_alloc_jump(ir, -1, condition.value, scope->break_unit, location);
+        IR_Unit* jump = IRUnitAlloc_Jump(ir, -1, condition.value, scope->break_unit, location);
         condition = IRAppend(condition, IRFromSingle(jump));
     }
     
     // Loop
     {
         if (condition.unit_count == 0) {
-            condition = IRAppend(condition, IRFromSingle(ir_alloc_empty(ir, location)));
+            condition = IRAppend(condition, IRFromSingle(IRUnitAlloc_Empty(ir, location)));
         }
         
-        IR_Unit* jump = ir_alloc_jump(ir, 0, ValueNone(), condition.first, location);
+        IR_Unit* jump = IRUnitAlloc_Jump(ir, 0, ValueNone(), condition.first, location);
         content = IRAppend(content, IRFromSingle(jump));
     }
     
     IR_Group loop = IRAppend(condition, content);
     
-    return ir_append_3(init, loop, IRFromSingle(scope->break_unit));
+    return IRAppend3(init, loop, IRFromSingle(scope->break_unit));
 }
 
 IR_Group IRFromFlowModifier(IR_Context* ir, B32 is_break, Location location)
@@ -1081,7 +1081,7 @@ IR_Group IRFromFlowModifier(IR_Context* ir, B32 is_break, Location location)
     }
     
     IR_Unit* unit = is_break ? scope->break_unit : scope->continue_unit;
-    return IRFromSingle(ir_alloc_jump(ir, 0, ValueNone(), unit, location));
+    return IRFromSingle(IRUnitAlloc_Jump(ir, 0, ValueNone(), unit, location));
 }
 
 IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location)
@@ -1145,7 +1145,7 @@ IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location)
         }
     }
     
-    IR_Unit* unit = ir_unit_alloc(ir, UnitKind_Return, location);
+    IR_Unit* unit = IRUnitAlloc(ir, UnitKind_Return, location);
     return IRAppend(out, IRFromSingle(unit));
 }
 
@@ -1723,8 +1723,8 @@ Symbol ir_find_symbol(IR_Context* ir, String identifier)
 
 IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, Location location)
 {
-    IR_Unit* continue_unit = ir_alloc_empty(ir, location);
-    IR_Unit* break_unit = ir_alloc_empty(ir, location);
+    IR_Unit* continue_unit = IRUnitAlloc_Empty(ir, location);
+    IR_Unit* break_unit = IRUnitAlloc_Empty(ir, location);
     
     IR_LoopingScope* scope = array_add(&ir->looping_scopes);
     scope->continue_unit = continue_unit;

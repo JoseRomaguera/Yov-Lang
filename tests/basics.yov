@@ -63,7 +63,7 @@ Main :: func
     
     // Array iteration mutation
     {
-        arr := {1,2,3};
+        arr := [1,2,3];
         
         for (v,i: arr) {
             arr[i] *= 2;

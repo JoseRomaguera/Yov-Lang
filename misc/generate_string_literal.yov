@@ -1,5 +1,5 @@
 
-generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_name: String)
+GenerateCppStringLiteral :: func(dst_path: String, src_path: String, expr_name: String)
 {
     //println("Reading file: {src_path}");
     
@@ -7,7 +7,7 @@ generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_nam
     
     //println("Processing text");
     
-    lines: String[];
+    lines: Array[String];
     {
         line: String;
         cursor    : UInt = 0;
@@ -15,7 +15,7 @@ generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_nam
         while (cursor < raw.size) {
             codepoint, cursor = StrGetCodepoint(raw, cursor);
             
-            if (codepoint == '\r') continue;
+            if codepoint == '\r' then continue;
             
             if (codepoint == '\n') {
                 lines += line;
@@ -23,12 +23,11 @@ generate_cpp_string_literal :: func(dst_path: String, src_path: String, expr_nam
                 continue;
             }
             
-            if (codepoint == '\\' || codepoint == '"') 
-                line += '\\';
+            if codepoint == '\\' || codepoint == '"' then line += '\\';
             
             line += codepoint;
         }
-        if (line.size > 0) lines += line;
+        if line.size > 0 then lines += line;
     }
     
     code: String;

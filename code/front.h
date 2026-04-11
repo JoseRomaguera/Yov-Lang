@@ -51,7 +51,9 @@ enum TokenKind {
     
     TokenKind_NullKeyword,
     TokenKind_IfKeyword,
+    TokenKind_ThenKeyword,
     TokenKind_ElseKeyword,
+    TokenKind_CaseKeyword,
     TokenKind_WhileKeyword,
     TokenKind_ForKeyword,
     TokenKind_IsKeyword,
@@ -90,6 +92,7 @@ B32 token_is_sign_or_binary_op(TokenKind token);
 B32 TokenIsFlowModifier(TokenKind token);
 TokenKind TokenKindFromOpenScope(TokenKind open_token);
 
+Location LocationFromToken(Token token);
 Location LocationFromTokens(Array<Token> tokens);
 
 Token ReadToken(String text, U64 cursor, I32 script_id);
@@ -230,6 +233,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext context
 IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionContext context);
 IR_Group ReadCode(IR_Context* ir, Parser* parser);
 IR_Group ReadSentence(IR_Context* ir, Parser* parser);
+IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src);
 
 IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext context, Parser* parser);
 
@@ -249,17 +253,23 @@ VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program);
 
 Value ValueFromIrObject(IR_Object* object);
 
+IR_Unit* IRUnitAlloc(IR_Context* ir, UnitKind kind, Location location);
+IR_Unit* IRUnitAlloc_Empty(IR_Context* ir, Location location);
+IR_Unit* IRUnitAlloc_Jump(IR_Context* ir, I32 condition, Value src, IR_Unit* jump_to_unit, Location location);
+
 IR_Group IRFailed();
 IR_Group IRFromNone(Value value = ValueNone());
 IR_Group IRFromSingle(IR_Unit* unit, Value value = ValueNone());
 IR_Group IRAppend(IR_Group o0, IR_Group o1);
+IR_Group IRAppend3(IR_Group o0, IR_Group o1, IR_Group o2);
+IR_Group IRAppend4(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3);
 IR_Group IRFromDefineObject(IR_Context* ir, RegisterKind register_kind, String identifier, VType vtype, B32 constant, Location location);
 IR_Group IRFromDefineTemporal(IR_Context* ir, VType vtype, Location location);
 IR_Group IRFromReference(IR_Context* ir, B32 expects_lvalue, Value value, Location location);
 IR_Group IRFromDereference(IR_Context* ir, Value value, Location location);
 IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location);
-IR_Group IRFromCall(IR_Context* ir, String identifier, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value> parameters, ExpresionContext context, Location location);
+IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromDefaultInitializer(IR_Context* ir, VType vtype, Location location);
 IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location);
 IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location);

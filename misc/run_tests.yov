@@ -14,7 +14,7 @@ Main :: func
     PrintLn("Running tests...");
     for (it := 0; it < REPEAT; it += 1) {
         RunAllTests();
-        if (failed_count > 0) break;
+        if failed_count > 0 then break;
     }
     
     PrintLn("Failed: {failed_count}/{test_count}");
@@ -38,14 +38,14 @@ RunAllTests :: func
 
 RunTest :: func (name: String, args: String, expected_code: Int)
 {
-    if (SHOW_PRINTS) calls.redirect_stdout = RedirectStdout.Console;
+    if SHOW_PRINTS then calls.redirect_stdout = RedirectStdout.Console;
     else calls.redirect_stdout = RedirectStdout.Script;
     
     for (it := 0; it < ITERATIONS; it += 1) {
         test_count += 1;
         out, res := CallScript(name, args, "-no_user");
         
-        if (res.code != expected_code) {
+        if res.code != expected_code {
             failed_count += 1;
             PrintLn("-> Test failed: {name}");
             PrintLn(out.stdout);
@@ -54,6 +54,6 @@ RunTest :: func (name: String, args: String, expected_code: Int)
         
     }
     
-    if (ITERATIONS == 1) PrintLn("Test succeded: {name}");
+    if ITERATIONS == 1 then PrintLn("Test succeded: {name}");
     else PrintLn("Test succeded x{ITERATIONS}: {name}");
 }

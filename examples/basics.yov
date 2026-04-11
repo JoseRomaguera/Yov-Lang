@@ -104,7 +104,7 @@ Main :: func
     
     say_it := AskYesNo("Say Hello World?");
     
-    if (say_it) {
+    if say_it {
         PrintLn("Hello World");
     }
     else {
@@ -134,11 +134,11 @@ Main :: func
     }
     
     for (i := 0; true; i += 1) {
-        if (i % 2 == 0) {
+        if i % 2 == 0 {
             PrintLn("Continue on {i}");
             continue;
         }
-        if (i == 5) {
+        if i == 5 {
             PrintLn("Break on {i}");
             break;
         }
@@ -148,15 +148,15 @@ Main :: func
     
     PrintLn("\n-> Arrays");
     
-    words := { "This", "is" } + { "a" };
-    words += { "dynamic", "array" };
+    words := [ "This", "is" ] + [ "a" ];
+    words += [ "dynamic", "array" ];
     words += "!";
     
     PrintLn("words = {words}");
     PrintLn("words.count = {words.count}");
     
-    empty_array: Int[];
-    array_with_defaults := [5]->Int;
+    empty_array: Array[Int];
+    array_with_defaults := Array[Int](5);
     array_with_defaults[2] = 20;
     
     PrintLn("empty_array = {empty_array}");

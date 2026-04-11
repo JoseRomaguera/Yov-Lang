@@ -32,7 +32,7 @@ Main :: func
     PrintLn("opt_foo = {opt_foo}");
     PrintLn("print_all = {print_all}");
     
-    if (print_all) PrintLn("All the defined args: {context.args}");
+    if print_all then PrintLn("All the defined args: {context.args}");
     
     if (foo == .B)
     {

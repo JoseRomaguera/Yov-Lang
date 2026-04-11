@@ -463,6 +463,7 @@ String StrFromValue(Arena* arena, Program* program, Value value, B32 raw = false
 String StringFromCompiletime(Arena* arena, Program* program, Value value);
 B32 B32FromCompiletime(Value value);
 VType TypeFromCompiletime(Program* program, Value value);
+B32 CompiletimeEquals(Program* program, Value v0, Value v1);
 
 void DefinitionIdentify(Program* program, U32 index, DefinitionType type, String identifier, Location location);
 

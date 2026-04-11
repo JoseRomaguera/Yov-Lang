@@ -330,16 +330,8 @@ String VTypeGetName(Program* program, VType vtype)
     
     if (vtype.kind == VKind_Array)
     {
-        U64 needed_size = vtype.base_name.size + (vtype.array_dimensions * 2);
-        String name = StrAlloc(context.arena, needed_size);
-        MemoryCopy(name.data, vtype.base_name.data, vtype.base_name.size);
-        
-        foreach(i, vtype.array_dimensions) {
-            U64 offset = vtype.base_name.size + i * 2;
-            name[offset + 0] = '[';
-            name[offset + 1] = ']';
-        }
-        return name;
+        VType next = VTypeNext(program, vtype);
+        return StrFormat(context.arena, "Array[%S]", VTypeGetName(program, next));
     }
     if (vtype.kind == VKind_Reference) {
         String next = VTypeGetName(program, VTypeNext(program, vtype));
@@ -842,7 +834,7 @@ B32 ValueIsCompiletime(Value value)
         return true;
     }
     
-    return value.kind == ValueKind_Literal || value.kind == ValueKind_ZeroInit;
+    return value.kind == ValueKind_Literal || value.kind == ValueKind_ZeroInit || value.kind == ValueKind_None;
 }
 
 I32 ValueGetRegister(Value value) {
@@ -1098,7 +1090,7 @@ Value ValueFromStringExpression(Arena* arena, String str, VType vtype)
     
     if (TypeIsInt(vtype)) {
         I64 value;
-        if (!I64FromString(str, &value)) return ValueNone();
+        if (!I64FromString(&value, str)) return ValueNone();
         return ValueFromInt(value);
     }
     
@@ -1347,6 +1339,45 @@ VType TypeFromCompiletime(Program* program, Value value)
     return VType_Void;
 }
 
+B32 CompiletimeEquals(Program* program, Value v0, Value v1)
+{
+    if (!ValueIsCompiletime(v0) || !ValueIsCompiletime(v1)) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    if (!TypeEquals(program, v0.vtype, v1.vtype)) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    VType type = v0.vtype;
+    
+    if (TypeIsInt(type)) {
+        return v0.literal_sint == v1.literal_sint;
+    }
+    if (TypeIsUInt(type)) {
+        return v0.literal_uint == v1.literal_uint;
+    }
+    if (TypeIsBool(type)) {
+        return v0.literal_bool == v1.literal_bool;
+    }
+    if (TypeIsFloat(type)) {
+        return v0.literal_float == v1.literal_float;
+    }
+    if (TypeIsString(type)) {
+        return v0.literal_string == v1.literal_string;
+    }
+    if (TypeIsEnum(type)) {
+        return v0.literal_sint == v1.literal_sint;
+    }
+    if (TypeEquals(program, type, VType_Type)) {
+        return TypeEquals(program, v0.literal_type, v1.literal_type);
+    }
+    
+    InvalidCodepath();
+    return false;
+}
 
 I32 RegIndexFromGlobal(U32 global_index)
 {

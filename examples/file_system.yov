@@ -9,12 +9,12 @@
 
 Main :: func
 {
-    if (Exists("_copied.yov")) PrintLn("Currently exists");
+    if Exists("_copied.yov") then PrintLn("Currently exists");
     else PrintLn("Not exists");
     
     FileCopy("_copied.yov", "file_system.yov", .Override);
     
-    if (Exists("_moved.yov")) {
+    if Exists("_moved.yov") {
         PrintLn("\"_moved.yov\" exits, deleting it...");
         FileDelete("_moved.yov");
     }
@@ -29,7 +29,7 @@ Main :: func
     DirDelete("_dir");
     DirDelete("_moved_dir");
     
-    if (AskYesNo("Delete \"_moved.yov\"?")) FileDelete("_moved.yov");
+    if AskYesNo("Delete \"_moved.yov\"?") then FileDelete("_moved.yov");
     
     PrintLn("Finished!!");
 }

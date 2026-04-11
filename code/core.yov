@@ -21,8 +21,8 @@ Context :: struct {
     cd: String;
     script_dir: String;
     caller_dir: String;
-    args: String[];
-    types: Type[];
+    args: Array[String];
+    types: Array[Type];
     seed: UInt;
 }
 
@@ -57,7 +57,7 @@ Sleep   :: func(sec: Float);
 
 Env          :: func(name: String) -> (value: String, result: Result);
 EnvPath      :: func(name: String) -> (value: String, result: Result);
-EnvPathArray :: func(name: String) -> (value: String[], result: Result);
+EnvPathArray :: func(name: String) -> (value: Array[String], result: Result);
 
 ArrayAppendBack         :: func(dst: Any, src: Any);
 // TODO: ArrayAppendFront        :: func(dst: Any, src: Any);
@@ -116,7 +116,7 @@ CallScript :: func(path: String, arguments: String, yov_arguments: String) -> (o
 
 StrAppend       :: func(str0: String, str1: String) -> String;
 StrEquals       :: func(str0: String, str1: String) -> Bool;
-StrSplit        :: func(str: String, separator: String) -> String[];
+StrSplit        :: func(str: String, separator: String) -> Array[String];
 StrGetCodepoint :: func(str: String, cursor: UInt) -> (codepoint: UInt, next_cursor: UInt);
 StrFromCodepoint :: func(cp: UInt) -> String;
 
@@ -130,12 +130,12 @@ TimeElapsed :: func() -> Float;
 
 // Math
 
-MinI :: func(v0: Int, v1: Int) -> Int { if (v0 < v1) return v0; return v1; }
-MaxI :: func(v0: Int, v1: Int) -> Int { if (v0 < v1) return v1; return v0; }
-MinU :: func(v0: UInt, v1: UInt) -> UInt { if (v0 < v1) return v0; return v1; }
-MaxU :: func(v0: UInt, v1: UInt) -> UInt { if (v0 < v1) return v1; return v0; }
-MinF :: func(v0: Float, v1: Float) -> Float { if (v0 < v1) return v0; return v1; }
-MaxF :: func(v0: Float, v1: Float) -> Float { if (v0 < v1) return v1; return v0; }
+MinI :: func(v0: Int, v1: Int) -> Int { return if v0 < v1 then v0 else v1; }
+MaxI :: func(v0: Int, v1: Int) -> Int { return if v0 > v1 then v0 else v1; }
+MinU :: func(v0: UInt, v1: UInt) -> UInt { return if v0 < v1 then v0 else v1; }
+MaxU :: func(v0: UInt, v1: UInt) -> UInt { return if v0 > v1 then v0 else v1; }
+MinF :: func(v0: Float, v1: Float) -> Float { return if v0 < v1 then v0 else v1; }
+MaxF :: func(v0: Float, v1: Float) -> Float { return if v0 > v1 then v0 else v1; }
 
 Random :: func() -> UInt;
 RandomRange :: func(min: Int, max: Int) -> Int;
@@ -155,28 +155,28 @@ ObjectDefinition :: struct {
 
 FunctionDefinition :: struct {
     identifier: String;
-    parameters: ObjectDefinition[];
-    returns: ObjectDefinition[];
+    parameters: Array[ObjectDefinition];
+    returns: Array[ObjectDefinition];
 }
 
 StructDefinition :: struct {
     identifier: String;
-    members: ObjectDefinition[];
+    members: Array[ObjectDefinition];
 }
 
 EnumDefinition :: struct {
     identifier: String;
-    elements: String[];
-    values: Int[];
+    elements: Array[String];
+    values: Array[Int];
 }
 
 YovParseOutput :: struct {
-    scripts: String[];
-    functions: FunctionDefinition[];
-    structs: StructDefinition[];
-    enums: EnumDefinition[];
-    globals: ObjectDefinition[];
-    reports: String[];
+    scripts: Array[String];
+    functions: Array[FunctionDefinition];
+    structs: Array[StructDefinition];
+    enums: Array[EnumDefinition];
+    globals: Array[ObjectDefinition];
+    reports: Array[String];
 }
 
 YovParse :: func(path: String) -> YovParseOutput;
@@ -205,7 +205,7 @@ FileCopy    :: func(dst: String, src: String, mode: CopyMode) -> Result;
 FileMove    :: func(dst: String, src: String) -> Result;
 FileDelete  :: func(path: String) -> Result;
 FileGetInfo :: func(path: String) -> (info: FileInfo, result: Result);
-DirGetInfo  :: func(path: String) -> (infos: FileInfo[], result: Result);
+DirGetInfo  :: func(path: String) -> (infos: Array[FileInfo], result: Result);
 
 ReadEntireFile  :: func(path: String) -> (content: String, result: Result);
 WriteEntireFile :: func(path: String, content: String) -> Result;
