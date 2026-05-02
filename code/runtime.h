@@ -127,7 +127,7 @@ String StrFromObject(Arena* arena, Runtime* runtime, Object* object, B32 raw = t
 String StrFromRef(Arena* arena, Runtime* runtime, Reference ref, B32 raw = true);
 
 Reference ref_from_object(Object* object);
-Reference ref_from_address(Object* parent, VType vtype, void* address);
+Reference ref_from_address(Object* parent, Type* type, void* address);
 
 void ref_set_member(Runtime* runtime, Reference ref, U32 index, Reference member);
 
@@ -144,10 +144,10 @@ Reference AllocUInt(Runtime* runtime, U64 value);
 Reference AllocFloat(Runtime* runtime, F64 value);
 Reference AllocBool(Runtime* runtime, B32 value);
 Reference AllocString(Runtime* runtime, String value);
-Reference AllocArray(Runtime* runtime, VType element_vtype, U32 count);
-Reference AllocArrayMultidimensional(Runtime* runtime, VType base_vtype, Array<I64> dimensions);
-Reference AllocArrayFromEnum(Runtime* runtime, VType enum_vtype);
-Reference AllocEnum(Runtime* runtime, VType vtype, I64 index);
+Reference AllocArray(Runtime* runtime, Type* element_vtype, U32 count);
+Reference AllocArrayMultidimensional(Runtime* runtime, Type* base_vtype, Array<I64> dimensions);
+Reference AllocArrayFromEnum(Runtime* runtime, Type* enum_vtype);
+Reference AllocEnum(Runtime* runtime, Type* type, I64 index);
 Reference AllocReference(Runtime* runtime, Reference ref);
 
 B32 is_valid(Reference ref);
@@ -162,7 +162,7 @@ B32 RefIsFloat(Reference ref);
 B32 is_string(Reference ref);
 B32 RefIsArray(Reference ref);
 B32 is_enum(Reference ref);
-B32 is_reference(Reference ref);
+B32 RefIsReference(Reference ref);
 B32 RefIsType(Program* program, Reference ref);
 
 I64 RefGetSInt(Reference ref);
@@ -174,7 +174,7 @@ I64 get_enum_index(Reference ref);
 String get_string(Reference ref);
 ObjectData_Array* RefGetArray(Reference ref);
 Reference RefDereference(Runtime* runtime, Reference ref);
-VType RefGetType(Runtime* runtime, Reference ref);
+Type* RefGetType(Runtime* runtime, Reference ref);
 
 I64 get_int_member(Runtime* runtime, Reference ref, String member);
 B32 get_bool_member(Runtime* runtime, Reference ref, String member);
@@ -216,17 +216,17 @@ void ref_assign_Result(Runtime* runtime, Reference ref, Result res);
 void ref_assign_CallOutput(Runtime* runtime, Reference ref, CallOutput out);
 void ref_assign_FileInfo(Runtime* runtime, Reference ref, FileInfo info);
 void ref_assign_FunctionDefinition(Runtime* runtime, Reference ref, FunctionDefinition* fn);
-void ref_assign_StructDefinition(Runtime* runtime, Reference ref, VType vtype);
-void ref_assign_EnumDefinition(Runtime* runtime, Reference ref, VType vtype);
+void ref_assign_StructDefinition(Runtime* runtime, Reference ref, Type* type);
+void ref_assign_EnumDefinition(Runtime* runtime, Reference ref, Type* type);
 void ref_assign_ObjectDefinition(Runtime* runtime, Reference ref, ObjectDefinition def);
 
-void ref_assign_Type(Runtime* runtime, Reference ref, VType vtype);
+void ref_assign_Type(Runtime* runtime, Reference ref, Type* type);
 
 Reference ref_from_Result(Runtime* runtime, Result res);
 Result Result_from_ref(Runtime* runtime, Reference ref);
 
 U32 object_generate_id(Runtime* runtime);
-Reference object_alloc(Runtime* runtime, VType vtype);
+Reference object_alloc(Runtime* runtime, Type* type);
 void object_free(Runtime* runtime, Object* obj, B32 release_internal_refs);
 
 void object_increment_ref(Object* obj);

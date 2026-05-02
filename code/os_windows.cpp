@@ -414,7 +414,7 @@ Result OsDeleteFile(String path)
 internal_fn Result CreateRecursivePath(String path)
 {
     Array<String> splits = StrSplit(context.arena, path, "/");
-    Array<String> folders = array_make(splits.data, splits.count - 1);
+    Array<String> folders = ArrayMake(splits.data, splits.count - 1);
     
     String last_folder = "";
     
@@ -708,18 +708,18 @@ Result OsDirGetFilesInfo(Arena* arena, String path, Array<FileInfo>* ret)
     
     if (find == INVALID_HANDLE_VALUE) return {};
     
-    auto files = pooled_array_make<FileInfo>(context.arena, 32);
+    auto files = BArrayMake<FileInfo>(context.arena, 32);
     
     while (1) {
         if (!StrEquals(data.cFileName, ".") && !StrEquals(data.cFileName, "..")) {
-            array_add(&files, FileInfoFrom_WIN32_FIND_DATAA(arena, data, path));
+            BArrayAdd(&files, FileInfoFrom_WIN32_FIND_DATAA(arena, data, path));
         }
         if (!FindNextFileA(find, &data)) break;
     }
     
     FindClose(find);
     
-    *ret = array_from_pooled_array(arena, files);
+    *ret = ArrayFromBArray(arena, files);
     return RESULT_SUCCESS;
 }
 
@@ -933,7 +933,7 @@ Array<String> OsGetArgs(Arena* arena)
 {
     String line = GetCommandLineA();
     
-    PooledArray<String> list = pooled_array_make<String>(context.arena, 16);
+    BArray<String> list = BArrayMake<String>(context.arena, 16);
     U32 arg_index = 0;
     
     U64 cursor = 0;
@@ -953,7 +953,7 @@ Array<String> OsGetArgs(Arena* arena)
         
         if (arg_index > 0) {
             String arg = StrSub(line, start_cursor, cursor - start_cursor);
-            array_add(&list, StrCopy(arena, arg));
+            BArrayAdd(&list, StrCopy(arena, arg));
         }
         arg_index++;
         
@@ -961,7 +961,7 @@ Array<String> OsGetArgs(Arena* arena)
         while (cursor < line.size && line[cursor] == ' ') cursor++;
     }
     
-    return array_from_pooled_array(arena, list);
+    return ArrayFromBArray(arena, list);
 }
 
 Result OsEnvGet(Arena* arena, String* out, String name)

@@ -9,6 +9,10 @@ Parser* ParserAlloc(YovScript* script, RangeU64 range)
     parser->cursor = range.min;
     parser->range = range;
     
+#if DEV
+    parser->debug_str = StrHeapCopy(StrSub(parser->text, parser->range.min, parser->range.max - parser->range.min));
+#endif
+    
     return parser;
 }
 
@@ -68,16 +72,16 @@ Token ConsumeToken(Parser* parser)
 
 Array<Token> ConsumeAllTokens(Parser* parser)
 {
-    PooledArray<Token> tokens = pooled_array_make<Token>(context.arena, 16);
+    BArray<Token> tokens = BArrayMake<Token>(context.arena, 16);
     
     while (true)
     {
         Token token = ConsumeToken(parser);
         if (token.kind == TokenKind_None) break;
-        array_add(&tokens, token);
+        BArrayAdd(&tokens, token);
     }
     
-    return array_from_pooled_array(context.arena, tokens);
+    return ArrayFromBArray(context.arena, tokens);
 }
 
 void SkipInvalidTokens(Parser* parser)
@@ -324,21 +328,21 @@ SentenceKind GuessSentenceKind(Parser* parser)
 
 ExpresionContext ExpresionContext_from_void() {
     ExpresionContext ctx{};
-    ctx.vtype = VType_Void;
+    ctx.type = void_type;
     ctx.assignment_count = 0;
     return ctx;
 }
 
 ExpresionContext ExpresionContext_from_inference(U32 assignment_count) {
     ExpresionContext ctx{};
-    ctx.vtype = VType_Any;
+    ctx.type = any_type;
     ctx.assignment_count = assignment_count;
     return ctx;
 }
 
-ExpresionContext ExpresionContext_from_vtype(VType vtype, U32 assignment_count) {
+ExpresionContext ExpresionContext_from_type(Type* type, U32 assignment_count) {
     ExpresionContext ctx{};
-    ctx.vtype = vtype;
+    ctx.type = type;
     ctx.assignment_count = assignment_count;
     return ctx;
 }
@@ -361,7 +365,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
     if (tokens.count >= 2 && tokens[0].kind == TokenKind_OpenParenthesis && tokens[tokens.count - 1].kind == TokenKind_CloseParenthesis)
     {
         B32 couple = CheckTokensAreCouple(tokens, 0, tokens.count - 1, TokenKind_OpenParenthesis, TokenKind_CloseParenthesis);
-        if (couple) tokens = array_subarray(tokens, 1, tokens.count - 2);
+        if (couple) tokens = ArraySub(tokens, 1, tokens.count - 2);
     }
     
     if (tokens.count == 0) {
@@ -402,9 +406,9 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             return IRFailed();
         }
         
-        Array<Token> condition_tokens = array_subarray(tokens, 1, then_index - 1);
-        Array<Token> left_tokens = array_subarray(tokens, then_index + 1, else_index - then_index - 1);
-        Array<Token> right_tokens = array_subarray(tokens, else_index + 1, tokens.count - else_index - 1);
+        Array<Token> condition_tokens = ArraySub(tokens, 1, then_index - 1);
+        Array<Token> left_tokens = ArraySub(tokens, then_index + 1, else_index - then_index - 1);
+        Array<Token> right_tokens = ArraySub(tokens, else_index + 1, tokens.count - else_index - 1);
         
         if (left_tokens.count == 0 || right_tokens.count == 0) {
             ReportErrorFront(location, "Empty values for if expression");
@@ -415,30 +419,30 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         Location left_location = LocationFromTokens(left_tokens);
         Location right_location = LocationFromTokens(right_tokens);
         
-        IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, condition_location), ExpresionContext_from_vtype(VType_Bool, 1));
+        IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, condition_location), ExpresionContext_from_type(bool_type, 1));
         IR_Group left = ReadExpression(ir, ParserSub(parser, left_location), expr_context);
         IR_Group right = ReadExpression(ir, ParserSub(parser, right_location), expr_context);
         
         if (!condition.success || !left.success || !right.success) return IRFailed();
         
-        if (!TypeIsBool(condition.value.vtype)) {
+        if (condition.value.type != bool_type) {
             ReportErrorFront(location, "Expecting a boolean for if expression");
             return IRFailed();
         }
         
-        if (!TypeEquals(program, left.value.vtype, right.value.vtype)) {
+        if (left.value.type != right.value.type) {
             ReportErrorFront(location, "Types missmatch");
             return IRFailed();
         }
         
-        VType vtype = left.value.vtype;
-        if (TypeIsVoid(vtype) || TypeIsAny(vtype) || TypeIsNil(vtype)) {
+        Type* type = left.value.type;
+        if (type == void_type || type == any_type || type == nil_type) {
             ReportErrorFront(location, "Unknown type for if expression");
             return IRFailed();
         }
         
         // Assignments
-        IR_Group dst = IRFromDefineTemporal(ir, vtype, location);
+        IR_Group dst = IRFromDefineTemporal(ir, type, location);
         Value dst_value = dst.value;
         left = IRAppend(left, IRFromStore(ir, dst_value, left.value, location));
         right = IRAppend(right, IRFromStore(ir, dst_value, right.value, location));
@@ -468,7 +472,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         {
             U64 unsigned_value;
             if (U64FromString(&unsigned_value, token.value)) {
-                if (TypeIsUInt(expr_context.vtype)) {
+                if (expr_context.type == uint_type) {
                     return IRFromNone(ValueFromUInt(unsigned_value));
                 }
                 
@@ -492,7 +496,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         else if (token.kind == TokenKind_StringLiteral)
         {
             IR_Group out = IRFromNone();
-            PooledArray<Value> values = pooled_array_make<Value>(context.arena, 8);
+            BArray<Value> values = BArrayMake<Value>(context.arena, 8);
             
             String raw = token.value;
             StringBuilder builder = string_builder_make(context.arena);
@@ -565,7 +569,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     
                     Location subexpression_location = LocationMake(state_cursor, state_cursor + state_count, token.location.script_id);
                     
-                    IR_Group sub = ReadExpression(ir, ParserSub(parser, subexpression_location), ExpresionContext_from_vtype(VType_String, 1));
+                    IR_Group sub = ReadExpression(ir, ParserSub(parser, subexpression_location), ExpresionContext_from_type(string_type, 1));
                     if (!sub.success) return IRFailed();
                     
                     Value value = sub.value;
@@ -579,11 +583,11 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                         String literal = string_from_builder(context.arena, &builder);
                         if (literal.size > 0) {
                             builder = string_builder_make(context.arena);
-                            array_add(&values, ValueFromString(ir->arena, literal));
+                            BArrayAdd(&values, ValueFromString(ir->arena, literal));
                         }
                         
                         out = IRAppend(out, sub);
-                        array_add(&values, value);
+                        BArrayAdd(&values, value);
                     }
                     
                     continue;
@@ -594,10 +598,10 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             
             String literal = string_from_builder(context.arena, &builder);
             if (literal.size > 0) {
-                array_add(&values, ValueFromString(ir->arena, literal));
+                BArrayAdd(&values, ValueFromString(ir->arena, literal));
             }
             
-            out.value = ValueFromStringArray(ir->arena, program, array_from_pooled_array(context.arena, values));
+            out.value = ValueFromStringArray(ir->arena, program, ArrayFromBArray(context.arena, values));
             return out;
         }
         else if (token.kind == TokenKind_CodepointLiteral)
@@ -732,16 +736,16 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         
         B32 bitcast = keyword_token.kind == TokenKind_BitCastKeyword;
         
-        Array<Token> type_tokens = array_subarray(tokens, 2, end_parenthesis_index - 2);
-        Array<Token> src_tokens = array_subarray(tokens, end_parenthesis_index + 1, tokens.count - end_parenthesis_index - 1);
+        Array<Token> type_tokens = ArraySub(tokens, 2, end_parenthesis_index - 2);
+        Array<Token> src_tokens = ArraySub(tokens, end_parenthesis_index + 1, tokens.count - end_parenthesis_index - 1);
         
-        VType type = ReadObjectType(ParserSub(parser, LocationFromTokens(type_tokens)), reporter, program);
-        if (TypeIsNil(type)) return IRFailed();
+        Type* type = ReadObjectType(ParserSub(parser, LocationFromTokens(type_tokens)), reporter, program);
+        if (type == nil_type) return IRFailed();
         
         IR_Group out = ReadExpression(ir, ParserSub(parser, LocationFromTokens(src_tokens)), ExpresionContext_from_inference(1));
         if (!out.success) return IRFailed();
         
-        if (!TypeEquals(program, out.value.vtype, type)) {
+        if (out.value.type != type) {
             out = IRAppend(out, IRFromCasting(ir, out.value, type, bitcast, location));
         }
         
@@ -867,7 +871,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                 {
                     Assert(preferent_operator_index == 0);
                     
-                    Array<Token> subexpr_tokens = array_subarray(tokens, 1, tokens.count - 1);
+                    Array<Token> subexpr_tokens = ArraySub(tokens, 1, tokens.count - 1);
                     
                     IR_Group out = ReadExpression(ir, ParserSub(parser, LocationFromTokens(subexpr_tokens)), expr_context);
                     if (!out.success) return IRFailed();
@@ -894,13 +898,13 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     }
                     else
                     {
-                        Array<Token> left_expr_tokens = array_subarray(tokens, 0, preferent_operator_index);
-                        Array<Token> right_expr_tokens = array_subarray(tokens, preferent_operator_index + 1, tokens.count - (preferent_operator_index + 1));
+                        Array<Token> left_expr_tokens = ArraySub(tokens, 0, preferent_operator_index);
+                        Array<Token> right_expr_tokens = ArraySub(tokens, preferent_operator_index + 1, tokens.count - (preferent_operator_index + 1));
                         
                         ExpresionContext left_context = expr_context;
                         IR_Group left = ReadExpression(ir, ParserSub(parser, LocationFromTokens(left_expr_tokens)), left_context);
                         
-                        ExpresionContext right_context = VTypeValid(left.value.vtype) ? ExpresionContext_from_vtype(left.value.vtype, 1) : expr_context;
+                        ExpresionContext right_context = TypeIsValid(left.value.type) ? ExpresionContext_from_type(left.value.type, 1) : expr_context;
                         IR_Group right = ReadExpression(ir, ParserSub(parser, LocationFromTokens(right_expr_tokens)), right_context);
                         
                         IR_Group out = IRAppend(left, right);
@@ -923,7 +927,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     return IRFailed();
                 }
                 
-                Array<Token> expr_tokens = array_subarray(tokens, 0, tokens.count - 2);
+                Array<Token> expr_tokens = ArraySub(tokens, 0, tokens.count - 2);
                 Location expr_location = LocationFromTokens(expr_tokens);
                 
                 IR_Group out = IRFromNone();
@@ -958,52 +962,52 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         
         if (CheckTokensAreCouple(tokens, 0, close_index, TokenKind_OpenBracket, TokenKind_CloseBracket))
         {
-            VType element_vtype = VType_Any;
-            if (!TypeIsVoid(expr_context.vtype)) {
-                element_vtype = expr_context.vtype;
-                if (TypeIsArray(element_vtype)) {
-                    element_vtype = VTypeNext(program, element_vtype);
+            Type* element_type = any_type;
+            if (expr_context.type != void_type) {
+                element_type = expr_context.type;
+                if (TypeIsArray(element_type)) {
+                    element_type = TypeGetNext(program, element_type);
                 }
             }
             
             if (arrow_index > 0)
             {
-                Array<Token> type_tokens = array_subarray(tokens, arrow_index + 1, tokens.count - (arrow_index + 1));
+                Array<Token> type_tokens = ArraySub(tokens, arrow_index + 1, tokens.count - (arrow_index + 1));
                 Location type_code = LocationFromTokens(type_tokens);
-                element_vtype = ReadObjectType(ParserSub(parser, type_code), reporter, program);
-                if (TypeIsNil(element_vtype)) return IRFailed();
+                element_type = ReadObjectType(ParserSub(parser, type_code), reporter, program);
+                if (element_type == nil_type) return IRFailed();
                 
-                if (TypeIsVoid(element_vtype) || TypeIsAny(element_vtype)) {
+                if (element_type == void_type || element_type == any_type) {
                     ReportErrorFront(type_code, "Invalid type for array expression");
                     return IRFailed();
                 }
             }
             
-            VType expr_vtype = element_vtype;
+            Type* expr_type = element_type;
             
-            Array<Token> expr_tokens = array_subarray(tokens, 1, close_index - 1);
-            IR_Group out = ReadExpressionList(context.arena, ir, expr_vtype, {}, ParserSub(parser, LocationFromTokens(expr_tokens)));
+            Array<Token> expr_tokens = ArraySub(tokens, 1, close_index - 1);
+            IR_Group out = ReadExpressionList(context.arena, ir, expr_type, {}, ParserSub(parser, LocationFromTokens(expr_tokens)));
             Array<Value> values = ValuesFromReturn(context.arena, out.value, true);
             
-            if (values.count > 0 && TypeIsAny(element_vtype)) {
-                element_vtype = values[0].vtype;
-                expr_vtype = element_vtype;
+            if (values.count > 0 && element_type == any_type) {
+                element_type = values[0].type;
+                expr_type = element_type;
             }
             
-            if (TypeIsAny(element_vtype) || TypeIsVoid(element_vtype)) {
+            if (element_type == any_type || element_type == void_type) {
                 ReportErrorFront(location, "Unknown array type");
                 return IRFailed();
             }
             
             foreach(i, values.count) {
-                if (!TypeEquals(program, values[i].vtype, expr_vtype)) {
-                    ReportErrorFront(location, "Expecting an array of '%S' but found an '%S'", VTypeGetName(program, expr_vtype), VTypeGetName(program, values[i].vtype));
+                if (values[i].type != expr_type) {
+                    ReportErrorFront(location, "Expecting an array of '%S' but found an '%S'", expr_type->name, values[i].type->name);
                     return IRFailed();
                 }
             }
             
-            VType array_vtype = vtype_from_dimension(element_vtype, 1);
-            out.value = ValueFromArray(ir->arena, array_vtype, values);
+            Type* array_type = TypeFromArray(program, element_type, 1);
+            out.value = ValueFromArray(ir->arena, array_type, values);
             
             return out;
         }
@@ -1022,8 +1026,8 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
             
             if (couple)
             {
-                Array<Token> src_tokens = array_subarray(tokens, 0, starting_token);
-                Array<Token> index_tokens = array_subarray(tokens, starting_token + 1, tokens.count - starting_token - 2);
+                Array<Token> src_tokens = ArraySub(tokens, 0, starting_token);
+                Array<Token> index_tokens = ArraySub(tokens, starting_token + 1, tokens.count - starting_token - 2);
                 
                 if (src_tokens.count > 0 && index_tokens.count > 0)
                 {
@@ -1031,7 +1035,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     Location index_location = LocationFromTokens(index_tokens);
                     
                     IR_Group src = ReadExpression(ir, ParserSub(parser, src_location), ExpresionContext_from_void());
-                    IR_Group index = ReadExpression(ir, ParserSub(parser, index_location), ExpresionContext_from_vtype(VType_UInt, 1));
+                    IR_Group index = ReadExpression(ir, ParserSub(parser, index_location), ExpresionContext_from_type(uint_type, 1));
                     
                     if (!src.success || !index.success) {
                         return IRFailed();
@@ -1042,23 +1046,23 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                         return IRFailed();
                     }
                     
-                    if (!TypeIsAnyInt(index.value.vtype)) {
+                    if (!TypeIsAnyInt(index.value.type)) {
                         report_indexing_expects_an_int(location);
                         return IRFailed();
                     }
                     
-                    VType vtype = src.value.vtype;
+                    Type* type = src.value.type;
                     
                     IR_Group out = IRAppend(src, index);
                     
-                    if (TypeIsArray(vtype))
+                    if (TypeIsArray(type))
                     {
-                        VType element_vtype = VTypeNext(program, vtype);
-                        out = IRAppend(out, IRFromChild(ir, src.value, index.value, true, element_vtype, location));
+                        Type* element_type = TypeGetNext(program, type);
+                        out = IRAppend(out, IRFromChild(ir, src.value, index.value, true, element_type, location));
                     }
                     else
                     {
-                        report_indexing_not_allowed(location, VTypeGetName(program, vtype));
+                        report_indexing_not_allowed(location, type->name);
                         return IRFailed();
                     }
                     
@@ -1073,9 +1077,9 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
     return {};
 }
 
-internal_fn B32 CastingNeeded(Program* program, VType dst_type, VType src_type)
+internal_fn B32 CastingNeeded(Program* program, Type* dst_type, Type* src_type)
 {
-    return !TypeIsVoid(dst_type) && !TypeIsAny(dst_type) && !TypeIsAny(src_type) && !TypeEquals(program, src_type, dst_type);
+    return dst_type != void_type && dst_type != any_type && src_type != any_type && src_type != dst_type;
 }
 
 IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionContext expr_context)
@@ -1089,19 +1093,19 @@ IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionCont
     
     Value src = out.value;
     
-    VType src_type = src.vtype;
-    VType dst_type = expr_context.vtype;
+    Type* src_type = src.type;
+    Type* dst_type = expr_context.type;
     
     Location location = LocationFromParser(parser);
     
     if (CastingNeeded(ir->program, dst_type, src_type))
     {
-        if (TypeIsReference(dst_type)) dst_type = VTypeNext(program, dst_type);
+        if (TypeIsReference(dst_type)) dst_type = TypeGetNext(program, dst_type);
         
         if (TypeIsReference(src_type)) {
             out = IRAppend(out, IRFromDereference(ir, src, location));
             src = out.value;
-            src_type = src.vtype;
+            src_type = src.type;
         }
     }
     
@@ -1113,15 +1117,15 @@ IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionCont
         {
             if (TypeIsAnyInt(src_type) && TypeIsAnyInt(dst_type))
             {
-                B32 dst_sign = TypeIsInt(dst_type);
-                B32 src_sign = TypeIsInt(src_type);
+                B32 dst_sign = dst_type == int_type;
+                B32 src_sign = src_type == int_type;
                 
                 if (dst_sign && !src_sign) {
                     out = IRAppend(out, IRFromCasting(ir, src, dst_type, false, location));
                     casting_solved = true;
                 }
             }
-            else if (TypeIsAnyInt(src_type) && TypeIsFloat(dst_type))
+            else if (TypeIsAnyInt(src_type) && dst_type == float_type)
             {
                 out = IRAppend(out, IRFromCasting(ir, src, dst_type, false, location));
                 casting_solved = true;
@@ -1129,7 +1133,7 @@ IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionCont
         }
         
         if (!casting_solved) {
-            ReportErrorFront(location, "Implicit casting failed: %S to %S", VTypeGetName(program, src_type), VTypeGetName(program, dst_type));
+            ReportErrorFront(location, "Implicit casting failed: %S to %S", src_type->name, dst_type->name);
             return IRFailed();
         }
     }
@@ -1147,13 +1151,13 @@ void CheckForAnyAssumptions(IR_Context* ir, IR_Unit* unit, Value value)
     }
     
     if (unit->kind == UnitKind_Is) {
-        if (!TypeIsArray(unit->src0.vtype))
+        if (!TypeIsArray(unit->src0.type))
         {
             IR_Object* obj = ir_find_object_from_value(ir, unit->src0);
-            VType vtype = TypeFromCompiletime(program, unit->src1);
+            Type* type = TypeFromCompiletime(program, unit->src1);
             
-            if (obj != NULL && !TypeIsNil(vtype)) {
-                ir_assume_object(ir, obj, vtype);
+            if (obj != NULL && type != nil_type) {
+                ir_assume_object(ir, obj, type);
             }
         }
     }
@@ -1226,7 +1230,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 
                 if (tokens.count >= 2 && tokens[tokens.count - 1].kind == TokenKind_CompEquals)
                 {
-                    expression_location = LocationFromTokens(array_subarray(tokens, 0, tokens.count - 1));
+                    expression_location = LocationFromTokens(ArraySub(tokens, 0, tokens.count - 1));
                     is_switch = true;
                 }
             }
@@ -1250,7 +1254,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             }
             else
             {
-                IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+                IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_type(bool_type, 1));
                 if (!expression.success) return IRFailed();
                 
                 CheckForAnyAssumptions(ir, expression.last, expression.value);
@@ -1309,7 +1313,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             if (PeekToken(parser).kind == TokenKind_ThenKeyword)
                 AssumeToken(parser, TokenKind_ThenKeyword);
             
-            IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(VType_Bool, 1));
+            IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_type(bool_type, 1));
             if (!expression.success) return IRFailed();
             
             CheckForAnyAssumptions(ir, expression.last, expression.value);
@@ -1345,7 +1349,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 return IRFailed();
             }
             
-            Array<Location> splits = array_make<Location>(context.arena, 8);
+            Array<Location> splits = ArrayAlloc<Location>(context.arena, 8);
             
             // Split location by ';'
             {
@@ -1421,34 +1425,34 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
                 IR_Group iterator = ReadExpressionWithCasting(ir, ParserSub(parser, iterator_location), ExpresionContext_from_inference(1));
                 out = IRAppend(out, iterator);
                 
-                if (!TypeIsArray(iterator.value.vtype)) {
+                if (!TypeIsArray(iterator.value.type)) {
                     ReportErrorFront(location, "Invalid iterator for a for each statement");
                     return IRFailed();
                 }
                 
-                VType element_vtype = VTypeNext(program, iterator.value.vtype);
+                Type* element_type = TypeGetNext(program, iterator.value.type);
                 
                 // Init code
-                IR_Group init = IRFromDefineObject(ir, RegisterKind_Local, element_identifier, element_vtype, false, location);
+                IR_Group init = IRFromDefineObject(ir, RegisterKind_Local, element_identifier, element_type, false, location);
                 Value element_value = init.value;
                 
                 if (index_identifier.size > 0) {
-                    init = IRAppend(init, IRFromDefineObject(ir, RegisterKind_Local, index_identifier, VType_UInt, false, location));
+                    init = IRAppend(init, IRFromDefineObject(ir, RegisterKind_Local, index_identifier, uint_type, false, location));
                 }
                 else {
-                    init = IRAppend(init, IRFromDefineTemporal(ir, VType_UInt, location));
+                    init = IRAppend(init, IRFromDefineTemporal(ir, uint_type, location));
                 }
                 Value index_value = init.value;
-                init = IRAppend(init, IRFromStore(ir, index_value, ValueFromZero(VType_UInt), location));
+                init = IRAppend(init, IRFromStore(ir, index_value, ValueFromZero(uint_type), location));
                 
                 // Condition code
-                VariableTypeChild count_info = VTypeGetProperty(program, iterator.value.vtype, "count");
-                IR_Group condition = IRFromChild(ir, iterator.value, ValueFromZero(VType_UInt), count_info.is_member, count_info.vtype, location);
+                VariableTypeChild count_info = VTypeGetProperty(program, iterator.value.type, "count");
+                IR_Group condition = IRFromChild(ir, iterator.value, ValueFromZero(uint_type), count_info.is_member, count_info.type, location);
                 Value count_value = condition.value;
                 condition = IRAppend(condition, IRFromBinaryOperator(ir, index_value, count_value, OperatorKind_LessThan, false, location));
                 
                 // Content code
-                IR_Group content = IRFromChild(ir, iterator.value, index_value, true, element_vtype, location);
+                IR_Group content = IRFromChild(ir, iterator.value, index_value, true, element_type, location);
                 content = IRAppend(content, IRFromStore(ir, element_value, content.value, location));
                 content = IRAppend(content, ReadCode(ir, ParserSub(parser, content_location)));
                 
@@ -1461,7 +1465,7 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             else if (splits.count == 3)
             {
                 IR_Group init = ReadSentence(ir, ParserSub(parser, splits[0]));
-                IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, splits[1]), ExpresionContext_from_vtype(VType_Bool, 1));
+                IR_Group condition = ReadExpressionWithCasting(ir, ParserSub(parser, splits[1]), ExpresionContext_from_type(bool_type, 1));
                 IR_Group update = ReadSentence(ir, ParserSub(parser, splits[2]));
                 IR_Group content = ReadCode(ir, ParserSub(parser, content_location));
                 
@@ -1487,20 +1491,43 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             
             out = IRAppend(out, block);
         }
-        
-        // Sentence
         else
         {
-            Location sentence_location = FetchUntil(parser, false, TokenKind_NextSentence);
+            SentenceKind kind = GuessSentenceKind(parser);
             
-            if (!LocationIsValid(sentence_location)) {
-                report_expecting_semicolon(first_token.location);
+            // Embedded Definitions
+            if (kind == SentenceKind_FunctionDef || kind == SentenceKind_StructDef || kind == SentenceKind_EnumDef)
+            {
+#if 0
+                CodeDefinition def;
+                if (!ReadCodeDefinition(&def, parser, reporter, kind)) {
+                    return IRFailed();
+                }
+                
+                DefinitionIdentify(program, code->index, code->type, code->identifier, code->entire_location);
+                
+                FrontDefineFunction(front, code);
+                
+                FrontResolveFunction(front, def, code);
+                
+                out = IRAppend(out, IRFromNone());
+#endif
                 return IRFailed();
             }
-            
-            out = IRAppend(out, ReadSentence(ir, ParserSub(parser, sentence_location)));
-            
-            AssumeToken(parser, TokenKind_NextSentence);
+            // Sentence
+            else
+            {
+                Location sentence_location = FetchUntil(parser, false, TokenKind_NextSentence);
+                
+                if (!LocationIsValid(sentence_location)) {
+                    report_expecting_semicolon(first_token.location);
+                    return IRFailed();
+                }
+                
+                out = IRAppend(out, ReadSentence(ir, ParserSub(parser, sentence_location)));
+                
+                AssumeToken(parser, TokenKind_NextSentence);
+            }
         }
     }
     
@@ -1529,7 +1556,7 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
     
     if (kind == SentenceKind_Assignment)
     {
-        PooledArray<String> identifiers = pooled_array_make<String>(context.arena, 4);
+        BArray<String> identifiers = BArrayMake<String>(context.arena, 4);
         IR_Group out = IRFromNone();
         
         U64 dst_end_cursor = find_token_with_depth_check(parser, true, true, true, TokenKind_Assignment);
@@ -1540,7 +1567,7 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
         }
         
         Location dst_code = LocationMake(parser->cursor, dst_end_cursor, parser->script_id);
-        out = IRAppend(out, ReadExpressionList(context.arena, ir, VType_Any, {}, ParserSub(parser, dst_code)));
+        out = IRAppend(out, ReadExpressionList(context.arena, ir, any_type, {}, ParserSub(parser, dst_code)));
         if (!out.success) return IRFailed();
         
         MoveCursor(parser, dst_end_cursor);
@@ -1570,11 +1597,11 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
             B32 register_is_any = false;
             if (values.count == 1) {
                 Register reg = IRRegisterFromValue(ir, values[0]);
-                register_is_any = reg.kind != RegisterKind_None && TypeIsAny(reg.vtype);
+                register_is_any = reg.kind != RegisterKind_None && reg.type == any_type;
             }
             
             Location src_location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
-            ExpresionContext expr_context = ExpresionContext_from_vtype(values[0].vtype, values.count);
+            ExpresionContext expr_context = ExpresionContext_from_type(values[0].type, values.count);
             Parser* expr_parser = ParserSub(parser, src_location);
             if (op == OperatorKind_None && !register_is_any) src = ReadExpressionWithCasting(ir, expr_parser, expr_context);
             else src = ReadExpression(ir, expr_parser, expr_context);
@@ -1594,12 +1621,12 @@ IR_Group ReadSentence(IR_Context* ir, Parser* parser)
     {
         AssumeToken(parser, TokenKind_ReturnKeyword);
         
-        Array<VType> returns = ReturnsFromRegisters(context.arena, array_from_pooled_array(context.arena, ir->local_registers));
+        Array<Type*> returns = ReturnsFromRegisters(context.arena, ArrayFromBArray(context.arena, ir->local_registers));
         
-        VType expected_vtype = VType_Void;
-        if (returns.count == 1) expected_vtype = returns[0];
+        Type* expected_type = void_type;
+        if (returns.count == 1) expected_type = returns[0];
         
-        ExpresionContext context = (TypeIsVoid(expected_vtype)) ? ExpresionContext_from_void() : ExpresionContext_from_vtype(expected_vtype, 1);
+        ExpresionContext context = (expected_type == void_type) ? ExpresionContext_from_void() : ExpresionContext_from_type(expected_type, 1);
         
         Location expression_location = LocationFromParser(parser, parser->range.max);
         IR_Group expression = ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), context);
@@ -1628,13 +1655,13 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
     Program* program = ir->program;
     Reporter* reporter = ir->reporter;
     
-    VType type = src.vtype;
+    Type* type = src.type;
     
     Location location = LocationFromParser(parser);
     
-    if (type.kind != VKind_Primitive && type.kind != VKind_Enum)
+    if (type->kind != VKind_Primitive && type->kind != VKind_Enum)
     {
-        ReportErrorFront(location, "Invalid type '%S' for switch statement", VTypeGetName(program, type));
+        ReportErrorFront(location, "Invalid type '%S' for switch statement", type->name);
         return IRFailed();
     }
     
@@ -1642,7 +1669,7 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
     
     B32 has_default_case = false;
     SwitchCase default_case = {};
-    PooledArray<SwitchCase> cases = pooled_array_make<SwitchCase>(context.arena, 16);
+    BArray<SwitchCase> cases = BArrayMake<SwitchCase>(context.arena, 16);
     
     while (1)
     {
@@ -1682,13 +1709,13 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
         for (U32 i = 0; i < case_values.count; i++)
         {
             Value case_value = case_values[i];
-            if (!TypeEquals(program, case_value.vtype, type)) {
-                ReportErrorFront(first_token.location, "Type missmatch, case is a '%S' not a '%S'", VTypeGetName(program, case_value.vtype), VTypeGetName(program, type));
+            if (case_value.type != type) {
+                ReportErrorFront(first_token.location, "Type missmatch, case is a '%S' not a '%S'", case_value.type->name, type->name);
                 return IRFailed();
             }
             
             if (case_value.kind != ValueKind_Literal) {
-                ReportErrorFront(first_token.location, "Expecting a '%S' literal", VTypeGetName(program, type));
+                ReportErrorFront(first_token.location, "Expecting a '%S' literal", type->name);
                 return IRFailed();
             }
         }
@@ -1716,7 +1743,7 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
             {
                 Value case_value = case_values[i];
                 
-                for (auto it = pooled_array_make_iterator(&cases); it.valid; ++it)
+                foreach_BArray(it, &cases)
                 {
                     SwitchCase c = *it.value;
                     
@@ -1740,14 +1767,14 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
             default_case = c;
         }
         else {
-            array_add(&cases, c);
+            BArrayAdd(&cases, c);
         }
     }
     
     // Check for all enum values
-    if (TypeIsEnum(type) && !has_default_case && cases.count != type._enum->values.count)
+    if (TypeIsEnum(type) && !has_default_case && cases.count != type->_enum->values.count)
     {
-        ReportErrorFront(location, "Missing some values for enum '%S'", VTypeGetName(program, type));
+        ReportErrorFront(location, "Missing some values for enum '%S'", type->name);
         return IRFailed();
     }
     
@@ -1757,7 +1784,7 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
     {
         B32 case_match = false;
         
-        for (auto it = pooled_array_make_iterator(&cases); it.valid; ++it)
+        foreach_BArray(it, &cases)
         {
             SwitchCase c = *it.value;
             
@@ -1779,7 +1806,7 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
     {
         IR_Unit* exit_unit = IRUnitAlloc_Empty(ir, LocationFromParser(parser));
         
-        for (auto it = pooled_array_make_iterator(&cases); it.valid; ++it)
+        foreach_BArray(it, &cases)
         {
             SwitchCase c = *it.value;
             if (c.group.unit_count == 0) continue;
@@ -1792,7 +1819,7 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
             }
             else
             {
-                cmp = IRAppend(cmp, IRFromDefineTemporal(ir, VType_Bool, c.location));
+                cmp = IRAppend(cmp, IRFromDefineTemporal(ir, bool_type, c.location));
                 Value dst = cmp.value;
                 cmp = IRAppend(cmp, IRFromStore(ir, dst, ValueFromBool(false), c.location));
                 
@@ -1804,7 +1831,7 @@ IR_Group ReadSwitchCode(IR_Context* ir, Parser* parser, Value src)
                 }
             }
             
-            if (!cmp.success || !TypeIsBool(cmp.value.vtype)) return IRFailed();
+            if (!cmp.success || cmp.value.type != bool_type) return IRFailed();
             
             IR_Group fail_jump = IRFromSingle(IRUnitAlloc_Jump(ir, -1, cmp.value, fail_unit, c.location));
             IR_Group exit_jump = IRFromSingle(IRUnitAlloc_Jump(ir, 0, ValueNone(), exit_unit, c.location));
@@ -1836,31 +1863,31 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser*
     String identifier = identifier_token.value;
     
     // NOTE(Jose): If this isn't true means it's a type default initialization
-    if (PeekToken(parser, identifier_token.skip_size).kind != TokenKind_OpenParenthesis || !TypeIsNil(TypeFromName(program, identifier)))
+    if (PeekToken(parser, identifier_token.skip_size).kind != TokenKind_OpenParenthesis || TypeFromName(program, identifier) != nil_type)
     {
         Location type_location = FetchUntil(parser, false, TokenKind_OpenParenthesis);
         Assert(LocationIsValid(type_location));
         
-        VType type = ReadObjectType(ParserSub(parser, type_location), reporter, program);
-        if (TypeIsNil(type)) return IRFailed();
+        Type* type = ReadObjectType(ParserSub(parser, type_location), reporter, program);
+        if (type == nil_type) return IRFailed();
         
         Location expressions_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
-        IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, {}, ParserSub(parser, expressions_location));
+        IR_Group out = ReadExpressionList(context.arena, ir, any_type, {}, ParserSub(parser, expressions_location));
         if (!out.success) return IRFailed();
         
         Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
         
         if (TypeIsArray(type) && params.count > 0)
         {
-            Array<Value> dimensions = array_make<Value>(context.arena, params.count);
-            VType element_vtype = VTypeNext(program, type);
+            Array<Value> dimensions = ArrayAlloc<Value>(context.arena, params.count);
+            Type* element_type = TypeGetNext(program, type);
             
             for (U32 i = 0; i < params.count; i++)
             {
-                out = IRAppend(out, IRFromOptionalCasting(ir, params[i], VType_UInt, location));
+                out = IRAppend(out, IRFromOptionalCasting(ir, params[i], uint_type, location));
                 params[i] = out.value;
                 
-                if (!TypeIsUInt(params[i].vtype)) {
+                if (params[i].type != uint_type) {
                     ReportErrorFront(expressions_location, "Expected unsigned integers for array dimensions");
                     return IRFailed();
                 }
@@ -1868,7 +1895,27 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser*
                 dimensions[i] = params[i];
             }
             
-            out.value = ValueFromEmptyArray(ir->arena, TypeFromIndex(program, type.base_index), dimensions);
+            out = IRAppend(out, IRFromEmptyArray(ir, TypeGetBase(program, type), dimensions, location));
+        }
+        else if (TypeIsList(type) && params.count > 0)
+        {
+            Array<Value> dimensions = ArrayAlloc<Value>(context.arena, params.count);
+            Type* element_type = TypeGetNext(program, type);
+            
+            for (U32 i = 0; i < params.count; i++)
+            {
+                out = IRAppend(out, IRFromOptionalCasting(ir, params[i], uint_type, location));
+                params[i] = out.value;
+                
+                if (params[i].type != uint_type) {
+                    ReportErrorFront(expressions_location, "Expected unsigned integers for list dimensions");
+                    return IRFailed();
+                }
+                
+                dimensions[i] = params[i];
+            }
+            
+            out = IRAppend(out, IRFromEmptyList(ir, TypeGetBase(program, type), dimensions, location));
         }
         else
         {
@@ -1891,13 +1938,13 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser*
             return IRFailed();
         }
         
-        Array<VType> expected_vtypes = array_make<VType>(context.arena, fn->parameters.count);
+        Array<Type*> expected_types = ArrayAlloc<Type*>(context.arena, fn->parameters.count);
         foreach(i, fn->parameters.count) {
-            expected_vtypes[i] = fn->parameters[i].vtype;
+            expected_types[i] = fn->parameters[i].type;
         }
         
         Location expressions_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
-        IR_Group out = ReadExpressionList(context.arena, ir, VType_Any, expected_vtypes, ParserSub(parser, expressions_location));
+        IR_Group out = ReadExpressionList(context.arena, ir, any_type, expected_types, ParserSub(parser, expressions_location));
         if (!out.success) return IRFailed();
         
         Array<Value> params = ValuesFromReturn(context.arena, out.value, true);
@@ -1907,11 +1954,11 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser*
     }
 }
 
-internal_fn PooledArray<String> ExtractObjectIdentifiers(Parser* parser, Reporter* reporter, B32 require_single)
+internal_fn BArray<String> ExtractObjectIdentifiers(Parser* parser, Reporter* reporter, B32 require_single)
 {
     Token starting_token = PeekToken(parser);
     
-    PooledArray<String> identifiers = pooled_array_make<String>(context.arena, 4);
+    BArray<String> identifiers = BArrayMake<String>(context.arena, 4);
     
     // Extract identifiers
     while (true)
@@ -1923,7 +1970,7 @@ internal_fn PooledArray<String> ExtractObjectIdentifiers(Parser* parser, Reporte
             return {};
         }
         
-        array_add(&identifiers, token.value);
+        BArrayAdd(&identifiers, token.value);
         
         token = ConsumeToken(parser);
         
@@ -1952,11 +1999,11 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Report
     
     Token starting_token = PeekToken(parser);
     
-    PooledArray<String> identifiers = ExtractObjectIdentifiers(parser, reporter, require_single);
+    BArray<String> identifiers = ExtractObjectIdentifiers(parser, reporter, require_single);
     if (identifiers.count == 0) return res;
     
     // Explicit type
-    VType definition_vtype = VType_Void;
+    Type* definition_type = void_type;
     
     {
         Token type_or_assignment_token = PeekToken(parser);
@@ -1972,12 +2019,12 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Report
                 MoveCursor(parser, type_location.range.max);
             }
             
-            definition_vtype = ReadObjectType(ParserSub(parser, type_location), reporter, program);
-            if (TypeIsNil(definition_vtype)) {
+            definition_type = ReadObjectType(ParserSub(parser, type_location), reporter, program);
+            if (definition_type == nil_type) {
                 return res;
             }
             
-            if (TypeIsVoid(definition_vtype)) {
+            if (definition_type == void_type) {
                 ReportErrorFront(starting_token.location, "Void is not a valid object: {line}");
                 return res;
             }
@@ -1988,10 +2035,10 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Report
         }
     }
     
-    res.objects = array_make<ObjectDefinition>(arena, identifiers.count);
+    res.objects = ArrayAlloc<ObjectDefinition>(arena, identifiers.count);
     
     B32 is_constant = false;
-    B32 inference_type = TypeIsVoid(definition_vtype);
+    B32 inference_type = definition_type == void_type;
     
     if (inference_type) {
         ReportErrorFront(starting_token.location, "Unsupported inference type");
@@ -2001,12 +2048,12 @@ ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Report
     Token assignment_token = PeekToken(parser);
     is_constant = assignment_token.kind == TokenKind_Colon;
     
-    for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
+    foreach_BArray(it, &identifiers)
     {
         String identifier = StrCopy(arena, *it.value);
-        Value value = ValueFromZero(definition_vtype);
+        Value value = ValueFromZero(definition_type);
         
-        res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+        res.objects[it.index] = ObjDefMake(identifier, definition_type, location, is_constant, value);
     }
     
     res.success = true;
@@ -2027,7 +2074,7 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
     
     Token starting_token = PeekToken(parser);
     
-    PooledArray<String> identifiers = ExtractObjectIdentifiers(parser, reporter, require_single);
+    BArray<String> identifiers = ExtractObjectIdentifiers(parser, reporter, require_single);
     if (identifiers.count == 0) return res;
     
     // Validation for duplicated symbols
@@ -2040,7 +2087,7 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
     }
     
     // Explicit type
-    VType definition_vtype = VType_Void;
+    Type* definition_type = void_type;
     
     {
         Token type_or_assignment_token = PeekToken(parser);
@@ -2056,12 +2103,12 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
                 MoveCursor(parser, type_location.range.max);
             }
             
-            definition_vtype = ReadObjectType(ParserSub(parser, type_location), reporter, program);
-            if (TypeIsNil(definition_vtype)) {
+            definition_type = ReadObjectType(ParserSub(parser, type_location), reporter, program);
+            if (definition_type == nil_type) {
                 return res;
             }
             
-            if (TypeIsVoid(definition_vtype)) {
+            if (definition_type == void_type) {
                 ReportErrorFront(starting_token.location, "Void is not a valid object: {line}");
                 return res;
             }
@@ -2072,10 +2119,10 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
         }
     }
     
-    res.objects = array_make<ObjectDefinition>(arena, identifiers.count);
+    res.objects = ArrayAlloc<ObjectDefinition>(arena, identifiers.count);
     
     B32 is_constant = false;
-    B32 inference_type = TypeIsVoid(definition_vtype);
+    B32 inference_type = definition_type == void_type;
     
     Token assignment_token = ConsumeToken(parser);
     
@@ -2094,41 +2141,41 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
         U64 assignment_end_cursor = parser->range.max;
         
         Location expression_code = LocationFromParser(parser, assignment_end_cursor);
-        ExpresionContext expression_context = inference_type ? ExpresionContext_from_inference(identifiers.count) : ExpresionContext_from_vtype(definition_vtype, identifiers.count);
+        ExpresionContext expression_context = inference_type ? ExpresionContext_from_inference(identifiers.count) : ExpresionContext_from_type(definition_type, identifiers.count);
         IR_Group src = ReadExpressionWithCasting(ir, ParserSub(parser, expression_code), expression_context);
         if (!src.success) return res;
         
-        Array<VType> vtypes = {};
+        Array<Type*> types = {};
         
         // Inference
         if (inference_type) {
             Array<Value> returns = ValuesFromReturn(context.arena, src.value, true);
             
             if (returns.count == 1) {
-                vtypes = array_make<VType>(context.arena, identifiers.count);
-                foreach(i, vtypes.count) vtypes[i] = returns[0].vtype;
+                types = ArrayAlloc<Type*>(context.arena, identifiers.count);
+                foreach(i, types.count) types[i] = returns[0].type;
             }
             else if (returns.count > 1) {
-                vtypes = array_make<VType>(context.arena, returns.count);
-                foreach(i, vtypes.count) vtypes[i] = returns[i].vtype;
+                types = ArrayAlloc<Type*>(context.arena, returns.count);
+                foreach(i, types.count) types[i] = returns[i].type;
             }
-            definition_vtype = src.value.vtype;
+            definition_type = src.value.type;
         }
         else {
-            vtypes = array_make<VType>(context.arena, identifiers.count);
-            foreach(i, vtypes.count) vtypes[i] = definition_vtype;
+            types = ArrayAlloc<Type*>(context.arena, identifiers.count);
+            foreach(i, types.count) types[i] = definition_type;
         }
         
-        B32 is_any = TypeIsAny(definition_vtype);
+        B32 is_any = definition_type == any_type;
         
-        if (!is_any && vtypes.count < identifiers.count) {
+        if (!is_any && types.count < identifiers.count) {
             ReportErrorFront(location, "Unresolved object type for definition");
             return res;
         }
         
-        Array<Value> values = array_make<Value>(context.arena, identifiers.count);
+        Array<Value> values = ArrayAlloc<Value>(context.arena, identifiers.count);
         foreach(i, values.count) {
-            VType vtype = vtypes[i];
+            Type* type = types[i];
             
             if (register_kind == RegisterKind_Global)
             {
@@ -2138,19 +2185,19 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
                     continue;
                 }
                 
-                res.out = IRAppend(res.out, IRFromStore(ir, ValueFromGlobal(program, global_index), ValueFromZero(vtype), location));
+                res.out = IRAppend(res.out, IRFromStore(ir, ValueFromGlobal(program, global_index), ValueFromZero(type), location));
             }
             else
             {
-                res.out = IRAppend(res.out, IRFromDefineObject(ir, register_kind, identifiers[i], vtype, is_constant, location));
-                res.out = IRAppend(res.out, IRFromStore(ir, res.out.value, ValueFromZero(vtype), location));
+                res.out = IRAppend(res.out, IRFromDefineObject(ir, register_kind, identifiers[i], type, is_constant, location));
+                res.out = IRAppend(res.out, IRFromStore(ir, res.out.value, ValueFromZero(type), location));
             }
             values[i] = res.out.value;
         }
         
         // Default src
         if (src.value.kind == ValueKind_None && !is_any) {
-            src = IRFromDefaultInitializer(ir, definition_vtype, location);
+            src = IRFromDefaultInitializer(ir, definition_type, location);
         }
         
         res.out = IRAppend(res.out, src);
@@ -2160,8 +2207,8 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
             res.out = IRAppend(res.out, assignment);
         }
         
-        for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it) {
-            res.objects[it.index] = ObjDefMake(StrCopy(arena, *it.value), vtypes[it.index], location, is_constant, values[it.index]);
+        foreach_BArray(it, &identifiers) {
+            res.objects[it.index] = ObjDefMake(StrCopy(arena, *it.value), types[it.index], location, is_constant, values[it.index]);
         }
     }
     else
@@ -2171,9 +2218,9 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
             return res;
         }
         
-        res.out = IRFromNone(ValueFromZero(definition_vtype));
+        res.out = IRFromNone(ValueFromZero(definition_type));
         
-        for (auto it = pooled_array_make_iterator(&identifiers); it.valid; ++it)
+        foreach_BArray(it, &identifiers)
         {
             String identifier = StrCopy(arena, *it.value);
             
@@ -2185,18 +2232,18 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
                     continue;
                 }
                 
-                res.out = IRAppend(res.out, IRFromStore(ir, ValueFromGlobal(program, global_index), ValueFromZero(definition_vtype), location));
+                res.out = IRAppend(res.out, IRFromStore(ir, ValueFromGlobal(program, global_index), ValueFromZero(definition_type), location));
                 Value value = res.out.value;
-                res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+                res.objects[it.index] = ObjDefMake(identifier, definition_type, location, is_constant, value);
             }
             else
             {
-                res.out = IRAppend(res.out, IRFromDefineObject(ir, register_kind, identifier, definition_vtype, is_constant, location));
+                res.out = IRAppend(res.out, IRFromDefineObject(ir, register_kind, identifier, definition_type, is_constant, location));
                 Value value = res.out.value;
                 if (register_kind != RegisterKind_Parameter) {
-                    res.out = IRAppend(res.out, IRFromStore(ir, value, ValueFromZero(definition_vtype), location));
+                    res.out = IRAppend(res.out, IRFromStore(ir, value, ValueFromZero(definition_type), location));
                 }
-                res.objects[it.index] = ObjDefMake(identifier, definition_vtype, location, is_constant, value);
+                res.objects[it.index] = ObjDefMake(identifier, definition_type, location, is_constant, value);
             }
         }
     }
@@ -2219,7 +2266,7 @@ ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter
         return res;
     }
     
-    PooledArray<ObjectDefinition> list = pooled_array_make<ObjectDefinition>(context.arena, 8);
+    BArray<ObjectDefinition> list = BArrayMake<ObjectDefinition>(context.arena, 8);
     
     while (parser->cursor < parser->range.max)
     {
@@ -2234,7 +2281,7 @@ ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter
         if (!res0.success) return {};
         
         foreach(i, res0.objects.count) {
-            array_add(&list, res0.objects[i]);
+            BArrayAdd(&list, res0.objects[i]);
         }
         
         res.out = IRAppend(res.out, res0.out);
@@ -2242,7 +2289,7 @@ ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter
         ConsumeToken(parser);
     }
     
-    res.objects = array_from_pooled_array(arena, list);
+    res.objects = ArrayFromBArray(arena, list);
     res.success = true;
     return res;
 }
@@ -2261,7 +2308,7 @@ ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR
         return res;
     }
     
-    PooledArray<ObjectDefinition> list = pooled_array_make<ObjectDefinition>(context.arena, 8);
+    BArray<ObjectDefinition> list = BArrayMake<ObjectDefinition>(context.arena, 8);
     
     while (parser->cursor < parser->range.max)
     {
@@ -2276,7 +2323,7 @@ ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR
         if (!res0.success) return {};
         
         foreach(i, res0.objects.count) {
-            array_add(&list, res0.objects[i]);
+            BArrayAdd(&list, res0.objects[i]);
         }
         
         res.out = IRAppend(res.out, res0.out);
@@ -2284,17 +2331,17 @@ ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR
         ConsumeToken(parser);
     }
     
-    res.objects = array_from_pooled_array(arena, list);
+    res.objects = ArrayFromBArray(arena, list);
     res.success = true;
     return res;
 }
 
-IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VType> expected_vtypes, Parser* parser)
+IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, Type* type, Array<Type*> expected_types, Parser* parser)
 {
     PROFILE_FUNCTION;
     
     IR_Group out = IRFromNone();
-    PooledArray<Value> list = pooled_array_make<Value>(context.arena, 8);
+    BArray<Value> list = BArrayMake<Value>(context.arena, 8);
     
     while (parser->cursor < parser->range.max)
     {
@@ -2305,26 +2352,26 @@ IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VTy
         }
         
         U32 index = list.count;
-        VType expected_vtype = vtype;
-        if (index < expected_vtypes.count) expected_vtype = expected_vtypes[index];
+        Type* expected_type = type;
+        if (index < expected_types.count) expected_type = expected_types[index];
         
         Location expression_location = LocationMake(parser->cursor, expression_end_cursor, parser->script_id);
         
-        out = IRAppend(out, ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_vtype(expected_vtype, 1)));
+        out = IRAppend(out, ReadExpressionWithCasting(ir, ParserSub(parser, expression_location), ExpresionContext_from_type(expected_type, 1)));
         if (!out.success) return IRFailed();
         
-        array_add(&list, out.value);
+        BArrayAdd(&list, out.value);
         
         MoveCursor(parser, expression_end_cursor);
         ConsumeToken(parser);
     }
     
-    out.value = value_from_return(arena, array_from_pooled_array(context.arena, list));
+    out.value = ValueFromReturn(arena, ArrayFromBArray(context.arena, list));
     
     return out;
 }
 
-VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program)
+Type* ReadObjectType(Parser* parser, Reporter* reporter, Program* program)
 {
     PROFILE_FUNCTION;
     
@@ -2334,45 +2381,45 @@ VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program)
     if (tokens.count == 0)
     {
         ReportErrorFront(location, "Expecting a type");
-        return VType_Nil;
+        return nil_type;
     }
     
     Token identifier_token = tokens[0];
     if (identifier_token.kind != TokenKind_Identifier) {
         report_objdef_expecting_type_identifier(identifier_token.location);
-        return VType_Nil;
+        return nil_type;
     }
     
-    tokens = array_subarray(tokens, 1, tokens.count - 1);
+    tokens = ArraySub(tokens, 1, tokens.count - 1);
     
     B32 is_reference = false;
     if (tokens.count > 0 && tokens[tokens.count - 1].kind == TokenKind_Ampersand)
     {
         is_reference = true;
-        tokens = array_subarray(tokens, 0, tokens.count - 1);
+        tokens = ArraySub(tokens, 0, tokens.count - 1);
     }
     
     U32 generic_params_expected = 0;
     
-    if (identifier_token.value == "Array") generic_params_expected = 1;
+    if (identifier_token.value == "Array" || identifier_token.value == "List") generic_params_expected = 1;
     
-    VType base_type = VType_Nil;
+    Type* base_type = nil_type;
     
     if (generic_params_expected > 0)
     {
         if (tokens.count <= 2) {
             ReportErrorFront(location, "Invalid type format");
-            return VType_Nil;
+            return nil_type;
         }
         if (tokens[0].kind != TokenKind_OpenBracket || tokens[tokens.count - 1].kind != TokenKind_CloseBracket) {
             ReportErrorFront(location, "Missing brackets for generic type: %S", identifier_token.value);
-            return VType_Nil;
+            return nil_type;
         }
         
-        tokens = array_subarray(tokens, 1, tokens.count - 2);
+        tokens = ArraySub(tokens, 1, tokens.count - 2);
         Assert(tokens.count > 0);
         
-        Array<VType> subtypes = array_make<VType>(context.arena, generic_params_expected);
+        Array<Type*> subtypes = ArrayAlloc<Type*>(context.arena, generic_params_expected);
         U32 type_index = 0;
         
         while (tokens.count)
@@ -2385,46 +2432,53 @@ VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program)
                 }
             }
             
-            Location subtype_location = LocationFromTokens(array_subarray(tokens, 0, end_index));
-            tokens = array_subarray(tokens, end_index, tokens.count - end_index);
+            Location subtype_location = LocationFromTokens(ArraySub(tokens, 0, end_index));
+            tokens = ArraySub(tokens, end_index, tokens.count - end_index);
             
-            VType subtype = ReadObjectType(ParserSub(parser, subtype_location), reporter, program);
-            if (TypeIsNil(subtype)) return VType_Nil;
+            Type* subtype = ReadObjectType(ParserSub(parser, subtype_location), reporter, program);
+            if (subtype == nil_type) return nil_type;
             
-            if (subtype.kind != VKind_Primitive && !TypeIsStruct(subtype) && !TypeIsEnum(subtype)) {
+            if (subtype->kind != VKind_Primitive && !TypeIsStruct(subtype) && !TypeIsEnum(subtype)) {
                 ReportErrorFront(location, "Generics don't support generics as a pararameter");
-                return VType_Nil;
+                return nil_type;
             }
             
             if (type_index >= subtypes.count) {
                 ReportErrorFront(location, "Expected %u params for generic '%S'", generic_params_expected, identifier_token.value);
-                return VType_Nil;
+                return nil_type;
             }
             
             subtypes[type_index++] = subtype;
         }
         
-        // TODO(Jose): Only Arrays are supported right now
-        
-        base_type = vtype_from_dimension(subtypes[0], 1);
+        if (identifier_token.value == "Array") {
+            base_type = TypeFromArray(program, subtypes[0], 1);
+        }
+        else if (identifier_token.value == "List") {
+            base_type = TypeFromList(program, subtypes[0], 1);
+        }
+        else {
+            InvalidCodepath();
+            return nil_type;
+        }
     }
     else
     {
         if (tokens.count != 0) {
             ReportErrorFront(location, "Invalid type format");
-            return VType_Nil;
+            return nil_type;
         }
         
         base_type = TypeFromName(program, identifier_token.value);
     }
     
-    if (TypeIsNil(base_type)) {
+    if (base_type == nil_type) {
         ReportErrorFront(location, "Unknown type");
-        return VType_Nil;
+        return nil_type;
     }
     
-    VType type = base_type;
-    if (is_reference) type = vtype_from_reference(type);
+    Type* type = base_type;
+    if (is_reference) type = TypeFromReference(program, type);
     return type;
 }
 

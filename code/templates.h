@@ -2,7 +2,7 @@
 //- ARRAY 
 
 template<typename T>
-inline_fn Array<T> array_make(T* data, U32 count)
+inline_fn Array<T> ArrayMake(T* data, U32 count)
 {
     Array<T> array;
     array.data = data;
@@ -11,7 +11,7 @@ inline_fn Array<T> array_make(T* data, U32 count)
 }
 
 template<typename T>
-inline_fn Array<T> array_make(Arena* arena, U32 count)
+inline_fn Array<T> ArrayAlloc(Arena* arena, U32 count)
 {
     Array<T> array;
     array.data = ArenaPushStruct<T>(arena, count);
@@ -20,7 +20,7 @@ inline_fn Array<T> array_make(Arena* arena, U32 count)
 }
 
 template<typename T>
-inline_fn Array<T> array_subarray(Array<T> src, U32 offset, U32 count)
+inline_fn Array<T> ArraySub(Array<T> src, U32 offset, U32 count)
 {
     Assert(offset + count <= src.count);
     Array<T> dst;
@@ -30,15 +30,15 @@ inline_fn Array<T> array_subarray(Array<T> src, U32 offset, U32 count)
 }
 
 template<typename T>
-inline_fn Array<T> array_copy(Arena* arena, Array<T> src)
+inline_fn Array<T> ArrayCopy(Arena* arena, Array<T> src)
 {
-	Array<T> dst = array_make<T>(arena, src.count);
+	Array<T> dst = ArrayAlloc<T>(arena, src.count);
     foreach(i, src.count) dst[i] = src[i];
     return dst;
 }
 
 template<typename T>
-inline_fn void array_erase(Array<T>* array, U32 index)
+inline_fn void ArrayErase(Array<T>* array, U32 index)
 {
 	Assert(index < array->count);
 	--array->count;
@@ -50,12 +50,12 @@ inline_fn void array_erase(Array<T>* array, U32 index)
 //- POOLED ARRAY 
 
 template<typename T>
-struct PooledArray : PooledArrayR {
+struct BArray : BBuffer {
     inline T& operator[](U32 index)
     {
         Assert(index < count);
         
-        PooledArrayBlock* block = root;
+        BBufferBlock* block = root;
         
         while (index >= block->capacity)
         {
@@ -71,48 +71,54 @@ struct PooledArray : PooledArrayR {
 };
 
 template<typename T>
-inline_fn PooledArray<T> pooled_array_make(Arena* arena, U32 block_capacity) {
-    return *(PooledArray<T>*)&pooled_array_make(arena, sizeof(T), block_capacity); 
+inline_fn BArray<T> BArrayMake(Arena* arena, U32 block_capacity) {
+    return *(BArray<T>*)&BBufferMake(arena, sizeof(T), block_capacity); 
 }
 
 template<typename T>
-inline_fn T* array_add(PooledArray<T>* array, const T& data)
-{
-    T* res = (T*)array_add(array);
+inline_fn T* BArrayAdd(BArray<T>* array, const T& data) {
+    T* res = (T*)BBufferAdd(array);
     *res = data;
     return res;
 }
 
 template<typename T>
-inline_fn T* array_add(PooledArray<T>* array) {
-    return (T*)array_add((PooledArrayR*)array);
+inline_fn T* BArrayAdd(BArray<T>* array) {
+    return (T*)BBufferAdd((BBuffer*)array);
 }
 
 template<typename T>
-inline_fn Array<T> array_from_pooled_array(Arena* arena, PooledArray<T> src)
+inline_fn void BArrayErase(BArray<T>* array, U32 index) {
+    return BBufferErase((BBuffer*)array, index);
+}
+
+template<typename T>
+inline_fn Array<T> ArrayFromBArray(Arena* arena, BArray<T> src)
 {
-    Array<T> dst = array_make<T>(arena, src.count);
+    Array<T> dst = ArrayAlloc<T>(arena, src.count);
     foreach(i, src.count) dst[i] = src[i];
     return dst;
 }
 
+#define foreach_BArray(_it, _array) for (BArrayIterator _it = BArrayMakeIt(_array); (_it).valid; ++(_it))
+
 template<typename T>
-struct PooledArrayIterator
+struct BArrayIterator
 {
-    PooledArray<T>* array;
+    BArray<T>* array;
     U32 index;
     T* value;
     
-    PooledArrayBlock* block;
+    BBufferBlock* block;
     U32 block_index;
     
     B8 valid;
 };
 
 template<typename T>
-inline_fn PooledArrayIterator<T> pooled_array_make_iterator(PooledArray<T>* array)
+inline_fn BArrayIterator<T> BArrayMakeIt(BArray<T>* array)
 {
-    PooledArrayIterator<T> it{};
+    BArrayIterator<T> it{};
     it.array = array;
     
     if (it.array->count == 0) return it;
@@ -124,9 +130,9 @@ inline_fn PooledArrayIterator<T> pooled_array_make_iterator(PooledArray<T>* arra
 }
 
 template<typename T>
-inline_fn PooledArrayIterator<T> pooled_array_make_iterator_tail(PooledArray<T>* array)
+inline_fn BArrayIterator<T> BArrayMakeItTail(BArray<T>* array)
 {
-    PooledArrayIterator<T> it{};
+    BArrayIterator<T> it{};
     it.array = array;
     
     if (it.array->count == 0) return it;
@@ -140,7 +146,7 @@ inline_fn PooledArrayIterator<T> pooled_array_make_iterator_tail(PooledArray<T>*
 }
 
 template<typename T>
-inline_fn void operator++(PooledArrayIterator<T>& it)
+inline_fn void operator++(BArrayIterator<T>& it)
 {
     it.index++;
     it.block_index++;
@@ -162,7 +168,7 @@ inline_fn void operator++(PooledArrayIterator<T>& it)
 }
 
 template<typename T>
-inline_fn void operator--(PooledArrayIterator<T>& it)
+inline_fn void operator--(BArrayIterator<T>& it)
 {
     if (it.index == 0) {
         it.valid = false;
@@ -174,7 +180,7 @@ inline_fn void operator--(PooledArrayIterator<T>& it)
     if (it.block_index > 0) it.block_index--;
     else
     {
-        PooledArrayBlock* block = it.array->root;
+        BBufferBlock* block = it.array->root;
         U32 index = it.index;
         
         while (index >= block->capacity)
@@ -251,7 +257,7 @@ inline_fn void* ll_push_back(LinkedList<T>* ll)
 
 template<typename T>
 inline_fn Array<T> array_from_ll(Arena* arena, LinkedList<T> src) {
-    Array<T> dst = array_make<T>(arena, src.count);
+    Array<T> dst = ArrayAlloc<T>(arena, src.count);
     U32 i = 0;
     for (LLNode* node = src.root; node != NULL; node = node->next) {
         dst[i++] = *(T*)(node + 1);
@@ -264,7 +270,7 @@ inline_fn Array<T> array_from_ll(Arena* arena, LinkedList<T> src) {
 typedef I32 SortCompareFn(const void*, const void*);
 
 template<typename T>
-internal_fn void _insertion_sort(Array<T> array, SortCompareFn* compare_fn, U32 begin, U32 end)
+internal_fn void _InsertionSort(Array<T> array, SortCompareFn* compare_fn, U32 begin, U32 end)
 {
 	for (U32 i = begin + 1; i < end; ++i) {
         
@@ -294,7 +300,7 @@ internal_fn void _insertion_sort(Array<T> array, SortCompareFn* compare_fn, U32 
 }
 
 template<typename T>
-internal_fn void _quick_sort(Array<T> array, SortCompareFn* compare_fn, U32 left_limit, U32 right_limit)
+internal_fn void _QuickSort(Array<T> array, SortCompareFn* compare_fn, U32 left_limit, U32 right_limit)
 {
 	I32 left = left_limit;
     
@@ -322,24 +328,24 @@ internal_fn void _quick_sort(Array<T> array, SortCompareFn* compare_fn, U32 left
     
 	if (left_limit != left) {
         
-		if (left - left_limit <= 100) _insertion_sort(array, compare_fn, left_limit, left + 1);
-		else _quick_sort(array, compare_fn, left_limit, left);
+		if (left - left_limit <= 100) _InsertionSort(array, compare_fn, left_limit, left + 1);
+		else _QuickSort(array, compare_fn, left_limit, left);
 	}
 	if (left + 1 != right_limit) {
-		if (right_limit - (left + 1) <= 100) _insertion_sort(array, compare_fn, left + 1, right_limit + 1);
-		else _quick_sort(array, compare_fn, left + 1, right_limit);
+		if (right_limit - (left + 1) <= 100) _InsertionSort(array, compare_fn, left + 1, right_limit + 1);
+		else _QuickSort(array, compare_fn, left + 1, right_limit);
 	}
 }
 
 template<typename T>
-inline_fn void array_sort(Array<T> array, SortCompareFn* fn)
+inline_fn void ArraySort(Array<T> array, SortCompareFn* fn)
 {
 	if (array.count == 0) return;
     
 	if (array.count > 64) {
-		_quick_sort(array, fn, 0, array.count - 1);
+		_QuickSort(array, fn, 0, array.count - 1);
 	}
 	else {
-		_insertion_sort(array, fn, 0, array.count);
+		_InsertionSort(array, fn, 0, array.count);
 	}
 }

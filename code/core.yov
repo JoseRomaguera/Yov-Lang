@@ -59,12 +59,28 @@ Env          :: func(name: String) -> (value: String, result: Result);
 EnvPath      :: func(name: String) -> (value: String, result: Result);
 EnvPathArray :: func(name: String) -> (value: Array[String], result: Result);
 
+/*
+ArrayMakeEmpty :: func[T](count: UInt) -> List[T];
+
+ListMakeEmpty          :: func[T](count: UInt) -> List[T];
+ListAppendBack         :: func[T](dst: Array[T]&, src: Array[T]);
+ListAppendFront        :: func[T](dst: Array[T]&, src: Array[T]);
+ListAppendElementBack  :: func[T](dst: Array[T]&, src: T);
+ListAppendElementFront :: func[T](dst: Array[T]&, src: T);
+ListRemove             :: func[T](dst: Array[T]&, index: UInt);
+ListUnorderedRemove    :: func[T](dst: Array[T]&, index: UInt);
+*/
+
 ArrayAppendBack         :: func(dst: Any, src: Any);
 // TODO: ArrayAppendFront        :: func(dst: Any, src: Any);
 ArrayAppendElementBack  :: func(dst: Any, src: Any);
 // TODO: ArrayAppendElementFront :: func(dst: Any, src: Any);
 ArrayRemove :: func(dst: Any, index: UInt);
 ArrayUnorderedRemove :: func(dst: Any, index: UInt);
+
+ArrayMakeEmpty :: func(base_type: Type, dimensions: Array[UInt]) -> Any;
+
+ListMakeEmpty :: func(base_type: Type, dimensions: Array[UInt]) -> Any;
 
 // Console
 

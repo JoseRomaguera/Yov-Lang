@@ -24,7 +24,7 @@ Runtime* RuntimeAlloc(Program* program, Reporter* reporter, RuntimeSettings sett
     runtime->program = program;
     runtime->settings = settings;
     runtime->reporter = reporter;
-    runtime->stack = array_make<Scope>(program->arena, 4096);
+    runtime->stack = ArrayAlloc<Scope>(program->arena, 4096);
     
     return runtime;
 }
@@ -56,7 +56,7 @@ void RuntimeInitializeGlobals(Runtime* runtime)
     
     Program* program = runtime->program;
     
-    runtime->globals = array_make<Reference>(runtime->arena, program->globals.count);
+    runtime->globals = ArrayAlloc<Reference>(runtime->arena, program->globals.count);
     foreach(i, runtime->globals.count) {
         runtime->globals[i] = ref_from_object(null_obj);
     }
@@ -64,9 +64,9 @@ void RuntimeInitializeGlobals(Runtime* runtime)
     if (runtime->reporter->exit_requested) return;
     
     // Yov struct
-    if (!TypeIsNil(VType_YovInfo))
+    if (Type_YovInfo != nil_type)
     {
-        runtime->common_globals.yov = object_alloc(runtime, VType_YovInfo);
+        runtime->common_globals.yov = object_alloc(runtime, Type_YovInfo);
         Reference ref = runtime->common_globals.yov;
         RuntimeStoreGlobal(runtime, "yov", ref);
         
@@ -78,9 +78,9 @@ void RuntimeInitializeGlobals(Runtime* runtime)
     }
     
     // OS struct
-    if (!TypeIsNil(VType_OS))
+    if (Type_OS != nil_type)
     {
-        runtime->common_globals.os = object_alloc(runtime, VType_OS);
+        runtime->common_globals.os = object_alloc(runtime, Type_OS);
         Reference ref = runtime->common_globals.os;
         RuntimeStoreGlobal(runtime, "os", ref);
         
@@ -92,9 +92,9 @@ void RuntimeInitializeGlobals(Runtime* runtime)
     }
     
     // Context struct
-    if (!TypeIsNil(VType_Context))
+    if (Type_Context != nil_type)
     {
-        runtime->common_globals.context = object_alloc(runtime, VType_Context);
+        runtime->common_globals.context = object_alloc(runtime, Type_Context);
         Reference ref = runtime->common_globals.context;
         RuntimeStoreGlobal(runtime, "context", ref);
         
@@ -107,33 +107,33 @@ void RuntimeInitializeGlobals(Runtime* runtime)
 #if 0 // TODO(Jose): 
         {
             Array<ScriptArg> args = yov->script_args;
-            Reference array = alloc_array(runtime, VType_String, args.count);
+            Reference array = alloc_array(runtime, Type_String, args.count);
             foreach(i, args.count) {
                 ref_set_member(runtime, array, i, alloc_string(runtime, args[i].name));
             }
             
-            ref_set_member(runtime, ref, vtype_get_member(VType_Context, "args").index, array);
+            ref_set_member(runtime, ref, vtype_get_member(Type_Context, "args").index, array);
         }
 #endif
         
         // Types
         {
-            Reference array = AllocArray(runtime, VType_Type, program->vtypes.count);
+            Reference array = AllocArray(runtime, Type_Type, program->types.count);
             
-            foreach(i, program->vtypes.count) {
-                Reference element = object_alloc(runtime, VType_Type);
-                ref_assign_Type(runtime, element, program->vtypes[i]);
+            foreach(i, program->types.count) {
+                Reference element = object_alloc(runtime, Type_Type);
+                ref_assign_Type(runtime, element, &program->types[i]);
                 ref_set_member(runtime, array, i, element);
             }
             
-            ref_set_member(runtime, ref, vtype_get_member(VType_Context, "types").index, array);
+            ref_set_member(runtime, ref, TypeGetMember(Type_Context, "types").index, array);
         }
     }
     
     // Calls struct
-    if (!TypeIsNil(VType_CallsContext))
+    if (Type_CallsContext != nil_type)
     {
-        Reference ref = object_alloc(runtime, VType_CallsContext);
+        Reference ref = object_alloc(runtime, Type_CallsContext);
         runtime->common_globals.calls = ref;
         RuntimeStoreGlobal(runtime, "calls", ref);
     }
@@ -199,7 +199,7 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
     scope->return_index = return_index;
     scope->return_count = return_count;
     scope->ir = ir;
-    scope->registers = array_make<Reference>(context.arena, ir.local_registers.count);
+    scope->registers = ArrayAlloc<Reference>(context.arena, ir.local_registers.count);
     foreach(i, scope->registers.count) {
         I32 register_index = RegIndexFromLocal(program, i);
         RuntimeStore(runtime, scope, register_index, ref_from_object(null_obj));
@@ -219,7 +219,7 @@ void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR i
             Reference ref = RefFromValue(runtime, prev_scope, param);
             
             if (is_null(RuntimeLoad(runtime, scope, register_index))) {
-                RuntimeStore(runtime, scope, register_index, object_alloc(runtime, ref.vtype));
+                RuntimeStore(runtime, scope, register_index, object_alloc(runtime, ref.type));
             }
             
             RunCopy(runtime, register_index, ref);
@@ -241,7 +241,7 @@ void RuntimePopScope(Runtime* runtime)
     
     Scope* scope = &runtime->stack[--runtime->stack_counter];
     
-    Array<Reference> output = array_make<Reference>(context.arena, scope->return_count);
+    Array<Reference> output = ArrayAlloc<Reference>(context.arena, scope->return_count);
     foreach(i, output.count) {
         output[i] = ref_from_object(null_obj);
     }
@@ -381,7 +381,7 @@ void RuntimePrintScriptHelp(Runtime* runtime)
         }
     }
     
-    Array<String> headers = array_make<String>(context.arena, program->arg_count);
+    Array<String> headers = ArrayAlloc<String>(context.arena, program->arg_count);
     
     U32 index = 0;
     U32 longest_header = 0;
@@ -390,21 +390,21 @@ void RuntimePrintScriptHelp(Runtime* runtime)
         ArgDefinition* arg = &program->definitions[i].arg;
         if (arg->type != DefinitionType_Arg) continue;
         
-        B32 show_type = VTypeValid(arg->vtype);
+        B32 show_type = TypeIsValid(arg->value_type);
         
         String space = "    ";
         
         String header;
         if (show_type)
         {
-            VType type = arg->vtype;
+            Type* type = arg->value_type;
             
             String type_str;
-            if (type.kind == VKind_Enum) {
+            if (type->kind == VKind_Enum) {
                 type_str = "enum";
             }
             else {
-                type_str = VTypeGetName(program, arg->vtype);
+                type_str = arg->value_type->name;
             }
             header = StrFormat(context.arena, "%S%S -> %S", space, arg->name, type_str);
         }
@@ -519,7 +519,7 @@ B32 RuntimeAskYesNo(Runtime* runtime, String title, String message)
 
 Reference RuntimeGetCurrentDirRef(Runtime* runtime) {
     Program* program = runtime->program;
-    I32 index = vtype_get_member(VType_Context, "cd").index;
+    I32 index = TypeGetMember(Type_Context, "cd").index;
     return ref_get_member(runtime, runtime->common_globals.context, index);
 }
 
@@ -537,7 +537,7 @@ String PathAbsoluteToCD(Arena* arena, Runtime* runtime, String path)
 RedirectStdout RuntimeGetCallsRedirectStdout(Runtime* runtime)
 {
     Reference calls = runtime->common_globals.calls;
-    VariableTypeChild info = vtype_get_member(calls.vtype, "redirect_stdout");
+    VariableTypeChild info = TypeGetMember(calls.type, "redirect_stdout");
     Reference redirect_stdout = ref_get_member(runtime, calls, info.index);
     return (RedirectStdout)get_enum_index(redirect_stdout);
 }
@@ -551,19 +551,19 @@ Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
     if (value.kind == ValueKind_None) return ref_from_object(null_obj);
     if (value.kind == ValueKind_Literal) {
         PROFILE_SCOPE("Literal");
-        if (TypeIsInt(value.vtype)) return AllocSInt(runtime, value.literal_sint);
-        if (TypeIsUInt(value.vtype)) return AllocUInt(runtime, value.literal_sint);
-        if (TypeIsBool(value.vtype)) return AllocBool(runtime, value.literal_bool);
-        if (TypeIsFloat(value.vtype)) return AllocFloat(runtime, value.literal_float);
-        if (TypeIsString(value.vtype)) return AllocString(runtime, value.literal_string);
-        if (TypeIsVoid(value.vtype)) return ref_from_object(null_obj);
-        if (TypeEquals(program, value.vtype, VType_Type)) {
-            Reference ref = object_alloc(runtime, VType_Type);
+        if (value.type == int_type) return AllocSInt(runtime, value.literal_sint);
+        if (value.type == uint_type) return AllocUInt(runtime, value.literal_sint);
+        if (value.type == bool_type) return AllocBool(runtime, value.literal_bool);
+        if (value.type == float_type) return AllocFloat(runtime, value.literal_float);
+        if (value.type == string_type) return AllocString(runtime, value.literal_string);
+        if (value.type == void_type) return ref_from_object(null_obj);
+        if (value.type == Type_Type) {
+            Reference ref = object_alloc(runtime, Type_Type);
             ref_assign_Type(runtime, ref, value.literal_type);
             return ref;
         }
-        if (value.vtype.kind == VKind_Enum) {
-            return AllocEnum(runtime, value.vtype, value.literal_sint);
+        if (value.type->kind == VKind_Enum) {
+            return AllocEnum(runtime, value.type, value.literal_sint);
         }
         InvalidCodepath();
         return ref_from_object(nil_obj);
@@ -574,40 +574,25 @@ Reference RefFromValue(Runtime* runtime, Scope* scope, Value value)
         PROFILE_SCOPE("Array");
         
         Array<Value> values = value.array.values;
-        B32 is_empty = value.array.is_empty;
         
-        if (is_empty)
-        {
-            Array<I64> dimensions = array_make<I64>(context.arena, values.count);
-            foreach(i, dimensions.count) {
-                dimensions[i] = RefGetUInt(RefFromValue(runtime, scope, values[i]));
-            }
-            
-            VType base_vtype = TypeFromIndex(program, value.vtype.base_index);
-            Reference array = AllocArrayMultidimensional(runtime, base_vtype, dimensions);
-            return array;
+        Type* element_type = TypeGetNext(program, value.type);
+        Reference array = AllocArray(runtime, element_type, values.count);
+        
+        foreach(i, values.count) {
+            ref_set_member(runtime, array, i, RefFromValue(runtime, scope, values[i]));
         }
-        else
-        {
-            VType element_vtype = VTypeNext(program, value.vtype);
-            Reference array = AllocArray(runtime, element_vtype, values.count);
-            
-            foreach(i, values.count) {
-                ref_set_member(runtime, array, i, RefFromValue(runtime, scope, values[i]));
-            }
-            return array;
-        }
+        return array;
     }
     
     if (value.kind == ValueKind_ZeroInit) {
         PROFILE_SCOPE("ZeroInit");
-        return object_alloc(runtime, value.vtype);
+        return object_alloc(runtime, value.type);
     }
     
     if (value.kind == ValueKind_StringComposition)
     {
         PROFILE_SCOPE("StringComposition");
-        if (TypeIsString(value.vtype))
+        if (value.type == string_type)
         {
             Array<Value> sources = value.string_composition;
             
@@ -719,9 +704,9 @@ void RunInstruction(Runtime* runtime, Unit unit)
         {
             Reference src = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), unit.src0);
             
-            Assert(TypeEquals(program, src.vtype, VType_Result));
+            Assert(src.type == Type_Result);
             
-            if (TypeEquals(program, src.vtype, VType_Result)) {
+            if (src.type == Type_Result) {
                 Result result = Result_from_ref(runtime, src);
                 if (result.failed) {
                     RuntimeReportError(runtime, result);
@@ -841,14 +826,14 @@ void RunCopy(Runtime* runtime, I32 dst_index, Reference src)
         return;
     }
     
-    VType src_vtype = src.vtype;
+    Type* src_type = src.type;
     
     if (is_null(dst) || is_null(src)) {
         ReportNullRef();
         return;
     }
     
-    if (TypeIsReference(dst.vtype) && TypeEquals(program, VTypeNext(program, dst.vtype), src_vtype)) {
+    if (TypeIsReference(dst.type) && TypeGetNext(program, dst.type) == src_type) {
         dst = RefDereference(runtime, dst);
         
         if (is_null(dst)) {
@@ -870,14 +855,14 @@ void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Ar
     
     if (fn->is_intrinsic)
     {
-        Array<Reference> returns = array_make<Reference>(context.arena, fn->returns.count);
+        Array<Reference> returns = ArrayAlloc<Reference>(context.arena, fn->returns.count);
         
         if (fn->intrinsic.fn == NULL) {
             report_intrinsic_not_resolved(fn->identifier);
             return;
         }
         
-        Array<Reference> params = array_make<Reference>(context.arena, parameters.count);
+        Array<Reference> params = ArrayAlloc<Reference>(context.arena, parameters.count);
         foreach(i, params.count) {
             params[i] = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), parameters[i]);
         }
@@ -1179,9 +1164,9 @@ internal_fn Reference _RunEql(Runtime* runtime, PrimitiveType ptype, Reference l
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) == RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) == RefGetUInt(right));
@@ -1214,9 +1199,9 @@ internal_fn Reference _RunNeq(Runtime* runtime, PrimitiveType ptype, Reference l
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) != RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) != RefGetUInt(right));
@@ -1249,9 +1234,9 @@ internal_fn Reference _RunGtr(Runtime* runtime, PrimitiveType ptype, Reference l
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) > RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) > RefGetUInt(right));
@@ -1284,9 +1269,9 @@ internal_fn Reference _RunLss(Runtime* runtime, PrimitiveType ptype, Reference l
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) < RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) < RefGetUInt(right));
@@ -1319,9 +1304,9 @@ internal_fn Reference _RunGeq(Runtime* runtime, PrimitiveType ptype, Reference l
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) >= RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) >= RefGetUInt(right));
@@ -1354,9 +1339,9 @@ internal_fn Reference _RunLeq(Runtime* runtime, PrimitiveType ptype, Reference l
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) <= RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) <= RefGetUInt(right));
@@ -1389,9 +1374,9 @@ internal_fn Reference _RunOr(Runtime* runtime, PrimitiveType ptype, Reference le
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) || RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) || RefGetUInt(right));
@@ -1424,9 +1409,9 @@ internal_fn Reference _RunAnd(Runtime* runtime, PrimitiveType ptype, Reference l
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (left.vtype.primitive_type)
+    switch (left.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, RefGetInt(left) && RefGetInt(right));
         case PrimitiveType_UInt:  return AllocBool(runtime, RefGetUInt(left) && RefGetUInt(right));
@@ -1455,9 +1440,9 @@ internal_fn Reference _RunNeg(Runtime* runtime, PrimitiveType ptype, Reference s
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (src.vtype.primitive_type)
+    switch (src.type->primitive)
     {
         case PrimitiveType_Int:  return AllocSInt(runtime, -RefGetInt(src));
         case PrimitiveType_UInt:  return AllocSInt(runtime, -(I64)RefGetUInt(src));
@@ -1486,9 +1471,9 @@ internal_fn Reference _RunNot(Runtime* runtime, PrimitiveType ptype, Reference s
         return ref_from_object(null_obj);
     }
     
-    VType type = TypeFromPrimitive(runtime->program, ptype);
+    Type* type = TypeFromPrimitive(ptype);
     
-    switch (src.vtype.primitive_type)
+    switch (src.type->primitive)
     {
         case PrimitiveType_Int:  return AllocBool(runtime, !RefGetInt(src));
         case PrimitiveType_UInt:  return AllocBool(runtime, !RefGetUInt(src));
@@ -1527,9 +1512,9 @@ internal_fn Reference _RunCast(Runtime* runtime, PrimitiveType ptype, Reference 
         return ref_from_object(null_obj);
     }
     
-    VType dst_type = TypeFromPrimitive(runtime->program, ptype);
+    Type* dst_type = TypeFromPrimitive(ptype);
     
-    switch (src.vtype.primitive_type)
+    switch (src.type->primitive)
     {
         case PrimitiveType_Int: _Cast(I64, SInt);
         case PrimitiveType_UInt: _Cast(U64, UInt);
@@ -1558,19 +1543,19 @@ internal_fn Reference _RunBitCast(Runtime* runtime, PrimitiveType ptype, Referen
         return ref_from_object(null_obj);
     }
     
-    if (ptype == PrimitiveType_String || src.vtype.primitive_type == PrimitiveType_String)
+    if (ptype == PrimitiveType_String || src.type->primitive == PrimitiveType_String)
     {
         InvalidCodepath();
         return ref_from_object(null_obj);
     }
     
-    VType dst_type = TypeFromPrimitive(runtime->program, ptype);
-    VType src_type = src.vtype;
+    Type* dst_type = TypeFromPrimitive(ptype);
+    Type* src_type = src.type;
     
     Reference dst = object_alloc(runtime, dst_type);
     
-    U32 dst_size = VTypeGetSize(dst_type);
-    U32 src_size = VTypeGetSize(src_type);
+    U32 dst_size = TypeGetSize(dst_type);
+    U32 src_size = TypeGetSize(src_type);
     
     void* dst_address = dst.address;
     void* src_address = src.address;
@@ -1598,14 +1583,14 @@ Reference _RunIs(Runtime* runtime, Reference left, Reference right)
     
     Program* program = runtime->program;
     
-    if (!TypeEquals(program, right.vtype, VType_Type)) {
+    if (right.type != Type_Type) {
         ReportErrorRT("Right value is not a Type");
         return AllocBool(runtime, false);
     }
     
-    VType type = RefGetType(runtime, right);
+    Type* type = RefGetType(runtime, right);
     
-    return AllocBool(runtime, TypeEquals(program, left.vtype, type));
+    return AllocBool(runtime, left.type == type);
 }
 
 void RunIs(Runtime* runtime, I32 dst_index, Reference left, Reference right)
@@ -1617,15 +1602,15 @@ void RunIs(Runtime* runtime, I32 dst_index, Reference left, Reference right)
 
 #if 0// TODO(Jose): 
 
-Reference RunBinaryOperation(Runtime* runtime, VType dst_type, Reference left, Reference right)
+Reference RunBinaryOperation(Runtime* runtime, Type* dst_type, Reference left, Reference right)
 {
     
-    VType left_vtype = left.vtype;
-    VType right_vtype = right.vtype;
+    Type* left_type = left.type;
+    Type* right_type = right.type;
     
     B32 can_reuse_left = dst.address == left.address;
     
-    if (is_reference(left) && TypeEquals(program, left.vtype, right.vtype))
+    if (is_reference(left) && TypeEquals(program, left.type, right.type))
     {
         void* v0 = RefDereference(runtime, left).address;
         void* v1 = RefDereference(runtime, right).address;
@@ -1634,15 +1619,15 @@ Reference RunBinaryOperation(Runtime* runtime, VType dst_type, Reference left, R
         if (op == OperatorKind_NotEquals) return AllocBool(runtime, v0 != v1);
     }
     
-    if (TypeEquals(program, left_vtype, VType_Type) && TypeEquals(program, right_vtype, VType_Type))
+    if (TypeEquals(program, left_type, Type_Type) && TypeEquals(program, right_type, Type_Type))
     {
-        I32 index = vtype_get_member(VType_Type, "name").index;
+        I32 index = type_get_member(Type_Type, "name").index;
         
         String left_name = get_string(ref_get_member(runtime, left, index));
         String right_name = get_string(ref_get_member(runtime, right, index));
         
-        VType left = TypeFromName(program, left_name);
-        VType right = TypeFromName(program, right_name);
+        Type* left = TypeFromName(program, left_name);
+        Type* right = TypeFromName(program, right_name);
         
         if (op == OperatorKind_Equals) {
             return AllocBool(runtime, TypeEquals(program, left, right));
@@ -1652,16 +1637,16 @@ Reference RunBinaryOperation(Runtime* runtime, VType dst_type, Reference left, R
         }
     }
     
-    if (TypeEquals(program, right_vtype, VType_Type))
+    if (TypeEquals(program, right_type, Type_Type))
     {
-        I32 index = vtype_get_member(VType_Type, "name").index;
+        I32 index = type_get_member(Type_Type, "name").index;
         
         String name = get_string(ref_get_member(runtime, right, index));
         
-        VType type = TypeFromName(program, name);
+        Type* type = TypeFromName(program, name);
         
         if (op == OperatorKind_Is) {
-            return AllocBool(runtime, TypeEquals(program, type, left.vtype));
+            return AllocBool(runtime, TypeEquals(program, type, left.type));
         }
     }
     
@@ -1698,15 +1683,15 @@ Reference RunBinaryOperation(Runtime* runtime, VType dst_type, Reference left, R
         }
     }
     
-    if (TypeIsArray(left_vtype) && TypeIsArray(right_vtype) && TypeEquals(program, VTypeNext(program, left_vtype), VTypeNext(program, right_vtype)))
+    if (TypeIsArray(left_type) && TypeIsArray(right_type) && TypeEquals(program, TypeGetNext(program, left_type), TypeGetNext(program, right_type)))
     {
-        VType element_vtype = VTypeNext(program, left_vtype);
+        Type* element_type = TypeGetNext(program, left_type);
         
         I32 left_count = get_array(left)->count;
         I32 right_count = get_array(right)->count;
         
         if (op == OperatorKind_Addition) {
-            Reference array = AllocArray(runtime, element_vtype, left_count + right_count);
+            Reference array = AllocArray(runtime, element_type, left_count + right_count);
             for (U32 i = 0; i < left_count; ++i) {
                 Reference src = ref_get_child(runtime, left, i, true);
                 ref_set_member(runtime, array, i, src);
@@ -1719,30 +1704,30 @@ Reference RunBinaryOperation(Runtime* runtime, VType dst_type, Reference left, R
         }
     }
     
-    if ((left_vtype.kind == VKind_Array && right_vtype.kind != VKind_Array) || (left_vtype.kind != VKind_Array && right_vtype.kind == VKind_Array))
+    if ((left_type->kind == VKind_Array && right_type->kind != VKind_Array) || (left_type->kind != VKind_Array && right_type->kind == VKind_Array))
     {
-        VType array_type = (left_vtype.kind == VKind_Array) ? left_vtype : right_vtype;
-        VType element_type = (left_vtype.kind == VKind_Array) ? right_vtype : left_vtype;
+        Type* array_type = (left_type->kind == VKind_Array) ? left_type : right_type;
+        Type* element_type = (left_type->kind == VKind_Array) ? right_type : left_type;
         
-        if (!TypeEquals(program, VTypeNext(program, array_type), element_type)) {
+        if (!TypeEquals(program, TypeGetNext(program, array_type), element_type)) {
             ReportInvalidOp();
             return ref_from_object(nil_obj);
         }
         
-        Reference array_src = (left_vtype.kind == VKind_Array) ? left : right;
-        Reference element = (left_vtype.kind == VKind_Array) ? right : left;
+        Reference array_src = (left_type->kind == VKind_Array) ? left : right;
+        Reference element = (left_type->kind == VKind_Array) ? right : left;
         
         I32 array_src_count = get_array(array_src)->count;
         Reference array = AllocArray(runtime, element_type, array_src_count + 1);
         
-        I32 array_offset = (left_vtype.kind == VKind_Array) ? 0 : 1;
+        I32 array_offset = (left_type->kind == VKind_Array) ? 0 : 1;
         
         for (I32 i = 0; i < array_src_count; ++i) {
             Reference src = ref_get_child(runtime, array_src, i, true);
             ref_set_member(runtime, array, i + array_offset, src);
         }
         
-        I32 element_offset = (left_vtype.kind == VKind_Array) ? array_src_count : 0;
+        I32 element_offset = (left_type->kind == VKind_Array) ? array_src_count : 0;
         ref_set_member(runtime, array, element_offset, element);
         return array;
     }
@@ -1752,7 +1737,7 @@ Reference RunBinaryOperation(Runtime* runtime, VType dst_type, Reference left, R
     return ref_from_object(nil_obj);
 }
 
-Reference RunUnaryOperation(Runtime* runtime, VType dst_type, Reference src, UnaryOperation op)
+Reference RunUnaryOperation(Runtime* runtime, Type* dst_type, Reference src, UnaryOperation op)
 {
     switch (op)
     {
@@ -1873,20 +1858,20 @@ String StrFromRef(Arena* arena, Runtime* runtime, Reference ref, B32 raw)
         return "null";
     }
     
-    VType vtype = ref.vtype;
+    Type* type = ref.type;
     
-    if (TypeIsString(vtype)) {
+    if (type == string_type) {
         if (raw) return get_string(ref);
         return StrFormat(arena, "\"%S\"", get_string(ref));
     }
-    if (TypeIsInt(vtype)) { return StrFromI64(arena, RefGetSInt(ref)); }
-    if (TypeIsUInt(vtype)) { return StrFromU64(arena, RefGetUInt(ref)); }
-    if (TypeIsFloat(vtype)) { return StrFromF64(arena, RefGetFloat(ref), 4); }
-    if (TypeIsBool(vtype)) { return RefGetBool(ref) ? "true" : "false"; }
-    if (TypeIsVoid(vtype)) { return "void"; }
-    if (TypeIsNil(vtype)) { return "nil"; }
+    if (type == int_type) { return StrFromI64(arena, RefGetSInt(ref)); }
+    if (type == uint_type) { return StrFromU64(arena, RefGetUInt(ref)); }
+    if (type == float_type) { return StrFromF64(arena, RefGetFloat(ref), 4); }
+    if (type == bool_type) { return RefGetBool(ref) ? "true" : "false"; }
+    if (type == void_type) { return "void"; }
+    if (type == nil_type) { return "nil"; }
     
-    if (vtype.kind == VKind_Array)
+    if (type->kind == VKind_Array)
     {
         StringBuilder builder = string_builder_make(context.arena);
         
@@ -1905,28 +1890,28 @@ String StrFromRef(Arena* arena, Runtime* runtime, Reference ref, B32 raw)
         return string_from_builder(arena, &builder);
     }
     
-    if (vtype.kind == VKind_Enum)
+    if (type->kind == VKind_Enum)
     {
         I64 index = get_enum_index(ref);
-        if (index < 0 || index >= vtype._enum->names.count) return "?";
-        String name = vtype._enum->names[(U32)index];
+        if (index < 0 || index >= type->_enum->names.count) return "?";
+        String name = type->_enum->names[(U32)index];
         if (!raw) name = StrFormat(arena, "\"%S\"", name);
         return name;
     }
     
-    if (vtype.kind == VKind_Struct)
+    if (type->kind == VKind_Struct)
     {
         StringBuilder builder = string_builder_make(context.arena);
         
         append(&builder, "{ ");
         
-        foreach(i, vtype._struct->vtypes.count)
+        foreach(i, type->_struct->types.count)
         {
-            String member_name = vtype._struct->names[i];
+            String member_name = type->_struct->names[i];
             
             Reference member = ref_get_member(runtime, ref, i);
             appendf(&builder, "%S = %S", member_name, StrFromRef(context.arena, runtime, member, false));
-            if (i < vtype._struct->vtypes.count - 1) append(&builder, ", ");
+            if (i < type->_struct->types.count - 1) append(&builder, ", ");
         }
         
         append(&builder, " }");
@@ -1934,9 +1919,9 @@ String StrFromRef(Arena* arena, Runtime* runtime, Reference ref, B32 raw)
         return string_from_builder(arena, &builder);
     }
     
-    if (vtype.kind == VKind_Reference) {
-        U64 address = (U64)ref.address;
-        return StrFormat(arena, "%l", address);
+    if (type->kind == VKind_Reference) {
+        ref = RefDereference(runtime, ref);
+        return StrFromRef(arena, runtime, ref, raw);
     }
     
     InvalidCodepath();
@@ -1947,16 +1932,16 @@ Reference ref_from_object(Object* object)
 {
     Reference ref = {};
     ref.parent = object;
-    ref.vtype = object->vtype;
+    ref.type = object->type;
     ref.address = object + 1;
     return ref;
 }
 
-Reference ref_from_address(Object* parent, VType vtype, void* address)
+Reference ref_from_address(Object* parent, Type* type, void* address)
 {
     Reference member = {};
     member.parent = parent;
-    member.vtype = vtype;
+    member.type = type;
     member.address = address;
     return member;
 }
@@ -1986,9 +1971,9 @@ Reference ref_get_member(Runtime* runtime, Reference ref, U32 index)
         return ref_from_object(nil_obj);
     }
     
-    VType vtype = ref.vtype;
+    Type* type = ref.type;
     
-    if (vtype.kind == VKind_Array)
+    if (type->kind == VKind_Array)
     {
         ObjectData_Array* array = RefGetArray(ref);
         
@@ -1997,25 +1982,25 @@ Reference ref_get_member(Runtime* runtime, Reference ref, U32 index)
             return ref_from_object(nil_obj);
         }
         
-        VType element_vtype = VTypeNext(program, ref.vtype);
+        Type* element_type = TypeGetNext(program, ref.type);
         
-        U32 offset = VTypeGetSize(element_vtype) * index;
-        return ref_from_address(ref.parent, element_vtype, array->data + offset);
+        U32 offset = TypeGetSize(element_type) * index;
+        return ref_from_address(ref.parent, element_type, array->data + offset);
     }
     
-    if (vtype.kind == VKind_Struct)
+    if (type->kind == VKind_Struct)
     {
-        Array<VType> vtypes = vtype._struct->vtypes;
+        Array<Type*> types = type->_struct->types;
         
-        if (index >= vtypes.count) {
+        if (index >= types.count) {
             InvalidCodepath();
             return ref_from_object(nil_obj);
         }
         
         U8* data = (U8*)ref.address;
-        U32 offset = vtype._struct->offsets[index];
+        U32 offset = type->_struct->offsets[index];
         
-        return ref_from_address(ref.parent, vtypes[index], data + offset);
+        return ref_from_address(ref.parent, types[index], data + offset);
     }
     
     InvalidCodepath();
@@ -2029,29 +2014,29 @@ Reference ref_get_property(Runtime* runtime, Reference ref, U32 index)
         return ref_from_object(nil_obj);
     }
     
-    VType vtype = ref.vtype;
+    Type* type = ref.type;
     
-    if (TypeIsString(vtype))
+    if (type == string_type)
     {
         if (index == 0) return AllocUInt(runtime, get_string(ref).size);
     }
     
-    if (vtype.kind == VKind_Array)
+    if (type->kind == VKind_Array)
     {
         if (index == 0) return AllocUInt(runtime, RefGetArray(ref)->count);
     }
     
-    if (vtype.kind == VKind_Enum)
+    if (type->kind == VKind_Enum)
     {
         I64 v = get_enum_index(ref);
         if (index == 0) return AllocSInt(runtime, v);
         if (index == 1) {
-            if (v < 0 || v >= vtype._enum->values.count) return AllocSInt(runtime, -1);
-            return AllocSInt(runtime, vtype._enum->values[v]);
+            if (v < 0 || v >= type->_enum->values.count) return AllocSInt(runtime, -1);
+            return AllocSInt(runtime, type->_enum->values[v]);
         }
         if (index == 2) {
-            if (v < 0 || v >= vtype._enum->names.count) return AllocString(runtime, "?");
-            return AllocString(runtime, vtype._enum->names[v]);
+            if (v < 0 || v >= type->_enum->names.count) return AllocString(runtime, "?");
+            return AllocString(runtime, type->_enum->names[v]);
         }
     }
     
@@ -2067,66 +2052,66 @@ U32 RefGetChildCount(Runtime* runtime, Reference ref, B32 is_member)
 }
 
 U32 RefGetPropertyCount(Runtime* runtime, Reference ref) {
-    return VTypeGetProperties(runtime->program, ref.vtype).count;
+    return VTypeGetProperties(runtime->program, ref.type).count;
 }
 
 U32 RefGetMemberCount(Reference ref)
 {
-    if (ref.vtype.kind == VKind_Array) {
+    if (ref.type->kind == VKind_Array) {
         return RefGetArray(ref)->count;
     }
-    else if (ref.vtype.kind == VKind_Struct) {
-        return ref.vtype._struct->vtypes.count;
+    else if (ref.type->kind == VKind_Struct) {
+        return ref.type->_struct->types.count;
     }
     return 0;
 }
 
 Reference AllocSInt(Runtime* runtime, I64 value)
 {
-    Reference ref = object_alloc(runtime, VType_Int);
+    Reference ref = object_alloc(runtime, int_type);
     RefSetSInt(ref, value);
     return ref;
 }
 
 Reference AllocUInt(Runtime* runtime, U64 value)
 {
-    Reference ref = object_alloc(runtime, VType_UInt);
+    Reference ref = object_alloc(runtime, uint_type);
     RefSetUInt(ref, value);
     return ref;
 }
 
 Reference AllocFloat(Runtime* runtime, F64 value)
 {
-    Reference ref = object_alloc(runtime, VType_Float);
+    Reference ref = object_alloc(runtime, float_type);
     RefSetFloat(ref, value);
     return ref;
 }
 
 Reference AllocBool(Runtime* runtime, B32 value)
 {
-    Reference ref = object_alloc(runtime, VType_Bool);
+    Reference ref = object_alloc(runtime, bool_type);
     RefSetBool(ref, value);
     return ref;
 }
 
 Reference AllocString(Runtime* runtime, String value)
 {
-    Reference ref = object_alloc(runtime, VType_String);
+    Reference ref = object_alloc(runtime, string_type);
     ref_string_set(runtime, ref, value);
     return ref;
 }
 
-Reference AllocArray(Runtime* runtime, VType element_vtype, U32 count)
+Reference AllocArray(Runtime* runtime, Type* element_type, U32 count)
 {
     PROFILE_FUNCTION;
-    VType vtype = vtype_from_dimension(element_vtype, 1);
+    Type* type = TypeFromArray(runtime->program, element_type, 1);
     
-    if (vtype.kind != VKind_Array) {
+    if (type->kind != VKind_Array) {
         InvalidCodepath();
         return ref_from_object(nil_obj);
     }
     
-    Reference ref = object_alloc(runtime, vtype);
+    Reference ref = object_alloc(runtime, type);
     RefArrayPrepare(runtime, ref, count);
     
     ObjectData_Array* array = RefGetArray(ref);
@@ -2134,7 +2119,7 @@ Reference AllocArray(Runtime* runtime, VType element_vtype, U32 count)
     return ref;
 }
 
-Reference AllocArrayMultidimensional(Runtime* runtime, VType base_vtype, Array<I64> dimensions)
+Reference AllocArrayMultidimensional(Runtime* runtime, Type* base_type, Array<I64> dimensions)
 {
     Program* program = runtime->program;
     
@@ -2143,20 +2128,20 @@ Reference AllocArrayMultidimensional(Runtime* runtime, VType base_vtype, Array<I
         return ref_from_object(nil_obj);
     }
     
-    VType vtype = vtype_from_dimension(base_vtype, dimensions.count);
-    VType element_vtype = VTypeNext(program, vtype);
+    Type* type = TypeFromArray(runtime->program, base_type, dimensions.count);
+    Type* element_type = TypeGetNext(program, type);
     
     if (dimensions.count == 1)
     {
-        return AllocArray(runtime, element_vtype, (U32)dimensions[0]);
+        return AllocArray(runtime, element_type, (U32)dimensions[0]);
     }
     else
     {
         U32 count = (U32)dimensions[0];
-        Reference ref = AllocArray(runtime, VTypeNext(program, vtype), count);
+        Reference ref = AllocArray(runtime, TypeGetNext(program, type), count);
         
         foreach(i, count) {
-            Reference element_src = AllocArrayMultidimensional(runtime, base_vtype, array_subarray(dimensions, 1, dimensions.count - 1));
+            Reference element_src = AllocArrayMultidimensional(runtime, base_type, ArraySub(dimensions, 1, dimensions.count - 1));
             Reference element_dst = ref_get_child(runtime, ref, i, true);
             RefCopy(runtime, element_dst, element_src);
         }
@@ -2165,16 +2150,16 @@ Reference AllocArrayMultidimensional(Runtime* runtime, VType base_vtype, Array<I
     }
 }
 
-Reference AllocEnum(Runtime* runtime, VType vtype, I64 index)
+Reference AllocEnum(Runtime* runtime, Type* type, I64 index)
 {
-    Reference ref = object_alloc(runtime, vtype);
+    Reference ref = object_alloc(runtime, type);
     set_enum_index(ref, index);
     return ref;
 }
 
 Reference AllocReference(Runtime* runtime, Reference ref)
 {
-    Reference res = object_alloc(runtime, vtype_from_reference(ref.vtype));
+    Reference res = object_alloc(runtime, TypeFromReference(runtime->program, ref.type));
     set_reference(runtime, res, ref);
     return res;
 }
@@ -2184,8 +2169,8 @@ B32 is_valid(Reference ref) {
 }
 B32 is_unknown(Reference ref) {
     if (ref.parent == NULL) return true;
-    if (TypeIsNil(ref.vtype)) return true;
-    return TypeIsNil(ref.parent->vtype);
+    if (ref.type == nil_type) return true;
+    return ref.parent->type == nil_type;
 }
 
 B32 is_const(Reference ref) {
@@ -2195,34 +2180,34 @@ B32 is_const(Reference ref) {
 
 B32 is_null(Reference ref) {
     if (is_unknown(ref)) return true;
-    return TypeIsVoid(ref.vtype) && TypeIsVoid(ref.parent->vtype);
+    return ref.type == void_type && ref.parent->type == void_type;
 }
 
-B32 RefIsAnyInt(Reference ref) { return is_valid(ref) && TypeIsAnyInt(ref.vtype); }
-B32 RefIsInt(Reference ref) { return is_valid(ref) && TypeIsInt(ref.vtype); }
-B32 RefIsUInt(Reference ref) { return is_valid(ref) && TypeIsUInt(ref.vtype); }
-B32 RefIsBool(Reference ref) { return is_valid(ref) && TypeIsBool(ref.vtype); }
-B32 RefIsFloat(Reference ref) { return is_valid(ref) && TypeIsFloat(ref.vtype); }
-B32 is_string(Reference ref) { return is_valid(ref) && TypeIsString(ref.vtype); }
+B32 RefIsAnyInt(Reference ref) { return is_valid(ref) && TypeIsAnyInt(ref.type); }
+B32 RefIsInt(Reference ref) { return is_valid(ref) && ref.type == int_type; }
+B32 RefIsUInt(Reference ref) { return is_valid(ref) && ref.type == uint_type; }
+B32 RefIsBool(Reference ref) { return is_valid(ref) && ref.type == bool_type; }
+B32 RefIsFloat(Reference ref) { return is_valid(ref) && ref.type == float_type; }
+B32 is_string(Reference ref) { return is_valid(ref) && ref.type == string_type; }
 
 B32 RefIsArray(Reference ref) {
     if (is_unknown(ref)) return false;
-    return TypeIsArray(ref.vtype);
+    return TypeIsArray(ref.type);
 }
 
 B32 is_enum(Reference ref) {
     if (is_unknown(ref)) return false;
-    return TypeIsEnum(ref.vtype);
+    return TypeIsEnum(ref.type);
 }
 
-B32 is_reference(Reference ref) {
+B32 RefIsReference(Reference ref) {
     if (is_unknown(ref)) return false;
-    return TypeIsReference(ref.vtype);
+    return TypeIsReference(ref.type);
 }
 
 B32 RefIsType(Program* program, Reference ref) {
     if (is_unknown(ref)) return false;
-    return TypeEquals(program, ref.vtype, VType_Type);
+    return ref.type == Type_Type;
 }
 
 I64 RefGetSInt(Reference ref)
@@ -2233,7 +2218,7 @@ I64 RefGetSInt(Reference ref)
     }
     
     I64* data = (I64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(I64));
+    Assert(TypeGetSize(ref.type) == sizeof(I64));
     return *data;
 }
 
@@ -2245,13 +2230,13 @@ U64 RefGetUInt(Reference ref)
     }
     
     U64* data = (U64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(U64));
+    Assert(TypeGetSize(ref.type) == sizeof(U64));
     return *data;
 }
 
 I64 RefGetInt(Reference ref)
 {
-    if (TypeIsInt(ref.vtype)) return RefGetSInt(ref);
+    if (ref.type == int_type) return RefGetSInt(ref);
     return (I64)RefGetUInt(ref);
 }
 
@@ -2263,7 +2248,7 @@ B32 RefGetBool(Reference ref)
     }
     
     B32* data = (B32*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(B32));
+    Assert(TypeGetSize(ref.type) == sizeof(B32));
     return *data;
 }
 
@@ -2275,7 +2260,7 @@ F64 RefGetFloat(Reference ref)
     }
     
     F64* data = (F64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(F64));
+    Assert(TypeGetSize(ref.type) == sizeof(F64));
     return *data;
 }
 
@@ -2286,7 +2271,7 @@ I64 get_enum_index(Reference ref) {
     }
     
     I64* data = (I64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(I64));
+    Assert(TypeGetSize(ref.type) == sizeof(I64));
     return *data;
 }
 
@@ -2298,7 +2283,7 @@ String get_string(Reference ref)
     }
     
     ObjectData_String* data = (ObjectData_String*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(ObjectData_String));
+    Assert(TypeGetSize(ref.type) == sizeof(ObjectData_String));
     return StrMake(data->chars, data->size);
 }
 
@@ -2310,19 +2295,19 @@ ObjectData_Array* RefGetArray(Reference ref)
     }
     
     ObjectData_Array* array = (ObjectData_Array*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(ObjectData_Array));
+    Assert(TypeGetSize(ref.type) == sizeof(ObjectData_Array));
     return array;
 }
 
 Reference RefDereference(Runtime* runtime, Reference ref)
 {
-    if (!is_reference(ref)) {
+    if (!RefIsReference(ref)) {
         InvalidCodepath();
         return {};
     }
     
     ObjectData_Ref* data = (ObjectData_Ref*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(ObjectData_Ref));
+    Assert(TypeGetSize(ref.type) == sizeof(ObjectData_Ref));
     
     if (data->parent == null_obj || data->parent == NULL) {
         return ref_from_object(null_obj);
@@ -2331,11 +2316,11 @@ Reference RefDereference(Runtime* runtime, Reference ref)
     Reference deref = {};
     deref.parent = data->parent;
     deref.address = data->address;
-    deref.vtype = VTypeNext(runtime->program, ref.vtype);
+    deref.type = TypeGetNext(runtime->program, ref.type);
     return deref;
 }
 
-VType RefGetType(Runtime* runtime, Reference ref)
+Type* RefGetType(Runtime* runtime, Reference ref)
 {
     if (!RefIsType(runtime->program, ref)) {
         InvalidCodepath();
@@ -2348,21 +2333,21 @@ VType RefGetType(Runtime* runtime, Reference ref)
 
 I64 get_int_member(Runtime* runtime, Reference ref, String member)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     return RefGetSInt(member_ref);
 }
 
 B32 get_bool_member(Runtime* runtime, Reference ref, String member)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     return RefGetBool(member_ref);
 }
 
 String get_string_member(Runtime* runtime, Reference ref, String member)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     return get_string(member_ref);
 }
@@ -2375,7 +2360,7 @@ void RefSetSInt(Reference ref, I64 v)
     }
     
     I64* data = (I64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(I64));
+    Assert(TypeGetSize(ref.type) == sizeof(I64));
     *data = v;
 }
 
@@ -2387,7 +2372,7 @@ void RefSetUInt(Reference ref, U64 v)
     }
     
     U64* data = (U64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(U64));
+    Assert(TypeGetSize(ref.type) == sizeof(U64));
     *data = v;
 }
 
@@ -2399,7 +2384,7 @@ void RefSetFloat(Reference ref, F64 v)
     }
     
     F64* data = (F64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(F64));
+    Assert(TypeGetSize(ref.type) == sizeof(F64));
     *data = v;
 }
 
@@ -2411,7 +2396,7 @@ void RefSetBool(Reference ref, B32 v)
     }
     
     B32* data = (B32*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(B32));
+    Assert(TypeGetSize(ref.type) == sizeof(B32));
     *data = v;
 }
 
@@ -2423,7 +2408,7 @@ void set_enum_index(Reference ref, I64 v)
     }
     
     I64* data = (I64*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(I64));
+    Assert(TypeGetSize(ref.type) == sizeof(I64));
     *data = v;
 }
 
@@ -2435,7 +2420,7 @@ ObjectData_String* ref_string_get_data(Runtime* runtime, Reference ref)
     }
     
     ObjectData_String* data = (ObjectData_String*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(ObjectData_String));
+    Assert(TypeGetSize(ref.type) == sizeof(ObjectData_String));
     
     return data;
 }
@@ -2500,18 +2485,18 @@ void RefArrayFree(Runtime* runtime, Reference ref, U32 capacity)
 {
     Program* program = runtime->program;
     ObjectData_Array* array = RefGetArray(ref);
-    VType element_vtype = VTypeNext(program, ref.vtype);
+    Type* element_type = TypeGetNext(program, ref.type);
     
-    if (VTypeNeedsInternalRelease(program, element_vtype))
+    if (VTypeNeedsInternalRelease(program, element_type))
     {
-        U32 element_size = VTypeGetSize(element_vtype);
+        U32 element_size = TypeGetSize(element_type);
         
         U8* it = array->data;
         U8* end = array->data + element_size * array->count;
         
         while (it < end)
         {
-            Reference member = ref_from_address(ref.parent, element_vtype, it);
+            Reference member = ref_from_address(ref.parent, element_type, it);
             ref_release_internal(runtime, member, true);
             it += element_size;
         }
@@ -2528,8 +2513,8 @@ void RefArrayPrepare(Runtime* runtime, Reference ref, U32 capacity)
     
     if (array->capacity < capacity)
     {
-        VType element_vtype = VTypeNext(program, ref.vtype);
-        U32 element_size = VTypeGetSize(element_vtype);
+        Type* element_type = TypeGetNext(program, ref.type);
+        U32 element_size = TypeGetSize(element_type);
         
         void* last_data = array->data;
         
@@ -2546,13 +2531,13 @@ void set_reference(Runtime* runtime, Reference ref, Reference src)
 {
     Program* program = runtime->program;
     
-    if (!is_reference(ref) || (!is_null(src) && !TypeEquals(program, VTypeNext(program, ref.vtype), src.vtype))) {
+    if (!RefIsReference(ref) || (!is_null(src) && TypeGetNext(program, ref.type) != src.type)) {
         InvalidCodepath();
         return;
     }
     
     ObjectData_Ref* data = (ObjectData_Ref*)ref.address;
-    Assert(VTypeGetSize(ref.vtype) == sizeof(ObjectData_Ref));
+    Assert(TypeGetSize(ref.type) == sizeof(ObjectData_Ref));
     
     object_decrement_ref(data->parent);
     data->parent = src.parent;
@@ -2562,7 +2547,7 @@ void set_reference(Runtime* runtime, Reference ref, Reference src)
 
 void RefSetSIntMember(Runtime* runtime, Reference ref, String member, I64 v)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     if (is_unknown(member_ref)) return;
     else RefSetSInt(member_ref, v);
@@ -2570,7 +2555,7 @@ void RefSetSIntMember(Runtime* runtime, Reference ref, String member, I64 v)
 
 void RefSetUIntMember(Runtime* runtime, Reference ref, String member, U64 v)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     if (is_unknown(member_ref)) return;
     else RefSetUInt(member_ref, v);
@@ -2578,7 +2563,7 @@ void RefSetUIntMember(Runtime* runtime, Reference ref, String member, U64 v)
 
 void ref_member_set_bool(Runtime* runtime, Reference ref, String member, B32 v)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     if (is_unknown(member_ref)) return;
     else RefSetBool(member_ref, v);
@@ -2586,19 +2571,19 @@ void ref_member_set_bool(Runtime* runtime, Reference ref, String member, B32 v)
 
 void set_enum_index_member(Runtime* runtime, Reference ref, String member, I64 v)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     if (is_unknown(member_ref)) return;
     if (is_null(member_ref)) {
-        VariableTypeChild info = vtype_get_member(ref.vtype, member);
-        ref_set_member(runtime, ref, index, AllocEnum(runtime, info.vtype, v));
+        VariableTypeChild info = TypeGetMember(ref.type, member);
+        ref_set_member(runtime, ref, index, AllocEnum(runtime, info.type, v));
     }
     else set_enum_index(member_ref, v);
 }
 
 void ref_member_set_string(Runtime* runtime, Reference ref, String member, String v)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     if (is_unknown(member_ref)) return;
     if (is_null(member_ref)) ref_set_member(runtime, ref, index, AllocString(runtime, v));
@@ -2607,7 +2592,7 @@ void ref_member_set_string(Runtime* runtime, Reference ref, String member, Strin
 
 void RefMemberSetUInt(Runtime* runtime, Reference ref, String member, U64 v)
 {
-    I32 index = vtype_get_member(ref.vtype, member).index;
+    I32 index = TypeGetMember(ref.type, member).index;
     Reference member_ref = ref_get_member(runtime, ref, index);
     if (is_unknown(member_ref)) return;
     else RefSetUInt(member_ref, v);
@@ -2616,7 +2601,7 @@ void RefMemberSetUInt(Runtime* runtime, Reference ref, String member, U64 v)
 void ref_assign_Result(Runtime* runtime, Reference ref, Result res)
 {
     Program* program = runtime->program;
-    Assert(TypeEquals(program, ref.vtype, VType_Result));
+    Assert(ref.type == Type_Result);
     ref_member_set_string(runtime, ref, "message", res.message);
     RefSetSIntMember(runtime, ref, "code", res.code);
     ref_member_set_bool(runtime, ref, "failed", res.failed);
@@ -2625,14 +2610,14 @@ void ref_assign_Result(Runtime* runtime, Reference ref, Result res)
 void ref_assign_CallOutput(Runtime* runtime, Reference ref, CallOutput res)
 {
     Program* program = runtime->program;
-    Assert(TypeEquals(program, ref.vtype, VType_CallOutput));
+    Assert(ref.type == Type_CallOutput);
     ref_member_set_string(runtime, ref, "stdout", res.stdout);
 }
 
 void ref_assign_FileInfo(Runtime* runtime, Reference ref, FileInfo info)
 {
     Program* program = runtime->program;
-    Assert(TypeEquals(program, ref.vtype, VType_FileInfo));
+    Assert(ref.type == Type_FileInfo);
     ref_member_set_string(runtime, ref, "path", info.path);
     ref_member_set_bool(runtime, ref, "is_directory", info.is_directory);
 }
@@ -2642,54 +2627,54 @@ void ref_assign_FunctionDefinition(Runtime* runtime, Reference ref, FunctionDefi
     Program* program = runtime->program;
     ref_member_set_string(runtime, ref, "identifier", fn->identifier);
     
-    Reference parameters = AllocArray(runtime, VType_ObjectDefinition, fn->parameters.count);
+    Reference parameters = AllocArray(runtime, Type_ObjectDefinition, fn->parameters.count);
     foreach(i, fn->parameters.count) {
         Reference param = ref_get_member(runtime, parameters, i);
         ref_assign_ObjectDefinition(runtime, param, fn->parameters[i]);
     }
     
-    Reference returns = AllocArray(runtime, VType_ObjectDefinition, fn->returns.count);
+    Reference returns = AllocArray(runtime, Type_ObjectDefinition, fn->returns.count);
     foreach(i, fn->returns.count) {
         Reference ret = ref_get_member(runtime, returns, i);
         ref_assign_ObjectDefinition(runtime, ret, fn->returns[i]);
     }
     
-    ref_set_member(runtime, ref, TypeGetChild(program, ref.vtype, "parameters").index, parameters);
-    ref_set_member(runtime, ref, TypeGetChild(program, ref.vtype, "returns").index, returns);
+    ref_set_member(runtime, ref, TypeGetChild(program, ref.type, "parameters").index, parameters);
+    ref_set_member(runtime, ref, TypeGetChild(program, ref.type, "returns").index, returns);
 }
 
-void ref_assign_StructDefinition(Runtime* runtime, Reference ref, VType vtype)
+void ref_assign_StructDefinition(Runtime* runtime, Reference ref, Type* type)
 {
     Program* program = runtime->program;
-    ref_member_set_string(runtime, ref, "identifier", VTypeGetName(program, vtype));
+    ref_member_set_string(runtime, ref, "identifier", type->name);
     
-    Reference members = AllocArray(runtime, VType_ObjectDefinition, vtype._struct->names.count);
-    foreach(i, vtype._struct->names.count) {
+    Reference members = AllocArray(runtime, Type_ObjectDefinition, type->_struct->names.count);
+    foreach(i, type->_struct->names.count) {
         Reference mem = ref_get_member(runtime, members, i);
-        String name = vtype._struct->names[i];
-        VType mem_vtype = vtype._struct->vtypes[i];
-        ref_assign_ObjectDefinition(runtime, mem, ObjDefMake(name, mem_vtype, NO_CODE, false, ValueFromZero(mem_vtype)));
+        String name = type->_struct->names[i];
+        Type* mem_type = type->_struct->types[i];
+        ref_assign_ObjectDefinition(runtime, mem, ObjDefMake(name, mem_type, NO_CODE, false, ValueFromZero(mem_type)));
     }
     
-    ref_set_member(runtime, ref, TypeGetChild(program, ref.vtype, "members").index, members);
+    ref_set_member(runtime, ref, TypeGetChild(program, ref.type, "members").index, members);
 }
 
-void ref_assign_EnumDefinition(Runtime* runtime, Reference ref, VType vtype)
+void ref_assign_EnumDefinition(Runtime* runtime, Reference ref, Type* type)
 {
     Program* program = runtime->program;
-    ref_member_set_string(runtime, ref, "identifier", VTypeGetName(program, vtype));
+    ref_member_set_string(runtime, ref, "identifier", type->name);
     
-    Reference elements = AllocArray(runtime, VType_String, vtype._enum->names.count);
-    Reference values = AllocArray(runtime, VType_Int, vtype._enum->names.count);
-    foreach(i, vtype._enum->names.count) {
+    Reference elements = AllocArray(runtime, string_type, type->_enum->names.count);
+    Reference values = AllocArray(runtime, int_type, type->_enum->names.count);
+    foreach(i, type->_enum->names.count) {
         Reference element = ref_get_member(runtime, elements, i);
         Reference value = ref_get_member(runtime, values, i);
-        ref_string_set(runtime, element, vtype._enum->names[i]);
-        RefSetSInt(value, vtype._enum->values[i]);
+        ref_string_set(runtime, element, type->_enum->names[i]);
+        RefSetSInt(value, type->_enum->values[i]);
     }
     
-    ref_set_member(runtime, ref, TypeGetChild(program, ref.vtype, "elements").index, elements);
-    ref_set_member(runtime, ref, TypeGetChild(program, ref.vtype, "values").index, values);
+    ref_set_member(runtime, ref, TypeGetChild(program, ref.type, "elements").index, elements);
+    ref_set_member(runtime, ref, TypeGetChild(program, ref.type, "values").index, values);
 }
 
 void ref_assign_ObjectDefinition(Runtime* runtime, Reference ref, ObjectDefinition def)
@@ -2698,22 +2683,22 @@ void ref_assign_ObjectDefinition(Runtime* runtime, Reference ref, ObjectDefiniti
     ref_member_set_string(runtime, ref, "identifier", def.name);
     ref_member_set_bool(runtime, ref, "is_constant", def.is_constant);
     
-    VariableTypeChild type_info = vtype_get_member(ref.vtype, "type");
+    VariableTypeChild type_info = TypeGetMember(ref.type, "type");
     Reference type = ref_get_member(runtime, ref, type_info.index);
-    ref_assign_Type(runtime, type, def.vtype);
+    ref_assign_Type(runtime, type, def.type);
 }
 
-void ref_assign_Type(Runtime* runtime, Reference ref, VType vtype)
+void ref_assign_Type(Runtime* runtime, Reference ref, Type* type)
 {
     Program* program = runtime->program;
-    Assert(TypeEquals(program, ref.vtype, VType_Type));
-    ref_member_set_string(runtime, ref, "name", VTypeGetName(program, vtype));
+    Assert(ref.type == Type_Type);
+    ref_member_set_string(runtime, ref, "name", type->name);
 }
 
 Reference ref_from_Result(Runtime* runtime, Result res)
 {
     Program* program = runtime->program;
-    Reference ref = object_alloc(runtime, VType_Result);
+    Reference ref = object_alloc(runtime, Type_Result);
     ref_assign_Result(runtime, ref, res);
     return ref;
 }
@@ -2722,7 +2707,7 @@ Result Result_from_ref(Runtime* runtime, Reference ref)
 {
     Program* program = runtime->program;
     
-    if (!TypeEquals(program, ref.vtype, VType_Result)) {
+    if (ref.type != Type_Result) {
         InvalidCodepath();
         return {};
     }
@@ -2738,18 +2723,18 @@ U32 object_generate_id(Runtime* runtime) {
     return ++runtime->object_id_counter;
 }
 
-Reference object_alloc(Runtime* runtime, VType vtype)
+Reference object_alloc(Runtime* runtime, Type* type)
 {
     PROFILE_FUNCTION;
     Program* program = runtime->program;
-    Assert(VTypeValid(vtype));
+    Assert(TypeIsValid(type));
     
     U32 ID = object_generate_id(runtime);
     
-    LogMemory("Alloc obj(%u): %S", ID, VTypeGetName(program, vtype));
+    LogMemory("Alloc obj(%u): %S", ID, VTypeGetName(program, type));
     
-    Assert(VTypeGetSize(vtype) > 0);
-    U32 type_size = sizeof(Object) + VTypeGetSize(vtype);
+    Assert(TypeGetSize(type) > 0);
+    U32 type_size = sizeof(Object) + TypeGetSize(type);
     
     Object* obj = NULL;
     
@@ -2765,7 +2750,7 @@ Reference object_alloc(Runtime* runtime, VType vtype)
     }
     
     obj->ID = ID;
-    obj->vtype = vtype;
+    obj->type = type;
     obj->ref_count = 0;
     
     return ref_from_object(obj);
@@ -2776,7 +2761,7 @@ void object_free(Runtime* runtime, Object* obj, B32 release_internal_refs)
     Program* program = runtime->program;
     Assert(obj->ref_count == 0);
     
-    LogMemory("Free obj(%u): %S", obj->ID, VTypeGetName(program, obj->vtype));
+    LogMemory("Free obj(%u): %S", obj->ID, VTypeGetName(program, obj->type));
     
     B32 use_gc = true;
     
@@ -2807,13 +2792,13 @@ void object_free(Runtime* runtime, Object* obj, B32 release_internal_refs)
 
 void object_increment_ref(Object* obj)
 {
-    if (obj == NULL || TypeIsNil(obj->vtype) || TypeIsVoid(obj->vtype)) return;
+    if (obj == NULL || obj->type == nil_type || obj->type == void_type) return;
     obj->ref_count++;
 }
 
 void object_decrement_ref(Object* obj)
 {
-    if (obj == NULL || TypeIsNil(obj->vtype) || TypeIsVoid(obj->vtype)) return;
+    if (obj == NULL || obj->type == nil_type || obj->type == void_type) return;
     obj->ref_count--;
     Assert(obj->ref_count >= 0);
 }
@@ -2823,25 +2808,25 @@ void ref_release_internal(Runtime* runtime, Reference ref, B32 release_refs)
     PROFILE_FUNCTION;
     
     Program* program = runtime->program;
-    VType vtype = ref.vtype;
+    Type* type = ref.type;
     
-    if (!VTypeNeedsInternalRelease(program, vtype)) return;
+    if (!VTypeNeedsInternalRelease(program, type)) return;
     
-    if (vtype.kind == VKind_Array)
+    if (type->kind == VKind_Array)
     {
         ObjectData_Array* array = RefGetArray(ref);
-        VType element_vtype = VTypeNext(program, vtype);
+        Type* element_type = TypeGetNext(program, type);
         
-        if (VTypeNeedsInternalRelease(program, element_vtype))
+        if (VTypeNeedsInternalRelease(program, element_type))
         {
-            U32 element_size = VTypeGetSize(element_vtype);
+            U32 element_size = TypeGetSize(element_type);
             
             U8* it = array->data;
             U8* end = array->data + element_size * array->count;
             
             while (it < end)
             {
-                Reference member = ref_from_address(ref.parent, element_vtype, it);
+                Reference member = ref_from_address(ref.parent, element_type, it);
                 ref_release_internal(runtime, member, release_refs);
                 it += element_size;
             }
@@ -2850,24 +2835,24 @@ void ref_release_internal(Runtime* runtime, Reference ref, B32 release_refs)
         object_dynamic_free(runtime, array->data);
         *array = {};
     }
-    else if (vtype.kind == VKind_Struct)
+    else if (type->kind == VKind_Struct)
     {
-        Array<VType> vtypes = vtype._struct->vtypes;
+        Array<Type*> types = type->_struct->types;
         
-        foreach(i, vtypes.count)
+        foreach(i, types.count)
         {
             U8* data = (U8*)ref.address;
-            U32 offset = vtype._struct->offsets[i];
+            U32 offset = type->_struct->offsets[i];
             
-            Reference member = ref_from_address(ref.parent, vtypes[i], data + offset);
+            Reference member = ref_from_address(ref.parent, types[i], data + offset);
             ref_release_internal(runtime, member, release_refs);
         }
     }
-    else if (vtype.kind == VKind_Reference && release_refs) {
+    else if (type->kind == VKind_Reference && release_refs) {
         Reference deref = RefDereference(runtime, ref);
         object_decrement_ref(deref.parent);
     }
-    else if (TypeIsString(vtype)) {
+    else if (type == string_type) {
         ref_string_clear(runtime, ref);
     }
 }
@@ -2888,41 +2873,41 @@ void RefCopy(Runtime* runtime, Reference dst, Reference src)
         return;
     }
     
-    if (!TypeEquals(program, src.vtype, dst.vtype)) {
+    if (src.type != dst.type) {
         InvalidCodepath();
         return;
     }
     
-    VType vtype = dst.vtype;
+    Type* type = dst.type;
     
-    if (vtype.kind == VKind_Struct)
+    if (type->kind == VKind_Struct)
     {
-        foreach(i, vtype._struct->vtypes.count) {
+        foreach(i, type->_struct->types.count) {
             Reference dst_mem = ref_get_member(runtime, dst, i);
             Reference src_mem = ref_get_member(runtime, src, i);
             RefCopy(runtime, dst_mem, src_mem);
         }
     }
-    else if (vtype.kind == VKind_Primitive || vtype.kind == VKind_Enum)
+    else if (type->kind == VKind_Primitive || type->kind == VKind_Enum)
     {
-        if (TypeIsString(vtype))
+        if (type == string_type)
         {
             ref_string_set(runtime, dst, get_string(src));
         }
         else {
             I64* v0 = (I64*)dst.address;
             I64* v1 = (I64*)src.address;
-            MemoryCopy(dst.address, src.address, VTypeGetSize(vtype));
+            MemoryCopy(dst.address, src.address, TypeGetSize(type));
         }
     }
-    else if (vtype.kind == VKind_Array)
+    else if (type->kind == VKind_Array)
     {
         ref_release_internal(runtime, dst, true);
         
         ObjectData_Array* dst_array = RefGetArray(dst);
         ObjectData_Array* src_array = RefGetArray(src);
         
-        U32 element_size = VTypeGetSize(VTypeNext(program, vtype));
+        U32 element_size = TypeGetSize(TypeGetNext(program, type));
         dst_array->capacity = src_array->count;
         dst_array->data = (U8*)object_dynamic_allocate(runtime, dst_array->capacity * element_size);
         dst_array->count = src_array->count;
@@ -2933,14 +2918,14 @@ void RefCopy(Runtime* runtime, Reference dst, Reference src)
             RefCopy(runtime, dst_element, src_element);
         }
     }
-    else if (vtype.kind == VKind_Reference)
+    else if (type->kind == VKind_Reference)
     {
         Reference dst_deref = RefDereference(runtime, dst);
         Reference src_deref = RefDereference(runtime, src);
         
         object_decrement_ref(dst_deref.parent);
         object_increment_ref(src_deref.parent);
-        MemoryCopy(dst.address, src.address, VTypeGetSize(vtype));
+        MemoryCopy(dst.address, src.address, TypeGetSize(type));
     }
     else {
         InvalidCodepath();
@@ -2956,7 +2941,7 @@ Reference ref_alloc_and_copy(Runtime* runtime, Reference src)
     
     if (is_null(src)) return ref_from_object(null_obj);
     
-    Reference dst = object_alloc(runtime, src.vtype);
+    Reference dst = object_alloc(runtime, src.type);
     RefCopy(runtime, dst, src);
     return dst;
 }

@@ -131,6 +131,10 @@ struct Parser {
     String text;
     RangeU64 range;
     U64 cursor;
+    
+#if DEV
+    String debug_str;
+#endif
     // TODO(Jose): Cache tokens
 };
 
@@ -197,7 +201,7 @@ struct IR_Group {
 
 struct IR_Object {
     String identifier;
-    VType vtype;
+    Type* type;
     U32 assignment_count;
     I32 register_index;
     I32 scope;
@@ -214,20 +218,20 @@ struct IR_Context {
     Program* program;
     Reporter* reporter;
     
-    PooledArray<Register> local_registers;
-    PooledArray<IR_Object> objects;
-    PooledArray<IR_LoopingScope> looping_scopes;
+    BArray<Register> local_registers;
+    BArray<IR_Object> objects;
+    BArray<IR_LoopingScope> looping_scopes;
     I32 scope;
 };
 
 struct ExpresionContext {
-    VType vtype;
+    Type* type;
     U32 assignment_count;
 };
 
 ExpresionContext ExpresionContext_from_void();
 ExpresionContext ExpresionContext_from_inference(U32 assignment_count);
-ExpresionContext ExpresionContext_from_vtype(VType vtype, U32 assignment_count);
+ExpresionContext ExpresionContext_from_type(Type* type, U32 assignment_count);
 
 IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext context);
 IR_Group ReadExpressionWithCasting(IR_Context* ir, Parser* parser, ExpresionContext context);
@@ -248,8 +252,8 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
 ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter* reporter, Program* program, RegisterKind register_kind);
 ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR_Context* ir, RegisterKind register_kind);
 
-IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, VType vtype, Array<VType> expected_vtypes, Parser* parser);
-VType ReadObjectType(Parser* parser, Reporter* reporter, Program* program);
+IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, Type* type, Array<Type*> expected_types, Parser* parser);
+Type* ReadObjectType(Parser* parser, Reporter* reporter, Program* program);
 
 Value ValueFromIrObject(IR_Object* object);
 
@@ -263,24 +267,26 @@ IR_Group IRFromSingle(IR_Unit* unit, Value value = ValueNone());
 IR_Group IRAppend(IR_Group o0, IR_Group o1);
 IR_Group IRAppend3(IR_Group o0, IR_Group o1, IR_Group o2);
 IR_Group IRAppend4(IR_Group o0, IR_Group o1, IR_Group o2, IR_Group o3);
-IR_Group IRFromDefineObject(IR_Context* ir, RegisterKind register_kind, String identifier, VType vtype, B32 constant, Location location);
-IR_Group IRFromDefineTemporal(IR_Context* ir, VType vtype, Location location);
+IR_Group IRFromDefineObject(IR_Context* ir, RegisterKind register_kind, String identifier, Type* type, B32 constant, Location location);
+IR_Group IRFromDefineTemporal(IR_Context* ir, Type* type, Location location);
 IR_Group IRFromReference(IR_Context* ir, B32 expects_lvalue, Value value, Location location);
 IR_Group IRFromDereference(IR_Context* ir, Value value, Location location);
 IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location);
 IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parameters, ExpresionContext context, Location location);
-IR_Group IRFromDefaultInitializer(IR_Context* ir, VType vtype, Location location);
+IR_Group IRFromDefaultInitializer(IR_Context* ir, Type* type, Location location);
+IR_Group IRFromEmptyArray(IR_Context* ir, Type* base_type, Array<Value> dimensions, Location location);
+IR_Group IRFromEmptyList(IR_Context* ir, Type* base_type, Array<Value> dimensions, Location location);
 IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location);
 IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location);
 IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, OperatorKind op, Location location);
 IR_Group IRFromMultipleAssignment(IR_Context* ir, B32 expects_lvalue, Array<Value> destinations, Value src, OperatorKind op, Location location);
-IR_Group IRFromOp(IR_Context* ir, UnitKind kind, VType dst_type, Value src0, Value src1, Location location);
+IR_Group IRFromOp(IR_Context* ir, UnitKind kind, Type* dst_type, Value src0, Value src1, Location location);
 IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorKind op, B32 reuse_left, Location location);
 IR_Group IRFromSignOperator(IR_Context* ir, Value src, OperatorKind op, Location location);
-IR_Group IRFromCasting(IR_Context* ir, Value src, VType type, B32 bitcast, Location location);
-IR_Group IRFromOptionalCasting(IR_Context* ir, Value src, VType type, Location location);
-IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, VType vtype, Location location);
+IR_Group IRFromCasting(IR_Context* ir, Value src, Type* type, B32 bitcast, Location location);
+IR_Group IRFromOptionalCasting(IR_Context* ir, Value src, Type* type, Location location);
+IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, Type* type, Location location);
 IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, ExpresionContext context, Location location);
 IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR_Group failure, Location location);
 IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group content, IR_Group update, Location location);
@@ -289,33 +295,33 @@ IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location);
 
 IR MakeIR(Arena* arena, Program* program, Array<Register> local_registers, IR_Group group, YovScript* script);
 IR_Context* IrContextAlloc(Program* program, Reporter* reporter);
-Array<VType> ReturnsFromRegisters(Arena* arena, Array<Register> registers);
+Array<Type*> ReturnsFromRegisters(Arena* arena, Array<Register> registers);
 
 IR IrFromValue(Arena* arena, Program* program, Value value);
 
 B32 IRValidateReturnPath(Array<Unit> units);
 
-enum SymbolType {
-    SymbolType_None,
-    SymbolType_Object,
-    SymbolType_Function,
-    SymbolType_Type,
+enum SymbolKind {
+    SymbolKind_None,
+    SymbolKind_Object,
+    SymbolKind_Function,
+    SymbolKind_Type,
 };
 
 struct Symbol {
-    SymbolType type;
+    SymbolKind kind;
     String identifier;
     
     IR_Object* object;
     FunctionDefinition* function;
-    VType vtype;
+    Type* type;
 };
 
 IR_Object* ir_find_object(IR_Context* ir, String identifier, B32 parent_scopes);
 IR_Object* ir_find_object_from_value(IR_Context* ir, Value value);
 IR_Object* ir_find_object_from_register(IR_Context* ir, I32 register_index);
-IR_Object* ir_define_object(IR_Context* ir, String identifier, VType vtype, I32 scope, I32 register_index);
-IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, VType vtype);
+IR_Object* ir_define_object(IR_Context* ir, String identifier, Type* type, I32 scope, I32 register_index);
+IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, Type* type);
 Symbol ir_find_symbol(IR_Context* ir, String identifier);
 
 IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, Location location);
@@ -325,7 +331,7 @@ IR_LoopingScope* ir_get_looping_scope(IR_Context* ir);
 void ir_scope_push(IR_Context* ir);
 void ir_scope_pop(IR_Context* ir);
 
-I32 IRRegisterAlloc(IR_Context* ir, VType vtype, RegisterKind kind, B32 constant);
+I32 IRRegisterAlloc(IR_Context* ir, Type* type, RegisterKind kind, B32 constant);
 Register IRRegisterGet(IR_Context* ir, I32 register_index);
 Register IRRegisterFromValue(IR_Context* ir, Value value);
 
@@ -342,6 +348,7 @@ struct CodeDefinition {
             Location body_location;
             Location parameters_location;
             Location returns_location;
+            Location generics_location;
             B32 return_is_list;
         } function;
         struct {
@@ -356,6 +363,8 @@ struct CodeDefinition {
     };
 };
 
+B32 ReadCodeDefinition(CodeDefinition* dst, Parser* parser, Reporter* reporter, SentenceKind op);
+
 struct FrontContext {
     Arena* arena;
     
@@ -364,12 +373,12 @@ struct FrontContext {
     Program* program;
     
     Mutex mutex;
-    PooledArray<YovScript> scripts;
-    PooledArray<CodeDefinition> definition_list;
-    PooledArray<Location> global_location_list;
+    BArray<YovScript> scripts;
+    BArray<CodeDefinition> definition_list;
+    BArray<Location> global_location_list;
     
     Array<CodeDefinition> definitions;
-    PooledArray<Global> global_list;
+    BArray<Global> global_list;
     IR_Group global_initialize_group;
     U32 number_of_registers_for_global_initialize;
     

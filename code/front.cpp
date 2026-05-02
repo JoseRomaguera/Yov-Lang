@@ -35,8 +35,6 @@ internal_fn void FrontRun(FrontContext* front, LaneContext* lane)
         FrontIdentifyDefinitions(lane, front);
         
         if (LaneNarrow(lane)) {
-            ProgramInitializeTypesTable(front->program);
-            
             F64 ellapsed = TimerNow() - start_time;
             LogFlow("Identify pass finished: %S", StringFromEllapsedTime(ellapsed));
         }
@@ -131,6 +129,7 @@ Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
     
     Program* program = ArenaPushStruct<Program>(arena);
     program->arena = arena;
+    program->types = BArrayMake<Type>(program->arena, 256);
     program->script_dir = StrCopy(arena, PathGetFolder(input->main_script_path));
     program->caller_dir = StrCopy(arena, input->caller_dir);
     
@@ -146,10 +145,10 @@ Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
     front->program = program;
     front->reporter = reporter;
     front->input = input;
-    front->scripts = pooled_array_make<YovScript>(front_arena, 16);
-    front->definition_list = pooled_array_make<CodeDefinition>(front_arena, 64);
-    front->global_location_list = pooled_array_make<Location>(front_arena, 32);
-    front->global_list = pooled_array_make<Global>(front_arena, 32);
+    front->scripts = BArrayMake<YovScript>(front_arena, 16);
+    front->definition_list = BArrayMake<CodeDefinition>(front_arena, 64);
+    front->global_location_list = BArrayMake<Location>(front_arena, 32);
+    front->global_list = BArrayMake<Global>(front_arena, 32);
     front->global_initialize_group = IRFromNone();
     
     LaneGroup* group = LaneGroupStart(context.arena, FrontWide, front);
@@ -172,6 +171,180 @@ Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter)
     return program;
 }
 
+internal_fn B32 ExpectAndSkipBraces(Parser* parser, Reporter* reporter)
+{
+    Token open_brace_token = PeekToken(parser);
+    
+    if (open_brace_token.kind != TokenKind_OpenBrace) {
+        report_common_missing_opening_brace(open_brace_token.location);
+        return false;
+    }
+    
+    Location location = FetchScope(parser, TokenKind_OpenBrace, true);
+    
+    if (!LocationIsValid(location)) {
+        report_common_missing_closing_brace(open_brace_token.location);
+        return false;
+    }
+    
+    return true;
+}
+
+B32 ReadCodeDefinition(CodeDefinition* dst, Parser* parser, Reporter* reporter, SentenceKind op)
+{
+    Token identifier_token = ConsumeToken(parser);
+    
+    Assert(identifier_token.kind == TokenKind_Identifier);
+    
+    CodeDefinition def = {};
+    defer(*dst = def);
+    def.identifier = identifier_token.value;
+    def.entire_location = NO_CODE;
+    
+    if (op == SentenceKind_FunctionDef) def.type = DefinitionType_Function;
+    else if (op == SentenceKind_StructDef) def.type = DefinitionType_Struct;
+    else if (op == SentenceKind_EnumDef) def.type = DefinitionType_Enum;
+    else if (op == SentenceKind_ArgDef) def.type = DefinitionType_Arg;
+    else InvalidCodepath();
+    
+    
+    if (op == SentenceKind_StructDef || op == SentenceKind_EnumDef)
+    {
+        AssumeToken(parser, TokenKind_Colon);
+        AssumeToken(parser, TokenKind_Colon);
+        AssumeToken(parser, (op == SentenceKind_StructDef) ? TokenKind_StructKeyword : TokenKind_EnumKeyword);
+        
+        U64 definition_start_cursor = parser->cursor;
+        if (!ExpectAndSkipBraces(parser, reporter)) return false;
+        
+        def.enum_or_struct.body_location = LocationMake(definition_start_cursor, parser->cursor, parser->script_id);
+    }
+    else if (op == SentenceKind_FunctionDef)
+    {
+        AssumeToken(parser, TokenKind_Colon);
+        AssumeToken(parser, TokenKind_Colon);
+        AssumeToken(parser, TokenKind_FuncKeyword);
+        
+        def.function.parameters_location = NO_CODE;
+        def.function.returns_location = NO_CODE;
+        def.function.body_location = NO_CODE;
+        def.function.generics_location = NO_CODE;
+        
+        // Generics
+        if (PeekToken(parser).kind == TokenKind_OpenBracket)
+        {
+            Location generics_location = FetchScope(parser, TokenKind_OpenBracket, false);
+            
+            if (!LocationIsValid(generics_location)) {
+                report_common_missing_closing_bracket(PeekToken(parser).location);
+                return false;
+            }
+            
+            def.function.generics_location = generics_location;
+        }
+        
+        // Parameters
+        if (PeekToken(parser).kind == TokenKind_OpenParenthesis)
+        {
+            Location parameters_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+            
+            if (!LocationIsValid(parameters_location)) {
+                report_common_missing_closing_parenthesis(PeekToken(parser).location);
+                return false;
+            }
+            
+            def.function.parameters_location = parameters_location;
+        }
+        
+        // Returns
+        if (PeekToken(parser).kind == TokenKind_Arrow)
+        {
+            AssumeToken(parser, TokenKind_Arrow);
+            
+            Token first = PeekToken(parser);
+            
+            def.function.return_is_list = first.kind == TokenKind_OpenParenthesis;
+            
+            if (def.function.return_is_list)
+            {
+                Location returns_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+                
+                if (!LocationIsValid(returns_location)) {
+                    ReportErrorFront(first.location, "Missing parenthesis for return");
+                    return false;
+                }
+                
+                def.function.returns_location = returns_location;
+            }
+            else
+            {
+                Location returns_location = FetchUntil(parser, false, TokenKind_OpenBrace, TokenKind_NextSentence);
+                
+                if (!LocationIsValid(returns_location)) {
+                    ReportErrorFront(first.location, "Invalid return definition");
+                    return false;
+                }
+                
+                def.function.returns_location = returns_location;
+            }
+        }
+        
+        // Body
+        {
+            if (PeekToken(parser).kind == TokenKind_NextSentence) {
+                AssumeToken(parser, TokenKind_NextSentence);
+            }
+            else {
+                Location body_location = FetchCode(parser);
+                
+                if (!LocationIsValid(body_location)) {
+                    ReportErrorFront(PeekToken(parser).location, "Expecting the body of the function");
+                    return false;
+                }
+                
+                def.function.body_location = body_location;
+            }
+        }
+    }
+    else if (op == SentenceKind_ArgDef)
+    {
+        AssumeToken(parser, TokenKind_Colon);
+        AssumeToken(parser, TokenKind_Colon);
+        AssumeToken(parser, TokenKind_ArgKeyword);
+        
+        def.arg.type_location = NO_CODE;
+        def.arg.body_location = NO_CODE;
+        
+        B32 has_type = false;
+        
+        if (PeekToken(parser).kind == TokenKind_Arrow) {
+            AssumeToken(parser, TokenKind_Arrow);
+            has_type = true;
+        }
+        
+        Location to_open_brace = FetchUntil(parser, false, TokenKind_OpenBrace);
+        
+        if (!LocationIsValid(to_open_brace)) {
+            ReportErrorFront(PeekToken(parser).location, "Expecting braces for the arg");
+            return false;
+        }
+        
+        if (has_type) {
+            def.arg.type_location = to_open_brace;
+        }
+        
+        U64 start_cursor = parser->cursor;
+        
+        if (!ExpectAndSkipBraces(parser, reporter)) return false;
+        
+        def.arg.body_location = LocationMake(start_cursor, parser->cursor, parser->script_id);
+    }
+    
+    def.entire_location = LocationMake(identifier_token.cursor, parser->cursor, parser->script_id);
+    
+    return true;
+}
+
 YovScript* FrontAddScript(FrontContext* front, String path)
 {
     PROFILE_FUNCTION;
@@ -188,7 +361,7 @@ YovScript* FrontAddScript(FrontContext* front, String path)
     MutexLockGuard(&front->mutex);
     
     // Check for duplicated
-    for (auto it = pooled_array_make_iterator(&front->scripts); it.valid; ++it) {
+    foreach_BArray(it, &front->scripts) {
         YovScript* s = it.value;
         if (StrEquals(s->path, path)) {
             return NULL;
@@ -200,7 +373,7 @@ YovScript* FrontAddScript(FrontContext* front, String path)
     
     I32 script_id = front->scripts.count;
     
-    YovScript* script = array_add(&front->scripts);
+    YovScript* script = BArrayAdd(&front->scripts);
     script->id = script_id;
     script->path = path;
     script->name = PathGetLastElement(path);
@@ -220,7 +393,7 @@ YovScript* FrontAddCoreScript(FrontContext* front)
     
     I32 script_id = front->scripts.count;
     
-    YovScript* script = array_add(&front->scripts);
+    YovScript* script = BArrayAdd(&front->scripts);
     script->id = script_id;
     script->path = "core.yov";
     script->name = "core.yov";
@@ -286,25 +459,6 @@ Parser* ParserFromLocation(FrontContext* front, Location location)
     return ParserAlloc(script, location.range);
 }
 
-internal_fn B32 ExpectAndSkipBraces(Reporter* reporter, Parser* parser, I32 script_id)
-{
-    Token open_brace_token = PeekToken(parser);
-    
-    if (open_brace_token.kind != TokenKind_OpenBrace) {
-        report_common_missing_opening_brace(open_brace_token.location);
-        return false;
-    }
-    
-    Location location = FetchScope(parser, TokenKind_OpenBrace, true);
-    
-    if (!LocationIsValid(location)) {
-        report_common_missing_closing_brace(open_brace_token.location);
-        return false;
-    }
-    
-    return true;
-}
-
 void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGroup* lane_group)
 {
     PROFILE_FUNCTION;
@@ -313,8 +467,8 @@ void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGr
     Reporter* reporter = front->reporter;
     Parser* parser = ParserAlloc(script, { 0, script->text.size });
     
-    PooledArray<U64> lines = pooled_array_make<U64>(context.arena, 512);
-    array_add<U64>(&lines, 0);
+    BArray<U64> lines = BArrayMake<U64>(context.arena, 512);
+    BArrayAdd<U64>(&lines, 0);
     
     U64 last_line_check_cursor = 0;
     
@@ -329,7 +483,7 @@ void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGr
             for (U64 i = last_line_check_cursor; i < end_cursor; i++)
             {
                 if (script->text[i] == '\n') {
-                    array_add(&lines, i + 1);
+                    BArrayAdd(&lines, i + 1);
                 }
             }
             
@@ -379,145 +533,17 @@ void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGr
                 Location location = LocationMake(t0.cursor, parser->cursor, script->id);
                 
                 MutexLock(&front->mutex);
-                array_add(&front->global_location_list, location);
+                BArrayAdd(&front->global_location_list, location);
                 MutexUnlock(&front->mutex);
                 
                 AssumeToken(parser, TokenKind_NextSentence);
             }
             else if (op == SentenceKind_FunctionDef || op == SentenceKind_StructDef || op == SentenceKind_EnumDef || op == SentenceKind_ArgDef)
             {
-                SkipToken(parser, t0); // Identifier
-                
-                CodeDefinition def = {};
-                def.identifier = t0.value;
-                def.entire_location = NO_CODE;
-                
-                if (op == SentenceKind_FunctionDef) def.type = DefinitionType_Function;
-                else if (op == SentenceKind_StructDef) def.type = DefinitionType_Struct;
-                else if (op == SentenceKind_EnumDef) def.type = DefinitionType_Enum;
-                else if (op == SentenceKind_ArgDef) def.type = DefinitionType_Arg;
-                else InvalidCodepath();
-                
-                
-                if (op == SentenceKind_StructDef || op == SentenceKind_EnumDef)
-                {
-                    AssumeToken(parser, TokenKind_Colon);
-                    AssumeToken(parser, TokenKind_Colon);
-                    AssumeToken(parser, (op == SentenceKind_StructDef) ? TokenKind_StructKeyword : TokenKind_EnumKeyword);
-                    
-                    U64 definition_start_cursor = parser->cursor;
-                    if (!ExpectAndSkipBraces(reporter, parser, script->id)) break;
-                    
-                    def.enum_or_struct.body_location = LocationMake(definition_start_cursor, parser->cursor, script->id);
+                CodeDefinition def;
+                if (!ReadCodeDefinition(&def, parser, reporter, op)) {
+                    break;
                 }
-                else if (op == SentenceKind_FunctionDef)
-                {
-                    AssumeToken(parser, TokenKind_Colon);
-                    AssumeToken(parser, TokenKind_Colon);
-                    AssumeToken(parser, TokenKind_FuncKeyword);
-                    
-                    def.function.parameters_location = NO_CODE;
-                    def.function.returns_location = NO_CODE;
-                    def.function.body_location = NO_CODE;
-                    
-                    // Parameters
-                    if (PeekToken(parser).kind == TokenKind_OpenParenthesis)
-                    {
-                        Location parameters_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
-                        
-                        if (!LocationIsValid(parameters_location)) {
-                            report_common_missing_closing_parenthesis(PeekToken(parser).location);
-                            continue;
-                        }
-                        
-                        def.function.parameters_location = parameters_location;
-                    }
-                    
-                    // Returns
-                    if (PeekToken(parser).kind == TokenKind_Arrow)
-                    {
-                        AssumeToken(parser, TokenKind_Arrow);
-                        
-                        Token first = PeekToken(parser);
-                        
-                        def.function.return_is_list = first.kind == TokenKind_OpenParenthesis;
-                        
-                        if (def.function.return_is_list)
-                        {
-                            Location returns_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
-                            
-                            if (!LocationIsValid(returns_location)) {
-                                ReportErrorFront(first.location, "Missing parenthesis for return");
-                                continue;
-                            }
-                            
-                            def.function.returns_location = returns_location;
-                        }
-                        else
-                        {
-                            Location returns_location = FetchUntil(parser, false, TokenKind_OpenBrace, TokenKind_NextSentence);
-                            
-                            if (!LocationIsValid(returns_location)) {
-                                ReportErrorFront(first.location, "Invalid return definition");
-                                continue;
-                            }
-                            
-                            def.function.returns_location = returns_location;
-                        }
-                    }
-                    
-                    // Body
-                    {
-                        if (PeekToken(parser).kind == TokenKind_NextSentence) {
-                            AssumeToken(parser, TokenKind_NextSentence);
-                        }
-                        else {
-                            Location body_location = FetchCode(parser);
-                            
-                            if (!LocationIsValid(body_location)) {
-                                ReportErrorFront(PeekToken(parser).location, "Expecting the body of the function");
-                                continue;
-                            }
-                            
-                            def.function.body_location = body_location;
-                        }
-                    }
-                }
-                else if (op == SentenceKind_ArgDef)
-                {
-                    AssumeToken(parser, TokenKind_Colon);
-                    AssumeToken(parser, TokenKind_Colon);
-                    AssumeToken(parser, TokenKind_ArgKeyword);
-                    
-                    def.arg.type_location = NO_CODE;
-                    def.arg.body_location = NO_CODE;
-                    
-                    B32 has_type = false;
-                    
-                    if (PeekToken(parser).kind == TokenKind_Arrow) {
-                        AssumeToken(parser, TokenKind_Arrow);
-                        has_type = true;
-                    }
-                    
-                    Location to_open_brace = FetchUntil(parser, false, TokenKind_OpenBrace);
-                    
-                    if (!LocationIsValid(to_open_brace)) {
-                        ReportErrorFront(PeekToken(parser).location, "Expecting braces for the arg");
-                        continue;
-                    }
-                    
-                    if (has_type) {
-                        def.arg.type_location = to_open_brace;
-                    }
-                    
-                    U64 start_cursor = parser->cursor;
-                    
-                    if (!ExpectAndSkipBraces(reporter, parser, script->id)) break;
-                    
-                    def.arg.body_location = LocationMake(start_cursor, parser->cursor, parser->script_id);
-                }
-                
-                def.entire_location = LocationMake(t0.cursor, parser->cursor, script->id);
                 
                 {
                     MutexLockGuard(&front->mutex);
@@ -531,7 +557,7 @@ void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGr
                         InvalidCodepath();
                     }
                     
-                    array_add(&front->definition_list, def);
+                    BArrayAdd(&front->definition_list, def);
                 }
             }
             else
@@ -550,12 +576,12 @@ void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGr
         for (U64 i = last_line_check_cursor; i < end_cursor; i++)
         {
             if (script->text[i] == '\n') {
-                array_add(&lines, i + 1);
+                BArrayAdd(&lines, i + 1);
             }
         }
     }
     
-    script->lines = array_from_pooled_array(front->arena, lines);
+    script->lines = ArrayFromBArray(front->arena, lines);
 }
 
 void FrontReadAllScripts(LaneContext* lane, FrontContext* front)
@@ -585,7 +611,7 @@ void FrontReadAllScripts(LaneContext* lane, FrontContext* front)
     }
     
     if (LaneNarrow(lane, 0)) {
-        front->definitions = array_from_pooled_array(front->arena, front->definition_list);
+        front->definitions = ArrayFromBArray(front->arena, front->definition_list);
     }
     
     LaneBarrier(lane);
@@ -619,7 +645,7 @@ void FrontIdentifyDefinitions(LaneContext* lane, FrontContext* front)
         definition_count += front->enum_count;
         definition_count += front->arg_count;
         
-        program->definitions = array_make<Definition>(program->arena, definition_count);
+        program->definitions = ArrayAlloc<Definition>(program->arena, definition_count);
         program->function_count = front->function_count;
         program->struct_count = front->struct_count;
         program->enum_count = front->enum_count;
@@ -702,11 +728,11 @@ internal_fn void DefineLangGlobal(FrontContext* front, String name, String type)
     
     Global global = {};
     global.identifier = name;
-    global.vtype = TypeFromName(front->program, type);
+    global.type = TypeFromName(front->program, type);
     global.is_constant = true;
     
     MutexLock(&front->mutex);
-    array_add(&front->global_list, global);
+    BArrayAdd(&front->global_list, global);
     MutexUnlock(&front->mutex);
 }
 
@@ -736,7 +762,7 @@ void FrontDefineGlobals(LaneContext* lane, FrontContext* front)
             ObjectDefinitionResult res = ReadObjectDefinition(context.arena, ParserFromLocation(front, location), reporter, program, false, RegisterKind_Global);
             if (!res.success) continue;
             
-            Array<Global> globals = array_make<Global>(context.arena, res.objects.count);
+            Array<Global> globals = ArrayAlloc<Global>(context.arena, res.objects.count);
             
             foreach(i, globals.count)
             {
@@ -744,17 +770,17 @@ void FrontDefineGlobals(LaneContext* lane, FrontContext* front)
                 
                 Global global = {};
                 global.identifier = StrCopy(program->arena, def.name);
-                global.vtype = def.vtype;
+                global.type = def.type;
                 global.is_constant = def.is_constant;
                 
-                Assert(VTypeValid(def.vtype));
+                Assert(TypeIsValid(def.type));
                 
                 globals[i] = global;
             }
             
             MutexLock(&front->mutex);
             foreach(i, globals.count)
-                array_add(&front->global_list, globals[i]);
+                BArrayAdd(&front->global_list, globals[i]);
             MutexUnlock(&front->mutex);
         }
         
@@ -772,18 +798,18 @@ void FrontDefineGlobals(LaneContext* lane, FrontContext* front)
             
             Global global = {};
             global.identifier = StrCopy(program->arena, def.identifier);
-            global.vtype = def.vtype;
+            global.type = def.value_type;
             global.is_constant = true;
             
-            Assert(VTypeValid(def.vtype));
+            Assert(TypeIsValid(def.value_type));
             
-            array_add(&front->global_list, global);
+            BArrayAdd(&front->global_list, global);
         }
     }
     LaneBarrier(lane);
     
     if (LaneNarrow(lane)) {
-        program->globals = array_from_pooled_array(program->arena, front->global_list);
+        program->globals = ArrayFromBArray(program->arena, front->global_list);
     }
     LaneBarrier(lane);
 }
@@ -844,13 +870,13 @@ void FrontResolveGlobals(LaneContext* lane, FrontContext* front)
                     
                     if (script_arg->value.size <= 0)
                     {
-                        if (TypeIsBool(def->vtype)) {
+                        if (def->value_type == bool_type) {
                             value = ValueFromBool(true);
                         }
                     }
                     else
                     {
-                        value = ValueFromStringExpression(program->arena, script_arg->value, def->vtype);
+                        value = ValueFromStringExpression(program->arena, script_arg->value, def->value_type);
                     }
                     
                     if (value.kind == ValueKind_None) {
@@ -871,14 +897,14 @@ void FrontResolveGlobals(LaneContext* lane, FrontContext* front)
         
         if (front->global_initialize_group.success)
         {
-            Array<Register> registers = array_make<Register>(context.arena, front->number_of_registers_for_global_initialize);
+            Array<Register> registers = ArrayAlloc<Register>(context.arena, front->number_of_registers_for_global_initialize);
             
             foreach(i, registers.count)
             {
                 Register reg = {};
                 reg.kind = RegisterKind_Local;
                 reg.is_constant = false;
-                reg.vtype = VType_Any;
+                reg.type = any_type;
                 
                 registers[i] = reg;
             };
@@ -980,8 +1006,8 @@ void FrontDefineEnum(FrontContext* front, CodeDefinition* code)
     
     AssumeToken(parser, TokenKind_OpenBrace);
     
-    PooledArray<String> names = pooled_array_make<String>(context.arena, 16);
-    PooledArray<Location> expression_locations = pooled_array_make<Location>(context.arena, 16);
+    BArray<String> names = BArrayMake<String>(context.arena, 16);
+    BArray<Location> expression_locations = BArrayMake<Location>(context.arena, 16);
     
     while (true)
     {
@@ -1007,8 +1033,8 @@ void FrontDefineEnum(FrontContext* front, CodeDefinition* code)
             }
         }
         
-        array_add(&names, name_token.value);
-        array_add(&expression_locations, expression_location);
+        BArrayAdd(&names, name_token.value);
+        BArrayAdd(&expression_locations, expression_location);
         
         Token comma_token = ConsumeToken(parser);
         if (comma_token.kind == TokenKind_CloseBrace) break;
@@ -1018,7 +1044,7 @@ void FrontDefineEnum(FrontContext* front, CodeDefinition* code)
         }
     }
     
-    EnumDefine(program, def, array_from_pooled_array(context.arena, names), array_from_pooled_array(context.arena, expression_locations));
+    EnumDefine(program, def, ArrayFromBArray(context.arena, names), ArrayFromBArray(context.arena, expression_locations));
 }
 
 void FrontDefineStruct(FrontContext* front, CodeDefinition* code)
@@ -1041,7 +1067,7 @@ void FrontDefineStruct(FrontContext* front, CodeDefinition* code)
     
     U32 member_index = 0;
     
-    PooledArray<ObjectDefinition> members = pooled_array_make<ObjectDefinition>(context.arena, 16);
+    BArray<ObjectDefinition> members = BArrayMake<ObjectDefinition>(context.arena, 16);
     
     while (PeekToken(parser).kind != TokenKind_CloseBrace)
     {
@@ -1056,7 +1082,7 @@ void FrontDefineStruct(FrontContext* front, CodeDefinition* code)
         
         foreach(i, read_result.objects.count) {
             ObjectDefinition member = read_result.objects[i];
-            array_add(&members, member);
+            BArrayAdd(&members, member);
             
             //out = IRAppend(out, ir_from_child(ir_context, ret, value_from_int(member_index), true, member.vtype, member.location));
             //Value dst = out.value;
@@ -1070,28 +1096,28 @@ void FrontDefineStruct(FrontContext* front, CodeDefinition* code)
     
     ConsumeToken(parser);
     
-    VType struct_vtype = TypeFromName(program, def->identifier);
-    Assert(struct_vtype.kind == VKind_Struct);
+    Type* struct_type = TypeFromStruct(program, def);
+    Assert(TypeIsStruct(struct_type));
     
     B32 valid = true;
     
-    for(auto it = pooled_array_make_iterator(&members); it.valid; ++it)
+    foreach_BArray(it, &members)
     {
         ObjectDefinition* def = it.value;
         
-        VType vtype = def->vtype;
-        if (TypeIsNil(vtype)) {
+        Type* type = def->type;
+        if (type == nil_type) {
             valid = false;
             continue;
         }
         
-        if (TypeIsAny(vtype)) {
+        if (type == any_type) {
             ReportErrorFront(def->location, "Any is not a valid member for a struct");
             valid = false;
             continue;
         }
         
-        if (TypeEquals(program, vtype, struct_vtype)) {
+        if (type == struct_type) {
             report_struct_recursive(def->location);
             valid = false;
             continue;
@@ -1100,7 +1126,7 @@ void FrontDefineStruct(FrontContext* front, CodeDefinition* code)
     
     if (!valid) return;
     
-    StructDefine(program, def, array_from_pooled_array(context.arena, members));
+    StructDefine(program, def, ArrayFromBArray(context.arena, members));
 }
 
 void FrontDefineFunction(FrontContext* front, CodeDefinition* code)
@@ -1134,11 +1160,11 @@ void FrontDefineFunction(FrontContext* front, CodeDefinition* code)
             returns = res.objects;
         }
         else {
-            VType vtype = ReadObjectType(ParserFromLocation(front, code->function.returns_location), reporter, program);
+            Type* type = ReadObjectType(ParserFromLocation(front, code->function.returns_location), reporter, program);
             
-            if (!TypeIsNil(vtype)) {
-                returns = array_make<ObjectDefinition>(context.arena, 1);
-                returns[0] = ObjDefMake("return", vtype, code->function.returns_location, false, ValueFromZero(vtype));
+            if (type != nil_type) {
+                returns = ArrayAlloc<ObjectDefinition>(context.arena, 1);
+                returns[0] = ObjDefMake("return", type, code->function.returns_location, false, ValueFromZero(type));
             }
         }
         
@@ -1162,21 +1188,21 @@ void FrontDefineArg(FrontContext* front, CodeDefinition* code)
         return;
     }
     
-    VType vtype = VType_Bool;
+    Type* type = bool_type;
     
     if (LocationIsValid(code->arg.type_location))
     {
-        vtype = ReadObjectType(ParserFromLocation(front, code->arg.type_location), reporter, program);
+        type = ReadObjectType(ParserFromLocation(front, code->arg.type_location), reporter, program);
         
-        if (TypeIsNil(vtype)) return;
+        if (type == nil_type) return;
         
-        if (!VTypeValid(vtype)) {
-            ReportErrorFront(code->arg.type_location, "Invalid type '%S' for an argument", VTypeGetName(program, vtype));
+        if (!TypeIsValid(type)) {
+            ReportErrorFront(code->arg.type_location, "Invalid type '%S' for an argument", type->name);
             return;
         }
     }
     
-    ArgDefine(program, def, vtype);
+    ArgDefine(program, def, type);
 }
 
 void FrontResolveEnum(FrontContext* front, EnumDefinition* def)
@@ -1197,7 +1223,7 @@ void FrontResolveEnum(FrontContext* front, EnumDefinition* def)
     
     IR_Context* ir_context = IrContextAlloc(program, reporter);
     
-    Array<I64> values = array_make<I64>(context.arena, def->names.count);
+    Array<I64> values = ArrayAlloc<I64>(context.arena, def->names.count);
     
     for (U32 i = 0; i < values.count; i++)
     {
@@ -1211,12 +1237,12 @@ void FrontResolveEnum(FrontContext* front, EnumDefinition* def)
             
             IR ir = IrFromValue(context.arena, program, ValueFromInt(values[i]));
             
-            ExpresionContext expr_context = ExpresionContext_from_vtype(VType_Int, 1);
+            ExpresionContext expr_context = ExpresionContext_from_type(int_type, 1);
             IR_Group group = ReadExpression(ir_context, ParserFromLocation(front, expression_location), expr_context);
-            ir = MakeIR(context.arena, program, array_from_pooled_array(context.arena, ir_context->local_registers), group, NULL);
+            ir = MakeIR(context.arena, program, ArrayFromBArray(context.arena, ir_context->local_registers), group, NULL);
             if (!ir.success) return;
             
-            if (ir.value.kind != ValueKind_Literal || !TypeIsAnyInt(ir.value.vtype)) {
+            if (ir.value.kind != ValueKind_Literal || !TypeIsAnyInt(ir.value.type)) {
                 ReportErrorFront(expression_location, "Enum value expects an Int literal");
                 return;
             }
@@ -1244,11 +1270,11 @@ B32 FrontResolveStruct(FrontContext* front, StructDefinition* def)
     }
     
     // Check for dependencies
-    foreach(i, def->vtypes.count)
+    foreach(i, def->types.count)
     {
-        VType vtype = def->vtypes[i];
+        Type* type = def->types[i];
         
-        if (!VTypeIsSizeReady(vtype)) {
+        if (!TypeIsSizeReady(type)) {
             return false;
         }
     }
@@ -1304,14 +1330,14 @@ void FrontResolveFunction(FrontContext* front, FunctionDefinition* def, CodeDefi
         foreach(i, def->returns.count)
         {
             ObjectDefinition obj = def->returns[i];
-            out = IRAppend(out, IRFromDefineObject(ir, RegisterKind_Return, obj.name, obj.vtype, false, obj.location));
-            out = IRAppend(out, IRFromStore(ir, out.value, ValueFromZero(obj.vtype), obj.location));
+            out = IRAppend(out, IRFromDefineObject(ir, RegisterKind_Return, obj.name, obj.type, false, obj.location));
+            out = IRAppend(out, IRFromStore(ir, out.value, ValueFromZero(obj.type), obj.location));
         }
         
         out = IRAppend(out, ReadCode(ir, ParserFromLocation(front, block_location)));
         
         YovScript* script = FrontGetScript(front, code->entire_location.script_id);
-        IR res = MakeIR(front->program->arena, front->program, array_from_pooled_array(context.arena, ir->local_registers), out, script);
+        IR res = MakeIR(front->program->arena, front->program, ArrayFromBArray(context.arena, ir->local_registers), out, script);
         
         // Check for returns
         if (res.success)
@@ -1377,7 +1403,7 @@ void FrontResolveArg(FrontContext* front, CodeDefinition* code)
     String name = StrFormat(context.arena, "-%S", code->identifier);
     String description = {};
     B32 required = false;
-    Value default_value = ValueFromZero(def->vtype);
+    Value default_value = ValueFromZero(def->value_type);
     
     Parser* parser = ParserFromLocation(front, code->arg.body_location);
     
@@ -1417,10 +1443,10 @@ void FrontResolveArg(FrontContext* front, CodeDefinition* code)
         
         ExpresionContext expr_context = ExpresionContext_from_inference(1);
         
-        if (identifier == "name") expr_context = ExpresionContext_from_vtype(VType_String, 1);
-        else if (identifier == "description") expr_context = ExpresionContext_from_vtype(VType_String, 1);
-        else if (identifier == "required") expr_context = ExpresionContext_from_vtype(VType_Bool, 1);
-        else if (identifier == "default") expr_context = ExpresionContext_from_vtype(def->vtype, 1);
+        if (identifier == "name") expr_context = ExpresionContext_from_type(string_type, 1);
+        else if (identifier == "description") expr_context = ExpresionContext_from_type(string_type, 1);
+        else if (identifier == "required") expr_context = ExpresionContext_from_type(bool_type, 1);
+        else if (identifier == "default") expr_context = ExpresionContext_from_type(def->value_type, 1);
         else {
             ReportErrorFront(identifier_token.location, "Unknown property '%S'", identifier);
             return;
@@ -1429,15 +1455,15 @@ void FrontResolveArg(FrontContext* front, CodeDefinition* code)
         IR_Context* ir_context = IrContextAlloc(program, reporter);
         IR_Group group = ReadExpression(ir_context, ParserFromLocation(front, expression_location), expr_context);
         
-        IR ir = MakeIR(context.arena, program, array_from_pooled_array(context.arena, ir_context->local_registers), group, NULL);
+        IR ir = MakeIR(context.arena, program, ArrayFromBArray(context.arena, ir_context->local_registers), group, NULL);
         if (!ir.success) {
             return;
         }
         
         Value value = ir.value;
         
-        if (!TypeEquals(program, value.vtype, expr_context.vtype)) {
-            report_type_missmatch_assign(expression_location, value.vtype, expr_context.vtype);
+        if (value.type != expr_context.type) {
+            report_type_missmatch_assign(expression_location, value.type, expr_context.type);
             return;
         }
         

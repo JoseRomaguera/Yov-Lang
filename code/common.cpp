@@ -218,7 +218,7 @@ LaneGroup* LaneGroupStart(Arena* arena, LaneFn* fn, void* user_data, U32 lane_co
     
     LaneGroup* group = ArenaPushStruct<LaneGroup>(arena);
     group->arena = arena;
-    group->threads = array_make<OS_Thread>(arena, lane_count);
+    group->threads = ArrayAlloc<OS_Thread>(arena, lane_count);
     group->fn = fn;
     group->user_data = user_data;
     
@@ -631,7 +631,7 @@ String StrCopy(Arena* arena, String src) {
 
 Array<String> StrArrayCopy(Arena* arena, Array<String> src)
 {
-    Array<String> dst = array_make<String>(arena, src.count);
+    Array<String> dst = ArrayAlloc<String>(arena, src.count);
     foreach(i, dst.count) {
         dst[i] = StrCopy(arena, src[i]);
     }
@@ -1282,7 +1282,7 @@ B32 CodepointIsText(U32 codepoint) {
 
 Array<String> PathSubdivide(Arena* arena, String path)
 {
-    PooledArray<String> list = pooled_array_make<String>(context.arena, 32);
+    BArray<String> list = BArrayMake<String>(context.arena, 32);
     
     U64 last_element = 0;
     U64 cursor = 0;
@@ -1290,7 +1290,7 @@ Array<String> PathSubdivide(Arena* arena, String path)
     {
         if (path[cursor] == '/') {
             String element = StrSub(path, last_element, cursor - last_element);
-            if (element.size > 0) array_add(&list, element);
+            if (element.size > 0) BArrayAdd(&list, element);
             last_element = cursor + 1;
         }
         
@@ -1298,9 +1298,9 @@ Array<String> PathSubdivide(Arena* arena, String path)
     }
     
     String element = StrSub(path, last_element, cursor - last_element);
-    if (element.size > 0) array_add(&list, element);
+    if (element.size > 0) BArrayAdd(&list, element);
     
-    return array_from_pooled_array(arena, list);
+    return ArrayFromBArray(arena, list);
 }
 
 String PathResolve(Arena* arena, String path)
@@ -1315,11 +1315,11 @@ String PathResolve(Arena* arena, String path)
         
         for (I32 i = (I32)elements.count - 1; i >= 0; --i) {
             if (elements[i] == "..") {
-                array_erase(&elements, i);
+                ArrayErase(&elements, i);
                 remove_prev_element_count++;
             }
             else if (elements[i] == "." || remove_prev_element_count) {
-                array_erase(&elements, i);
+                ArrayErase(&elements, i);
                 if (remove_prev_element_count) remove_prev_element_count--;
             }
         }
@@ -1465,11 +1465,11 @@ String string_from_builder(Arena* arena, StringBuilder* builder)
     return StrJoin(arena, builder->ll);
 }
 
-//- POOLED ARRAY 
+//- BUCKET BUFFER 
 
-inline_fn PooledArrayBlock* _pooled_array_create_block(Arena* arena, U32 block_capacity, U64 stride)
+inline_fn BBufferBlock* BBufferAllocBlock(Arena* arena, U32 block_capacity, U64 stride)
 {
-    PooledArrayBlock* block = (PooledArrayBlock*)ArenaPush(arena, sizeof(PooledArrayBlock) + block_capacity * stride);
+    BBufferBlock* block = (BBufferBlock*)ArenaPush(arena, sizeof(BBufferBlock) + block_capacity * stride);
     block->next = NULL;
     block->capacity = block_capacity;
     block->count = 0;
@@ -1480,64 +1480,64 @@ inline_fn PooledArrayBlock* _pooled_array_create_block(Arena* arena, U32 block_c
     return block;
 }
 
-PooledArrayR pooled_array_make(Arena* arena, U64 stride, U32 block_capacity)
+BBuffer BBufferMake(Arena* arena, U64 stride, U32 block_capacity)
 {
     Assert(block_capacity > 0);
     
-    PooledArrayR array{};
-    array.default_block_capacity = block_capacity;
-    array.root = _pooled_array_create_block(arena, array.default_block_capacity, stride);
-    array.tail = array.root;
-    array.current = array.root;
-    array.arena = arena;
-    array.stride = stride;
-    return array;
+    BBuffer buff{};
+    buff.default_block_capacity = block_capacity;
+    buff.root = BBufferAllocBlock(arena, buff.default_block_capacity, stride);
+    buff.tail = buff.root;
+    buff.current = buff.root;
+    buff.arena = arena;
+    buff.stride = stride;
+    return buff;
 }
 
-void array_reset(PooledArrayR* array)
+void BBufferReset(BBuffer* buffer)
 {
-    array->count = 0u;
+    buffer->count = 0u;
     
-    PooledArrayBlock* block = array->root;
+    BBufferBlock* block = buffer->root;
     while (block) {
         block->count = 0;
         block = block->next;
     }
     
-    array->current = array->root;
+    buffer->current = buffer->root;
 }
 
-void* array_add(PooledArrayR* array)
+void* BBufferAdd(BBuffer* buffer)
 {
-    Assert(array->root != NULL && array->tail != NULL && array->default_block_capacity != 0);
+    Assert(buffer->root != NULL && buffer->tail != NULL && buffer->default_block_capacity != 0);
     
-    PooledArrayBlock* block = array->current;
+    BBufferBlock* block = buffer->current;
     
     while (block->count >= block->capacity)
     {
-        if (block == array->tail)
+        if (block == buffer->tail)
         {
-            PooledArrayBlock* new_block = _pooled_array_create_block(array->arena, array->default_block_capacity, array->stride);
+            BBufferBlock* new_block = BBufferAllocBlock(buffer->arena, buffer->default_block_capacity, buffer->stride);
             block->next = new_block;
             block = new_block;
-            array->tail = new_block;
+            buffer->tail = new_block;
         }
         else block = block->next;
     }
     
-    array->current = block;
+    buffer->current = block;
     
-    U8* ptr = (U8*)(block + 1) + (block->count * array->stride);
+    U8* ptr = (U8*)(block + 1) + (block->count * buffer->stride);
     block->count++;
-    array->count++;
+    buffer->count++;
     return ptr;
 }
 
-void array_erase(PooledArrayR* array, U32 index)
+void BBufferErase(BBuffer* buffer, U32 index)
 {
-    Assert(index < array->count);
+    Assert(index < buffer->count);
     
-    PooledArrayBlock* block = array->root;
+    BBufferBlock* block = buffer->root;
     
     while (index >= block->capacity)
     {
@@ -1546,80 +1546,80 @@ void array_erase(PooledArrayR* array, U32 index)
         Assert(block != NULL);
     }
     
-    array->count--;
+    buffer->count--;
     block->count--;
     
     U8* data = (U8*)(block + 1);
     
     for (U32 i = index; i < block->count; ++i)
     {
-        U64 i0 = (i + 0) * array->stride;
-        U64 i1 = (i + 1) * array->stride;
-        MemoryCopy(data + i0, data + i1, array->stride);
+        U64 i0 = (i + 0) * buffer->stride;
+        U64 i1 = (i + 1) * buffer->stride;
+        MemoryCopy(data + i0, data + i1, buffer->stride);
     }
-    MemoryZero(data + block->count * array->stride, array->stride);
+    MemoryZero(data + block->count * buffer->stride, buffer->stride);
     
-    PooledArrayBlock* next_block = block->next;
+    BBufferBlock* next_block = block->next;
     while (next_block != NULL && next_block->count > 0)
     {
         U8* next_data = (U8*)(next_block + 1);
         
-        U64 last_index = block->count * array->stride;
-        MemoryCopy(data + last_index, next_data, array->stride);
+        U64 last_index = block->count * buffer->stride;
+        MemoryCopy(data + last_index, next_data, buffer->stride);
         
         block->count++;
         next_block->count--;
         
         for (U32 i = 0; i < next_block->count; ++i)
         {
-            U64 i0 = (i + 0) * array->stride;
-            U64 i1 = (i + 1) * array->stride;
-            MemoryCopy(next_data + i0, next_data + i1, array->stride);
+            U64 i0 = (i + 0) * buffer->stride;
+            U64 i1 = (i + 1) * buffer->stride;
+            MemoryCopy(next_data + i0, next_data + i1, buffer->stride);
         }
-        MemoryZero(next_data + next_block->count * array->stride, array->stride);
+        MemoryZero(next_data + next_block->count * buffer->stride, buffer->stride);
         
         block = next_block;
         next_block = next_block->next;
         data = (U8*)(block + 1);
     }
     
-    if (array->count) {
+    if (buffer->count) {
         
         if (block->count == 0)
         {
-            block = array->root;
+            block = buffer->root;
             while (block->next->count != 0) block = block->next;
         }
         
-        array->current = block;
-        Assert(array->current->count > 0);
+        buffer->current = block;
+        Assert(buffer->current->count > 0);
     }
     else {
-        array->current = array->root;
+        buffer->current = buffer->root;
     }
 }
 
-void array_pop(PooledArrayR* array)
+void BBufferPop(BBuffer* buffer)
 {
-    if (array->count >= 1) {
-        array_erase(array, array->count - 1);
+    if (buffer->count >= 1) {
+        BBufferErase(buffer, buffer->count - 1);
     }
 }
 
-U32 array_calculate_index(PooledArrayR* array, void* ptr)
+U32 BBufferCalculateIndex(BBuffer* buffer, void* ptr)
 {
     U32 index_offset = 0;
     
-    PooledArrayBlock* block = array->root;
+    BBufferBlock* block = buffer->root;
     while (block != NULL)
     {
         U8* begin_data = (U8*)(block + 1);
-        U8* end_data = begin_data + (block->count * array->stride);
+        U8* end_data = begin_data + (block->count * buffer->stride);
         
         if (ptr >= begin_data && ptr < end_data)
         {
             U64 byte_index = (U8*)ptr - begin_data;
-            return index_offset + (U32)(byte_index / array->stride);
+            return index_offset + (U32)(byte_index / buffer->stride);
         }
         
         index_offset += block->count;
@@ -1723,7 +1723,7 @@ Reporter* ReporterAlloc(Arena* arena)
 {
     Reporter* reporter = ArenaPushStruct<Reporter>(arena);
     reporter->arena = arena;
-    reporter->reports = pooled_array_make<Report>(arena, 32);
+    reporter->reports = BArrayMake<Report>(arena, 32);
     return reporter;
 }
 
@@ -1741,7 +1741,7 @@ void ReportErrorEx(Reporter* reporter, Location location, U32 line, String path,
     report.path = StrCopy(reporter->arena, path);
     
     MutexLock(&reporter->mutex);
-    array_add(&reporter->reports, report);
+    BArrayAdd(&reporter->reports, report);
     reporter->exit_requested = true;
     if (!reporter->exit_code_is_set) {
         reporter->exit_code = -1;
@@ -1771,10 +1771,10 @@ internal_fn I32 ReportCompare(const void* _0, const void* _1)
 
 void ReporterPrint(Reporter* reporter)
 {
-    Array<Report> reports = array_from_pooled_array(context.arena, reporter->reports);
+    Array<Report> reports = ArrayFromBArray(context.arena, reporter->reports);
     
 #if !DEV_UNSORTED_REPORTS
-    array_sort(reports, ReportCompare);
+    ArraySort(reports, ReportCompare);
 #endif
     
     foreach(i, reports.count) {
@@ -1797,7 +1797,7 @@ void PrintReport(Report report) {
 
 internal_fn Array<ScriptArg> GenerateScriptArgs(Arena* arena, Reporter* reporter, Array<String> raw_args)
 {
-    Array<ScriptArg> args = array_make<ScriptArg>(arena, raw_args.count);
+    Array<ScriptArg> args = ArrayAlloc<ScriptArg>(arena, raw_args.count);
     
     foreach(i, raw_args.count)
     {
@@ -1876,7 +1876,7 @@ Input* InputFromArgs(Arena* arena, Reporter* reporter)
         return input;
     }
     
-    Array<String> script_args_str = array_subarray(args, script_args_start_index, args.count - script_args_start_index);
+    Array<String> script_args_str = ArraySub(args, script_args_start_index, args.count - script_args_start_index);
     input->script_args = GenerateScriptArgs(arena, reporter, script_args_str);
     
     input->main_script_path = PathResolveImport(arena, input->caller_dir, input->main_script_path);

@@ -12,7 +12,7 @@
 
 #define LOG_FLOW_ENABLED   DEV && 0
 #define LOG_TYPE_ENABLED   DEV && 0
-#define LOG_IR_ENABLED     DEV && 0
+#define LOG_IR_ENABLED     DEV && 1
 #define LOG_MEMORY_ENABLED DEV && 0
 #define LOG_TRACE_ENABLED  DEV && 0
 
@@ -591,34 +591,33 @@ String string_from_builder(Arena* arena, StringBuilder* builder);
 
 #define appendf(builder, str, ...) appendf_ex(builder, str, __VA_ARGS__)
 
-//- POOLED ARRAY
+//- BUCKET BUFFER
 
-struct PooledArrayBlock
+struct BBufferBlock
 {
-    PooledArrayBlock* next;
+    BBufferBlock* next;
     U32 capacity;
     U32 count;
 };
 
-struct PooledArrayR
+struct BBuffer
 {
     Arena* arena;
-    PooledArrayBlock* root;
-    PooledArrayBlock* tail;
-    PooledArrayBlock* current;
+    BBufferBlock* root;
+    BBufferBlock* tail;
+    BBufferBlock* current;
     U64 stride;
     
     U32 default_block_capacity;
     U32 count;
 };
 
-PooledArrayR pooled_array_make(Arena* arena, U64 stride, U32 block_capacity);
-void array_reset(PooledArrayR* array);
-void* array_add(PooledArrayR* array);
-void array_erase(PooledArrayR* array, U32 index);
-void array_pop(PooledArrayR* array);
-U32 array_calculate_index(PooledArrayR* array, void* ptr);
-
+BBuffer BBufferMake(Arena* arena, U64 stride, U32 block_capacity);
+void BBufferReset(BBuffer* buffer);
+void* BBufferAdd(BBuffer* buffer);
+void BBufferErase(BBuffer* buffer, U32 index);
+void BBufferPop(BBuffer* buffer);
+U32 BBufferCalculateIndex(BBuffer* buffer, void* ptr);
 
 #include "templates.h"
 
@@ -756,7 +755,7 @@ void ShutdownThread();
 struct Reporter {
     Arena* arena;
     Mutex mutex;
-    PooledArray<Report> reports;
+    BArray<Report> reports;
     
     B8 exit_requested;
     I64 exit_code;

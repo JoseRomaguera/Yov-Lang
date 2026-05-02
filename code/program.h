@@ -47,30 +47,32 @@ enum VKind {
     VKind_Primitive,
     VKind_Struct,
     VKind_Enum,
-    VKind_Array,
     VKind_Reference,
+    VKind_Array,
+    VKind_List,
 };
 
 struct StructDefinition;
 struct EnumDefinition;
 struct FunctionDefinition;
 
-struct VType {
-    String base_name;
+struct Type {
+    String name;
     VKind kind;
-    U32 array_dimensions;
+    
     union {
+        PrimitiveType primitive;
         StructDefinition* _struct;
         EnumDefinition* _enum;
-        PrimitiveType primitive_type;
+        Type* reference_base;
+        Type* element_type;
     };
-    I32 base_index;
 };
 
 struct Object {
     U32 ID;
     I32 ref_count;
-    VType vtype;
+    Type* type;
     Object* prev;
     Object* next;
 };
@@ -92,51 +94,30 @@ struct ObjectData_String {
     U64 size;
 };
 
-inline_fn VType MakeSpecialType(const char* name, VKind kind, I32 base_index) {
-    VType vtype = {};
-    vtype.base_name = name;
-    vtype.kind = kind;
-    vtype.base_index = base_index;
-    return vtype;
-}
+#define Type_Type TypeFromName(program, "Type")
+#define Type_Result TypeFromName(program, "Result")
+#define Type_CopyMode TypeFromName(program, "CopyMode")
+#define Type_YovInfo TypeFromName(program, "YovInfo")
+#define Type_Context TypeFromName(program, "Context")
+#define Type_CallsContext TypeFromName(program, "CallsContext")
+#define Type_OS TypeFromName(program, "OS")
+#define Type_CallOutput TypeFromName(program, "CallOutput")
+#define Type_FileInfo TypeFromName(program, "FileInfo")
+#define Type_YovParseOutput TypeFromName(program, "YovParseOutput")
+#define Type_ObjectDefinition TypeFromName(program, "ObjectDefinition")
+#define Type_FunctionDefinition TypeFromName(program, "FunctionDefinition")
+#define Type_StructDefinition TypeFromName(program, "StructDefinition")
+#define Type_EnumDefinition TypeFromName(program, "EnumDefinition")
 
-inline_fn VType MakePrimitive(const char* name, PrimitiveType type, I32 base_index = -1) {
-    VType vtype = {};
-    vtype.base_name = name;
-    vtype.kind = VKind_Primitive;
-    vtype.primitive_type = type;
-    vtype.base_index = base_index;
-    return vtype;
-}
+global_var Type* nil_type;
+global_var Type* void_type;
+global_var Type* any_type;
 
-#define VType_Nil MakeSpecialType("Nil", VKind_Nil, 0)
-#define VType_Void MakeSpecialType("void", VKind_Void, 0)
-#define VType_Any MakeSpecialType("Any", VKind_Any, 1)
-
-#define VType_Int  MakePrimitive("Int", PrimitiveType_Int, 2)
-#define VType_UInt MakePrimitive("UInt", PrimitiveType_UInt, 3)
-#define VType_Bool MakePrimitive("Bool", PrimitiveType_Bool, 4)
-#define VType_Float MakePrimitive("Float", PrimitiveType_Float, 5)
-#define VType_String MakePrimitive("String", PrimitiveType_String, 6)
-
-#define VType_Type TypeFromName(program, "Type")
-#define VType_Result TypeFromName(program, "Result")
-#define VType_CopyMode TypeFromName(program, "CopyMode")
-#define VType_YovInfo TypeFromName(program, "YovInfo")
-#define VType_Context TypeFromName(program, "Context")
-#define VType_CallsContext TypeFromName(program, "CallsContext")
-#define VType_OS TypeFromName(program, "OS")
-#define VType_CallOutput TypeFromName(program, "CallOutput")
-#define VType_FileInfo TypeFromName(program, "FileInfo")
-#define VType_YovParseOutput TypeFromName(program, "YovParseOutput")
-#define VType_ObjectDefinition TypeFromName(program, "ObjectDefinition")
-#define VType_FunctionDefinition TypeFromName(program, "FunctionDefinition")
-#define VType_StructDefinition TypeFromName(program, "StructDefinition")
-#define VType_EnumDefinition TypeFromName(program, "EnumDefinition")
-
-#define VType_IntArray vtype_from_dimension(VType_Int, 1)
-#define VType_BoolArray vtype_from_dimension(VType_Bool, 1)
-#define VType_StringArray vtype_from_dimension(VType_String, 1)
+global_var Type* int_type;
+global_var Type* uint_type;
+global_var Type* bool_type;
+global_var Type* float_type;
+global_var Type* string_type;
 
 global_var Object* nil_obj;
 global_var Object* null_obj;
@@ -153,7 +134,7 @@ enum ValueKind {
 };
 
 struct Value {
-    VType vtype;
+    Type* type;
     ValueKind kind;
     union {
         struct {
@@ -166,10 +147,9 @@ struct Value {
         B32 literal_bool;
         F64 literal_float;
         String literal_string;
-        VType literal_type;
+        Type* literal_type;
         struct {
             Array<Value> values;
-            B8 is_empty;
         } array;
         
         Array<Value> string_composition;
@@ -179,7 +159,7 @@ struct Value {
 
 struct Reference {
     Object* parent;
-    VType vtype;
+    Type* type;
     void* address;
 };
 
@@ -250,7 +230,7 @@ enum RegisterKind {
 struct Register {
     RegisterKind kind;
     B32 is_constant;
-    VType vtype;
+    Type* type;
 };
 
 inline_fn B32 RegisterIsValid(Register reg) { return reg.kind != RegisterKind_None; }
@@ -267,19 +247,19 @@ struct IR {
 
 struct Global {
     String identifier;
-    VType vtype;
+    Type* type;
     B32 is_constant;
 };
 
 struct ObjectDefinition {
-    VType vtype;
+    Type* type;
     B32 is_constant;
     String name;
     Value value;
     Location location;
 };
 
-ObjectDefinition ObjDefMake(String name, VType vtype, Location location, B32 is_constant, Value value);
+ObjectDefinition ObjDefMake(String name, Type* type, Location location, B32 is_constant, Value value);
 ObjectDefinition ObjectDefinitionCopy(Arena* arena, ObjectDefinition src);
 Array<ObjectDefinition> ObjectDefinitionArrayCopy(Arena* arena, Array<ObjectDefinition> src);
 
@@ -287,7 +267,7 @@ struct VariableTypeChild {
     B32 is_member;
     String name;
     I32 index;
-    VType vtype;
+    Type* type;
 };
 
 enum DefinitionStage {
@@ -336,14 +316,14 @@ struct FunctionDefinition : DefinitionHeader {
 struct ArgDefinition : DefinitionHeader {
     String name;
     String description;
-    VType vtype;
+    Type* value_type;
     B32 required;
     Value default_value;
 };
 
 struct StructDefinition : DefinitionHeader {
     Array<String> names;
-    Array<VType> vtypes;
+    Array<Type*> types;
     Array<U32> offsets;
     B32 needs_internal_release;
     U32 size;
@@ -372,7 +352,9 @@ struct Program
     String caller_dir;
     String script_dir;
     
-    Array<VType> vtypes;
+    Mutex types_mutex;
+    BArray<Type> types;
+    
     Array<Definition> definitions;
     U32 function_count;
     U32 struct_count;
@@ -384,48 +366,38 @@ struct Program
     IR args_initialize_ir;
 };
 
-void ProgramInitializeTypesTable(Program* program);
+B32 TypeIsValid(Type* type);
+Type* TypeGetNext(Program* program, Type* type);
+Type* TypeGetBase(Program* program, Type* type);
 
-B32 TypeEquals(Program* program, VType v0, VType v1);
+B32 TypeIsReady(Type* type);
+B32 TypeIsSizeReady(Type* type);
+U32 TypeGetSize(Type* type);
+B32 VTypeNeedsInternalRelease(Program* program, Type* type);
 
-B32 VTypeValid(VType vtype);
-VType VTypeNext(Program* program, VType vtype);
+Type* TypeChooseMostSignificantPrimitive(Type* t0, Type* t1);
 
-B32 VTypeIsReady(VType vtype);
-B32 VTypeIsSizeReady(VType vtype);
-U32 VTypeGetSize(VType vtype);
-B32 VTypeNeedsInternalRelease(Program* program, VType vtype);
-String VTypeGetName(Program* program, VType vtype);
+Type* TypeFromName(Program* program, String name);
+Type* TypeFromArray(Program* program, Type* element, U32 dimension);
+Type* TypeFromList(Program* program, Type* element, U32 dimension);
+Type* TypeFromReference(Program* program, Type* base_type);
+Type* TypeFromPrimitive(PrimitiveType primitive);
+Type* TypeFromStruct(Program* program, StructDefinition* def);
+Type* TypeFromEnum(Program* program, EnumDefinition* def);
+B32 TypeIsEnum(Type* type);
+B32 TypeIsArray(Type* type);
+B32 TypeIsList(Type* type);
+B32 TypeIsStruct(Type* type);
+B32 TypeIsReference(Type* type);
+B32 TypeIsAnyInt(Type* type);
 
-VType TypeChooseMostSignificantPrimitive(VType t0, VType t1);
+Type* TypeGetChildAt(Program* program, Type* type, I32 index, B32 is_member);
+VariableTypeChild TypeGetChild(Program* program, Type* type, String name);
+VariableTypeChild TypeGetMember(Type* type, String member);
+VariableTypeChild VTypeGetProperty(Program* program, Type* type, String property);
+Array<VariableTypeChild> VTypeGetProperties(Program* program, Type* type);
 
-VType TypeFromIndex(Program* program, U32 index);
-VType TypeFromName(Program* program, String name);
-VType vtype_from_dimension(VType element, U32 dimension);
-VType vtype_from_reference(VType base_type);
-VType TypeFromPrimitive(Program* program, PrimitiveType ptype);
-B32 TypeIsEnum(VType vtype);
-B32 TypeIsArray(VType vtype);
-B32 TypeIsStruct(VType vtype);
-B32 TypeIsReference(VType vtype);
-B32 TypeIsString(VType type);
-
-B32 TypeIsInt(VType type);
-B32 TypeIsUInt(VType type);
-B32 TypeIsAnyInt(VType type);
-B32 TypeIsBool(VType type);
-B32 TypeIsFloat(VType type);
-
-B32 TypeIsAny(VType type);
-B32 TypeIsVoid(VType type);
-B32 TypeIsNil(VType type);
-VType TypeGetChildAt(Program* program, VType vtype, I32 index, B32 is_member);
-VariableTypeChild TypeGetChild(Program* program, VType vtype, String name);
-VariableTypeChild vtype_get_member(VType vtype, String member);
-VariableTypeChild VTypeGetProperty(Program* program, VType vtype, String property);
-Array<VariableTypeChild> VTypeGetProperties(Program* program, VType vtype);
-
-Array<VType> vtypes_from_definitions(Arena* arena, Array<ObjectDefinition> defs);
+Array<Type*> TypesFromDefinitions(Arena* arena, Array<ObjectDefinition> defs);
 
 B32 ValueIsCompiletime(Value value);
 I32 ValueGetRegister(Value value);
@@ -438,23 +410,22 @@ Array<Value> ValueArrayCopy(Arena* arena, Array<Value> src);
 
 Value ValueNone();
 Value ValueNull();
-Value ValueFromRegister(I32 index, VType vtype, B32 is_lvalue);
-Value ValueFromReference(Value value);
+Value ValueFromRegister(I32 index, Type* type, B32 is_lvalue);
+Value ValueFromReference(Program* program, Value value);
 Value ValueFromDereference(Program* program, Value value);
 Value ValueFromInt(I64 value);
 Value ValueFromUInt(U64 value);
 Value ValueFromBool(B32 value);
 Value ValueFromFloat(F64 value);
-Value ValueFromEnum(VType vtype, I64 value);
+Value ValueFromEnum(Type* type, I64 value);
 Value ValueFromString(Arena* arena, String value);
 Value ValueFromStringArray(Arena* arena, Program* program, Array<Value> values);
-Value ValueFromType(Program* program, VType type);
-Value ValueFromArray(Arena* arena, VType array_vtype, Array<Value> elements);
-Value ValueFromEmptyArray(Arena* arena, VType base_vtype, Array<Value> dimensions);
-Value ValueFromZero(VType vtype);
+Value ValueFromType(Program* program, Type* type);
+Value ValueFromArray(Arena* arena, Type* array_type, Array<Value> elements);
+Value ValueFromZero(Type* type);
 Value ValueFromGlobal(Program* program, U32 global_index);
-Value ValueFromStringExpression(Arena* arena, String str, VType vtype);
-Value value_from_return(Arena* arena, Array<Value> values);
+Value ValueFromStringExpression(Arena* arena, String str, Type* type);
+Value ValueFromReturn(Arena* arena, Array<Value> values);
 
 Array<Value> ValuesFromReturn(Arena* arena, Value value, B32 empty_on_void);
 
@@ -462,7 +433,7 @@ String StrFromValue(Arena* arena, Program* program, Value value, B32 raw = false
 
 String StringFromCompiletime(Arena* arena, Program* program, Value value);
 B32 B32FromCompiletime(Value value);
-VType TypeFromCompiletime(Program* program, Value value);
+Type* TypeFromCompiletime(Program* program, Value value);
 B32 CompiletimeEquals(Program* program, Value v0, Value v1);
 
 void DefinitionIdentify(Program* program, U32 index, DefinitionType type, String identifier, Location location);
@@ -477,7 +448,7 @@ void FunctionDefine(Program* program, FunctionDefinition* def, Array<ObjectDefin
 void FunctionResolveIntrinsic(Program* program, FunctionDefinition* def, IntrinsicFunction* fn);
 void FunctionResolve(Program* program, FunctionDefinition* def, IR ir);
 
-void ArgDefine(Program* program, ArgDefinition* def, VType vtype);
+void ArgDefine(Program* program, ArgDefinition* def, Type* type);
 void ArgResolve(Program* program, ArgDefinition* def, String name, String description, B32 required, Value default_value);
 
 Definition* DefinitionFromIdentifier(Program* program, String identifier);
@@ -492,7 +463,7 @@ FunctionDefinition* FunctionFromIndex(Program* program, U32 index);
 ArgDefinition* ArgFromIndex(Program* program, U32 index);
 ArgDefinition* ArgFromName(Program* program, String name);
 
-void GlobalDefine(Program* program, U32 index, VType vtype, B32 is_constant);
+void GlobalDefine(Program* program, U32 index, Type* type, B32 is_constant);
 I32 GlobalIndexFromIdentifier(Program* program, String identifier);
 Global* GlobalFromIdentifier(Program* program, String identifier);
 Global* GlobalFromIndex(Program* program, U32 index);

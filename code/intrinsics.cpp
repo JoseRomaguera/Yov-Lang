@@ -7,16 +7,16 @@ void Intrinsic_Typeof(Runtime* runtime, Array<Reference> params, Array<Reference
     Program* program = runtime->program;
     
     Reference ref = params[0];
-    VType vtype = ref.vtype;
+    Type* type = ref.type;
     
-    if (TypeIsNil(vtype)) {
+    if (type == nil_type) {
         InvalidCodepath();
-        vtype = VType_Void;
+        type = void_type;
     }
     
-    Reference type = object_alloc(runtime, VType_Type);
-    ref_assign_Type(runtime, type, vtype);
-    returns[0] = type;
+    Reference res = object_alloc(runtime, Type_Type);
+    ref_assign_Type(runtime, res, type);
+    returns[0] = res;
 }
 
 void Intrinsic_Print(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
@@ -143,7 +143,7 @@ void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Ref
     if (!res.failed)
     {
         Array<String> values = StrSplit(context.arena, value, ";");
-        array = AllocArray(runtime, VType_String, values.count);
+        array = AllocArray(runtime, string_type, values.count);
         
         foreach(i, values.count) {
             Reference element = ref_get_member(runtime, array, i);
@@ -153,7 +153,7 @@ void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Ref
         }
     }
     else {
-        array = AllocArray(runtime, VType_String, 0);
+        array = AllocArray(runtime, string_type, 0);
     }
     
     returns[0] = array;
@@ -162,8 +162,8 @@ void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Ref
 
 void Intrinsic_ArrayAppendBack(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Assert(TypeIsReference(params[0].vtype) && TypeIsArray(VTypeNext(runtime->program, params[0].vtype)));
-    Assert(TypeIsArray(params[1].vtype));
+    Assert(TypeIsReference(params[0].type) && TypeIsArray(TypeGetNext(runtime->program, params[0].type)));
+    Assert(TypeIsArray(params[1].type));
     
     Reference dst = RefDereference(runtime, params[0]);
     Reference src = params[1];
@@ -184,10 +184,10 @@ void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params,
 {
     Program* program = runtime->program;
     
-    VType array_type = VTypeNext(program, params[0].vtype);
-    VType element_type = VTypeNext(program, array_type);
-    Assert(TypeIsReference(params[0].vtype) && TypeIsArray(array_type));
-    Assert(TypeEquals(program, element_type, params[1].vtype));
+    Type* array_type = TypeGetNext(program, params[0].type);
+    Type* element_type = TypeGetNext(program, array_type);
+    Assert(TypeIsReference(params[0].type) && TypeIsArray(array_type));
+    Assert(element_type == params[1].type);
     
     Reference dst = RefDereference(runtime, params[0]);
     Reference src = params[1];
@@ -204,13 +204,13 @@ void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Refe
 {
     Program* program = runtime->program;
     
-    if (!TypeIsReference(params[0].vtype) || !TypeIsArray(VTypeNext(program, params[0].vtype))) {
+    if (!TypeIsReference(params[0].type) || !TypeIsArray(TypeGetNext(program, params[0].type))) {
         ReportErrorRT("First parameter is not an array reference");
         return;
     }
     
-    VType array_type = VTypeNext(program, params[0].vtype);
-    VType element_type = VTypeNext(program, array_type);
+    Type* array_type = TypeGetNext(program, params[0].type);
+    Type* element_type = TypeGetNext(program, array_type);
     
     Reference dst = RefDereference(runtime, params[0]);
     U64 index = RefGetUInt(params[1]);
@@ -222,7 +222,7 @@ void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Refe
         return;
     }
     
-    U32 element_size = VTypeGetSize(element_type);
+    U32 element_size = TypeGetSize(element_type);
     
     ref_release_internal(runtime, ref_get_member(runtime, dst, (U32)index), true);
     
@@ -239,13 +239,13 @@ void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, A
 {
     Program* program = runtime->program;
     
-    if (!TypeIsReference(params[0].vtype) || !TypeIsArray(VTypeNext(program, params[0].vtype))) {
+    if (!TypeIsReference(params[0].type) || !TypeIsArray(TypeGetNext(program, params[0].type))) {
         ReportErrorRT("First parameter is not an array reference");
         return;
     }
     
-    VType array_type = VTypeNext(program, params[0].vtype);
-    VType element_type = VTypeNext(program, array_type);
+    Type* array_type = TypeGetNext(program, params[0].type);
+    Type* element_type = TypeGetNext(program, array_type);
     
     Reference dst = RefDereference(runtime, params[0]);
     U64 index = RefGetUInt(params[1]);
@@ -257,7 +257,7 @@ void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, A
         return;
     }
     
-    U32 element_size = VTypeGetSize(element_type);
+    U32 element_size = TypeGetSize(element_type);
     
     ref_release_internal(runtime, ref_get_member(runtime, dst, (U32)index), true);
     
@@ -270,6 +270,27 @@ void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, A
     }
     
     dst_array->count--;
+}
+
+void Intrinsic_ArrayMakeEmpty(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    Program* program = runtime->program;
+    
+    Type* base_type = RefGetType(runtime, params[0]);
+    Reference arr_ref = params[1];
+    ObjectData_Array* arr = RefGetArray(arr_ref);
+    
+    Array<I64> dimensions = ArrayAlloc<I64>(context.arena, arr->count);
+    foreach(i, dimensions.count) {
+        dimensions[i] = RefGetUInt(ref_get_member(runtime, arr_ref, i));
+    }
+    
+    returns[0] = AllocArrayMultidimensional(runtime, base_type, dimensions);
+}
+
+void Intrinsic_ListMakeEmpty(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    InvalidCodepath();
 }
 
 //- CONSOLE 
@@ -303,7 +324,7 @@ void Intrinsic_ConsoleRead(Runtime* runtime, Array<Reference> params, Array<Refe
 internal_fn void ReturnFromExternalCall(Runtime* runtime, CallOutput res, Array<Reference> returns)
 {
     Program* program = runtime->program;
-    Reference call_result = object_alloc(runtime, VType_CallOutput);
+    Reference call_result = object_alloc(runtime, Type_CallOutput);
     ref_assign_CallOutput(runtime, call_result, res);
     
     returns[0] = call_result;
@@ -394,7 +415,7 @@ void Intrinsic_StrSplit(Runtime* runtime, Array<Reference> params, Array<Referen
     
     Array<String> result = StrSplit(context.arena, str, separator);
     
-    Reference array = AllocArray(runtime, VType_String, result.count);
+    Reference array = AllocArray(runtime, string_type, result.count);
     foreach(i, result.count) {
         ref_set_member(runtime, array, i, AllocString(runtime, result[i]));
     }
@@ -443,7 +464,7 @@ internal_fn U64 RuntimeRandom(Runtime* runtime)
 {
     Program* program = runtime->program;
     
-    Reference seed_ref = ref_get_member(runtime, runtime->common_globals.context, vtype_get_member(VType_Context, "seed").index);
+    Reference seed_ref = ref_get_member(runtime, runtime->common_globals.context, TypeGetMember(Type_Context, "seed").index);
     U64 seed = RefGetUInt(seed_ref);
     
     seed += 0x9E3779B97F4A7C15;
@@ -580,7 +601,7 @@ void Intrinsic_YovParse(Runtime* runtime, Array<Reference> params, Array<Referen
     Yov* temp_yov = yov;
     yov = last_yov;
     
-    Reference out = object_alloc(runtime, VType_YovParseOutput);
+    Reference out = object_alloc(runtime, Type_YovParseOutput);
     ref_assign_YovParseOutput(runtime, out, temp_yov);
     
     yov = temp_yov;
@@ -707,7 +728,7 @@ void Intrinsic_FileGetInfo(Runtime* runtime, Array<Reference> params, Array<Refe
     FileInfo info;
     Result res = OsFileGetInfo(context.arena, path, &info);
     
-    Reference ret = object_alloc(runtime, VType_FileInfo);
+    Reference ret = object_alloc(runtime, Type_FileInfo);
     if (!res.failed) ref_assign_FileInfo(runtime, ret, info);
     
     returns[0] = ret;
@@ -722,7 +743,7 @@ void Intrinsic_DirGetInfo(Runtime* runtime, Array<Reference> params, Array<Refer
     Array<FileInfo> infos;
     Result res = OsDirGetFilesInfo(context.arena, path, &infos);
     
-    Reference ret = AllocArray(runtime, VType_FileInfo, infos.count);
+    Reference ret = AllocArray(runtime, Type_FileInfo, infos.count);
     if (!res.failed) {
         foreach(i, infos.count) {
             Reference element = ref_get_member(runtime, ret, i);
@@ -800,7 +821,8 @@ IntrinsicRegistry intrinsics[] = {
     // TODO(Jose): { Intrinsic_ArrayAppendElementFront, "ArrayAppendElementFront" },
     { Intrinsic_ArrayRemove, "ArrayRemove" },
     { Intrinsic_ArrayUnorderedRemove, "ArrayUnorderedRemove" },
-    
+    { Intrinsic_ArrayMakeEmpty, "ArrayMakeEmpty" },
+    { Intrinsic_ListMakeEmpty, "ListMakeEmpty" },
     
     { Intrinsic_ConsoleConfigure, "ConsoleConfigure" },
     { Intrinsic_ConsoleWrite, "ConsoleWrite" },
