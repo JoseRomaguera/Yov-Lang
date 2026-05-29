@@ -170,7 +170,7 @@ ObjectDefinition :: struct {
 }
 
 FunctionDefinition :: struct {
-    identifier: String;
+    name: String;
     parameters: Array[ObjectDefinition];
     returns: Array[ObjectDefinition];
 }

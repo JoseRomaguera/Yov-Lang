@@ -7,7 +7,7 @@
 
 // DEBUG
 
-#define DEV_ASAN DEV && 0
+#define DEV_ASAN DEV && 1
 #define DEV_UNSORTED_REPORTS DEV && 0
 
 #define LOG_FLOW_ENABLED   DEV && 0
@@ -140,13 +140,13 @@ typedef volatile U32 Mutex;
 
 #if COMPILER_MSVC
 #include <intrin.h>
-#define CompilerReadBarrier() _ReadBarrier()
-#define CompilerWriteBarrier() do { _WriteBarrier(); _mm_sfence(); } while(0)
+#define MemoryBarrierAcquire()  do { long dummy = 0; _InterlockedOr(&dummy, 0); } while(0)
+#define MemoryBarrierRelease()  do { long dummy = 0; _InterlockedOr(&dummy, 0); } while(0)
 #elif (COMPILER_CLANG || COMPILER_GCC)
-#define CompilerReadBarrier() __sync_synchronize()
-#define CompilerWriteBarrier() __sync_synchronize()
-#else
+#define MemoryBarrierAcquire() __atomic_thread_fence(__ATOMIC_ACQUIRE)
+#define MemoryBarrierRelease() __atomic_thread_fence(__ATOMIC_RELEASE)
 #endif
+
 
 #if OS_WINDOWS
 #pragma section(".rdonly", read)
@@ -470,7 +470,8 @@ struct LaneGroup {
     LaneFn* fn;
     void* user_data;
     
-    volatile U32 barrier_counter; // Used on "lane_barrier()"
+    volatile U32 threads_arrived;
+    volatile I32 global_sense;
     
     union {
         void* ptr;
@@ -486,12 +487,15 @@ struct LaneContext {
     LaneGroup* group;
     U32 id;
     U32 count;
+    I32 local_sense;
 };
 
 LaneGroup* LaneGroupStart(Arena* arena, LaneFn* fn, void* user_data, U32 lane_count = U32_MAX);
 void LaneGroupWait(LaneGroup* group);
 
-void LaneBarrier(LaneContext* lane);
+#define LaneBarrier(_lane) LaneBarrierEx(lane, __COUNTER__)
+
+void LaneBarrierEx(LaneContext* lane, U64 hash);
 B32 LaneNarrow(LaneContext* lane, U32 index = 0);
 
 void LaneSyncPtr(LaneContext* lane, void** ptr, U32 index);

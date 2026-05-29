@@ -200,10 +200,14 @@ struct IR_Group {
 };
 
 struct IR_Object {
-    String identifier;
+    String name;
     Type* type;
-    U32 assignment_count;
     I32 register_index;
+    I32 scope;
+};
+
+struct IR_Definition {
+    Definition* definition;
     I32 scope;
 };
 
@@ -220,6 +224,7 @@ struct IR_Context {
     
     BArray<Register> local_registers;
     BArray<IR_Object> objects;
+    BArray<IR_Definition> definitions;
     BArray<IR_LoopingScope> looping_scopes;
     I32 scope;
 };
@@ -310,19 +315,23 @@ enum SymbolKind {
 
 struct Symbol {
     SymbolKind kind;
-    String identifier;
+    String name;
     
     IR_Object* object;
     FunctionDefinition* function;
     Type* type;
 };
 
-IR_Object* ir_find_object(IR_Context* ir, String identifier, B32 parent_scopes);
+IR_Object* IRFindObject(IR_Context* ir, String name, B32 parent_scopes);
 IR_Object* ir_find_object_from_value(IR_Context* ir, Value value);
 IR_Object* ir_find_object_from_register(IR_Context* ir, I32 register_index);
-IR_Object* ir_define_object(IR_Context* ir, String identifier, Type* type, I32 scope, I32 register_index);
+IR_Object* IRDefineObject(IR_Context* ir, String name, Type* type, I32 scope, I32 register_index);
 IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, Type* type);
-Symbol ir_find_symbol(IR_Context* ir, String identifier);
+
+IR_Definition* IRAddDefinition(IR_Context* ir, Definition* definition, I32 scope);
+IR_Definition* IRFindDefinition(IR_Context* ir, String name, B32 parent_scopes);
+
+Symbol IRFindSymbol(IR_Context* ir, String name);
 
 IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, Location location);
 void ir_looping_scope_pop(IR_Context* ir);
@@ -339,9 +348,8 @@ Register IRRegisterFromValue(IR_Context* ir, Value value);
 
 struct CodeDefinition {
     DefinitionType type;
-    String identifier;
-    U32 index;
-    
+    String name;
+    Definition* definition;
     Location entire_location;
     union {
         struct {
@@ -363,7 +371,18 @@ struct CodeDefinition {
     };
 };
 
+Definition* AddDefinition(Program* program, Reporter* reporter, DefinitionType type, String name, B32 is_global, Location location);
 B32 ReadCodeDefinition(CodeDefinition* dst, Parser* parser, Reporter* reporter, SentenceKind op);
+
+B32 ReadEnumDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+B32 ReadStructDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+B32 ReadFunctionDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+B32 ReadArgDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+
+B32 ResolveEnumDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+B32 ResolveStructDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+B32 ResolveFunctionDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+B32 ResolveArgDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
 
 struct FrontContext {
     Arena* arena;
@@ -374,20 +393,12 @@ struct FrontContext {
     
     Mutex mutex;
     BArray<YovScript> scripts;
-    BArray<CodeDefinition> definition_list;
+    BArray<CodeDefinition> definitions;
     BArray<Location> global_location_list;
     
-    Array<CodeDefinition> definitions;
     BArray<Global> global_list;
     IR_Group global_initialize_group;
     U32 number_of_registers_for_global_initialize;
-    
-    U32 function_count;
-    U32 struct_count;
-    U32 enum_count;
-    U32 arg_count;
-    
-    volatile U32 index_counter;
     
     volatile U32 resolve_count;
     U32 last_resolve_count;
@@ -404,21 +415,10 @@ Parser* ParserFromLocation(FrontContext* front, Location location);
 void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGroup* lane_group);
 void FrontReadAllScripts(LaneContext* lane, FrontContext* front)
 ;
-void FrontIdentifyDefinitions(LaneContext* lane, FrontContext* front);
 void FrontDefineDefinitions(LaneContext* lane, FrontContext* front);
 void FrontDefineGlobals(LaneContext* lane, FrontContext* front);
 void FrontResolveGlobals(LaneContext* lane, FrontContext* front);
 void FrontResolveDefinitions(LaneContext* lane, FrontContext* front);
-
-void FrontDefineEnum(FrontContext* front, CodeDefinition* code);
-void FrontDefineStruct(FrontContext* front, CodeDefinition* code);
-void FrontDefineFunction(FrontContext* front, CodeDefinition* code);
-void FrontDefineArg(FrontContext* front, CodeDefinition* code);
-
-void FrontResolveEnum(FrontContext* front, EnumDefinition* def);
-B32  FrontResolveStruct(FrontContext* front, StructDefinition* def);
-void FrontResolveFunction(FrontContext* front, FunctionDefinition* def, CodeDefinition* code);
-void FrontResolveArg(FrontContext* front, CodeDefinition* code);
 
 //- REPORTS 
 

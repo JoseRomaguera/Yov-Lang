@@ -875,7 +875,7 @@ IntrinsicRegistry intrinsics[] = {
     
 };
 
-IntrinsicFunction* IntrinsicFromIdentifier(String identifier)
+IntrinsicFunction* IntrinsicFromName(String identifier)
 {
     foreach(i, countof(intrinsics)) {
         if (intrinsics[i].identifier == identifier) return intrinsics[i].fn;

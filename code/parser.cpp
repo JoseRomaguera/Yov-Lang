@@ -1498,21 +1498,31 @@ IR_Group ReadCode(IR_Context* ir, Parser* parser)
             // Embedded Definitions
             if (kind == SentenceKind_FunctionDef || kind == SentenceKind_StructDef || kind == SentenceKind_EnumDef)
             {
-#if 0
-                CodeDefinition def;
-                if (!ReadCodeDefinition(&def, parser, reporter, kind)) {
+                CodeDefinition code;
+                if (!ReadCodeDefinition(&code, parser, reporter, kind)) {
                     return IRFailed();
                 }
                 
-                DefinitionIdentify(program, code->index, code->type, code->identifier, code->entire_location);
-                
-                FrontDefineFunction(front, code);
-                
-                FrontResolveFunction(front, def, code);
-                
-                out = IRAppend(out, IRFromNone());
-#endif
-                return IRFailed();
+                if (code.type == DefinitionType_Function)
+                {
+                    String identifier = code.name;
+                    code.definition = AddDefinition(program, reporter, code.type, identifier, false, code.entire_location);
+                    
+                    if (!ReadFunctionDefinition(parser, program, reporter, &code)) {
+                        return IRFailed();
+                    }
+                    
+                    if (!ResolveFunctionDefinition(parser, program, reporter, &code)) {
+                        return IRFailed();
+                    }
+                    
+                    IRAddDefinition(ir, code.definition, ir->scope);
+                }
+                else
+                {
+                    ReportErrorFront(first_token.location, "Unsupported embedded definition");
+                    return IRFailed();
+                }
             }
             // Sentence
             else
@@ -1932,11 +1942,22 @@ IR_Group ReadFunctionCall(IR_Context* ir, ExpresionContext expr_context, Parser*
     else
     {
         AssumeToken(parser, TokenKind_Identifier);
-        FunctionDefinition* fn = FunctionFromIdentifier(program, identifier);
-        if (fn == NULL) {
+        
+        Symbol symbol = IRFindSymbol(ir, identifier);
+        
+        if (symbol.kind == SymbolKind_None)
+        {
             report_symbol_not_found(location, identifier);
             return IRFailed();
         }
+        
+        if (symbol.kind != SymbolKind_Function)
+        {
+            ReportErrorFront(location, "Symbol %S is not a function", identifier);
+            return IRFailed();
+        }
+        
+        FunctionDefinition* fn = symbol.function;
         
         Array<Type*> expected_types = ArrayAlloc<Type*>(context.arena, fn->parameters.count);
         foreach(i, fn->parameters.count) {
@@ -2080,7 +2101,7 @@ ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, 
     // Validation for duplicated symbols
     foreach(i, identifiers.count) {
         String identifier = identifiers[i];
-        if (ir_find_object(ir, identifier, false) != NULL) {
+        if (IRFindObject(ir, identifier, false) != NULL) {
             report_symbol_duplicated(location, identifier);
             return res;
         }

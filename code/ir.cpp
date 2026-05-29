@@ -152,7 +152,7 @@ IR_Group IRFromDefineObject(IR_Context* ir, RegisterKind register_kind, String i
     
     I32 register_index = IRRegisterAlloc(ir, type, register_kind, constant);
     
-    IR_Object* object = ir_define_object(ir, identifier, type, ir->scope, register_index);
+    IR_Object* object = IRDefineObject(ir, identifier, type, ir->scope, register_index);
     Value value = ValueFromIrObject(object);
     return IRFromNone(value);
 }
@@ -214,7 +214,7 @@ internal_fn Value ValueFromSymbol(IR_Context* ir, String identifier, Location lo
     PROFILE_FUNCTION;
     
     Program* program = ir->program;
-    Symbol symbol = ir_find_symbol(ir, identifier);
+    Symbol symbol = IRFindSymbol(ir, identifier);
     
     // Define globals
     if (symbol.kind == SymbolKind_None)
@@ -290,14 +290,14 @@ IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value>
     }
     
     if (params.count != fn->parameters.count) {
-        report_function_expecting_parameters(location, fn->identifier, fn->parameters.count);
+        report_function_expecting_parameters(location, fn->name, fn->parameters.count);
         return IRFailed();
     }
     
     // Check parameters
     foreach(i, params.count) {
         if (fn->parameters[i].type != any_type && fn->parameters[i].type != params[i].type) {
-            report_function_wrong_parameter_type(location, fn->identifier, fn->parameters[i].type->name, i + 1);
+            report_function_wrong_parameter_type(location, fn->name, fn->parameters[i].type->name, i + 1);
             return IRFailed();
         }
     }
@@ -341,7 +341,7 @@ IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parame
 {
     Reporter* reporter = ir->reporter;
     
-    FunctionDefinition* fn = FunctionFromIdentifier(ir->program, name);
+    FunctionDefinition* fn = FunctionFromName(ir->program, name);
     if (fn == NULL) {
         report_symbol_not_found(location, name);
         return IRFailed();
@@ -478,9 +478,6 @@ IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value s
         report_type_missmatch_assign(location, src.type->name, dst.type->name);
         return IRFailed();
     }
-    
-    IR_Object* obj = ir_find_object_from_value(ir, dst);
-    if (obj != NULL) obj->assignment_count++;
     
     if (dst.type == any_type) {
         mode = 2;
@@ -1129,7 +1126,7 @@ IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location)
     IR_Group out = expression;
     if (!out.success) return IRFailed();
     
-    IR_Object* dst = ir_find_object(ir, "return", true);
+    IR_Object* dst = IRFindObject(ir, "return", true);
     
     B32 expecting_return_value = dst != NULL;
     
@@ -1478,12 +1475,15 @@ IR MakeIR(Arena* arena, Program* program, Array<Register> local_registers, IR_Gr
 
 IR_Context* IrContextAlloc(Program* program, Reporter* reporter)
 {
-    IR_Context* ir = ArenaPushStruct<IR_Context>(context.arena);
-    ir->arena = context.arena;
+    Arena* arena = context.arena;
+    
+    IR_Context* ir = ArenaPushStruct<IR_Context>(arena);
+    ir->arena = arena;
     ir->reporter = reporter;
     ir->program = program;
     ir->local_registers = BArrayMake<Register>(ir->arena, 16);
     ir->objects = BArrayMake<IR_Object>(ir->arena, 32);
+    ir->definitions = BArrayMake<IR_Definition>(ir->arena, 8);
     ir->looping_scopes = BArrayMake<IR_LoopingScope>(ir->arena, 8);
     ir->scope = 0;
     return ir;
@@ -1658,14 +1658,14 @@ B32 IRValidateReturnPath(Array<Unit> units)
     }
 }
 
-IR_Object* ir_find_object(IR_Context* ir, String identifier, B32 parent_scopes)
+IR_Object* IRFindObject(IR_Context* ir, String name, B32 parent_scopes)
 {
     IR_Object* res = NULL;
     
     foreach_BArray(it, &ir->objects) {
         IR_Object* obj = it.value;
         if (!parent_scopes && obj->scope != ir->scope) continue;
-        if (!StrEquals(obj->identifier, identifier)) continue;
+        if (obj->name != name) continue;
         if (res != NULL && res->scope >= obj->scope) continue;
         res = obj;
     }
@@ -1692,12 +1692,12 @@ IR_Object* ir_find_object_from_register(IR_Context* ir, I32 register_index)
     return NULL;
 }
 
-IR_Object* ir_define_object(IR_Context* ir, String identifier, Type* type, I32 scope, I32 register_index)
+IR_Object* IRDefineObject(IR_Context* ir, String name, Type* type, I32 scope, I32 register_index)
 {
-    Assert(scope != ir->scope || ir_find_object(ir, identifier, false) == NULL);
+    Assert(scope != ir->scope || IRFindObject(ir, name, false) == NULL);
     
     IR_Object* def = BArrayAdd(&ir->objects);
-    def->identifier = StrCopy(ir->arena, identifier);
+    def->name = StrCopy(ir->arena, name);
     def->type = type;
     def->register_index = register_index;
     def->scope = scope;
@@ -1709,22 +1709,47 @@ IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, Type* type)
     Assert(IRRegisterGet(ir, object->register_index).type == any_type);
     
     IR_Object* def = BArrayAdd(&ir->objects);
-    def->identifier = object->identifier;
+    def->name = object->name;
     def->type = type;
     def->register_index = object->register_index;
     def->scope = ir->scope;
     return def;
 }
 
-Symbol ir_find_symbol(IR_Context* ir, String identifier)
+IR_Definition* IRAddDefinition(IR_Context* ir, Definition* definition, I32 scope)
+{
+    Assert(scope != ir->scope || IRFindDefinition(ir, definition->header.name, false) == NULL);
+    
+    IR_Definition* def = BArrayAdd(&ir->definitions);
+    def->definition = definition;
+    def->scope = scope;
+    return def;
+}
+
+IR_Definition* IRFindDefinition(IR_Context* ir, String name, B32 parent_scopes)
+{
+    IR_Definition* res = NULL;
+    
+    foreach_BArray(it, &ir->definitions) {
+        IR_Definition* def = it.value;
+        if (!parent_scopes && def->scope != ir->scope) continue;
+        if (def->definition->header.name != name) continue;
+        if (res != NULL && res->scope >= def->scope) continue;
+        res = def;
+    }
+    
+    return res;
+}
+
+Symbol IRFindSymbol(IR_Context* ir, String name)
 {
     Program* program = ir->program;
     
     Symbol symbol{};
-    symbol.identifier = identifier;
+    symbol.name = name;
     
     {
-        IR_Object* obj = ir_find_object(ir, identifier, true);
+        IR_Object* obj = IRFindObject(ir, name, true);
         
         if (obj != NULL) {
             symbol.kind = SymbolKind_Object;
@@ -1734,9 +1759,22 @@ Symbol ir_find_symbol(IR_Context* ir, String identifier)
     }
     
     {
-        FunctionDefinition* fn = FunctionFromIdentifier(program, identifier);
+        IR_Definition* def = IRFindDefinition(ir, name, true);
         
-        if (fn != NULL) {
+        if (def != NULL)
+        {
+            if (def->definition->header.type == DefinitionType_Function) {
+                symbol.kind = SymbolKind_Function;
+                symbol.function = &def->definition->function;
+                return symbol;
+            }
+        }
+    }
+    
+    {
+        FunctionDefinition* fn = FunctionFromName(program, name);
+        
+        if (fn != NULL && fn->is_global) {
             symbol.kind = SymbolKind_Function;
             symbol.function = fn;
             return symbol;
@@ -1744,7 +1782,7 @@ Symbol ir_find_symbol(IR_Context* ir, String identifier)
     }
     
     {
-        Type* type = TypeFromName(program, identifier);
+        Type* type = TypeFromName(program, name);
         
         if (type != nil_type) {
             symbol.kind = SymbolKind_Type;

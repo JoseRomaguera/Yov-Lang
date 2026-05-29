@@ -248,7 +248,7 @@ Type* TypeFromStruct(Program* program, StructDefinition* def)
     
     Type* type = BArrayAdd(&program->types);
     type->kind = VKind_Struct;
-    type->name = def->identifier;
+    type->name = def->name;
     type->_struct = def;
     return type;
 }
@@ -268,7 +268,7 @@ Type* TypeFromEnum(Program* program, EnumDefinition* def)
     
     Type* type = BArrayAdd(&program->types);
     type->kind = VKind_Enum;
-    type->name = def->identifier;
+    type->name = def->name;
     type->_enum = def;
     return type;
 }
@@ -508,40 +508,6 @@ Array<Type*> TypesFromDefinitions(Arena* arena, Array<ObjectDefinition> defs)
     return types;
 }
 
-void DefinitionIdentify(Program* program, U32 index, DefinitionType type, String identifier, Location location)
-{
-    PROFILE_FUNCTION;
-    
-    if (index >= program->definitions.count) {
-        InvalidCodepath();
-        return;
-    }
-    
-    Definition* full_def = &program->definitions[index];
-    DefinitionHeader* def = &full_def->header;
-    
-    if (def->stage != DefinitionStage_None) {
-        InvalidCodepath();
-        return;
-    }
-    
-    def->type = type;
-    def->identifier = StrCopy(program->arena, identifier);
-    def->location = location;
-    def->stage = DefinitionStage_Identified;
-    
-    if (type == DefinitionType_Enum)
-    {
-        TypeFromEnum(program, &full_def->_enum);
-    }
-    else if (type == DefinitionType_Struct)
-    {
-        TypeFromStruct(program, &full_def->_struct);
-    }
-    
-    LogType("%S Identify: %S", StringFromDefinitionType(type), identifier);
-}
-
 void EnumDefine(Program* program, EnumDefinition* def, Array<String> names, Array<Location> expression_locations)
 {
     if (def->stage != DefinitionStage_Identified) {
@@ -662,7 +628,7 @@ void FunctionDefine(Program* program, FunctionDefinition* def, Array<ObjectDefin
     def->stage = DefinitionStage_Defined;
     
     StringBuilder builder = string_builder_make(context.arena);
-    appendf(&builder, "Function Define: %S (", def->identifier);
+    appendf(&builder, "Function Define: %S (", def->name);
     
     foreach(i, parameters.count) {
         appendf(&builder, "%S: %S", parameters[i].name, parameters[i].type->name);
@@ -739,75 +705,41 @@ void ArgResolve(Program* program, ArgDefinition* def, String name, String descri
     LogType("Arg Resolve: %S", def->identifier);
 }
 
-Definition* DefinitionFromIdentifier(Program* program, String identifier)
+Definition* DefinitionFromName(Program* program, String name)
 {
     foreach(i, program->definitions.count) {
         Definition* def = &program->definitions[i];
-        if (StrEquals(def->header.identifier, identifier)) {
+        if (StrEquals(def->header.name, name)) {
             return def;
         }
     }
     return NULL;
 }
 
-Definition* DefinitionFromIndex(Program* program, U32 index)
+B32 DefinitionExists(Program* program, String name)
 {
-    if (index >= program->definitions.count) return NULL;
-    return &program->definitions[index];
+    return DefinitionFromName(program, name) != NULL;
 }
 
-B32 DefinitionExists(Program* program, String identifier)
+StructDefinition* StructFromIdentifier(Program* program, String name)
 {
-    return DefinitionFromIdentifier(program, identifier) != NULL;
-}
-
-StructDefinition* StructFromIdentifier(Program* program, String identifier)
-{
-    Definition* def = DefinitionFromIdentifier(program, identifier);
+    Definition* def = DefinitionFromName(program, name);
     if (def == NULL || def->header.type != DefinitionType_Struct) return NULL;
     return &def->_struct;
 }
 
-StructDefinition* StructFromIndex(Program* program, U32 index)
+EnumDefinition* EnumFromName(Program* program, String name)
 {
-    Definition* def = DefinitionFromIndex(program, index);
-    if (def == NULL || def->header.type != DefinitionType_Struct) return NULL;
-    return &def->_struct;
-}
-
-EnumDefinition* EnumFromIdentifier(Program* program, String identifier)
-{
-    Definition* def = DefinitionFromIdentifier(program, identifier);
+    Definition* def = DefinitionFromName(program, name);
     if (def == NULL || def->header.type != DefinitionType_Enum) return NULL;
     return &def->_enum;
 }
 
-EnumDefinition* EnumFromIndex(Program* program, U32 index)
+FunctionDefinition* FunctionFromName(Program* program, String name)
 {
-    Definition* def = DefinitionFromIndex(program, index);
-    if (def == NULL || def->header.type != DefinitionType_Enum) return NULL;
-    return &def->_enum;
-}
-
-FunctionDefinition* FunctionFromIdentifier(Program* program, String identifier)
-{
-    Definition* def = DefinitionFromIdentifier(program, identifier);
+    Definition* def = DefinitionFromName(program, name);
     if (def == NULL || def->header.type != DefinitionType_Function) return NULL;
     return &def->function;
-}
-
-FunctionDefinition* FunctionFromIndex(Program* program, U32 index)
-{
-    Definition* def = DefinitionFromIndex(program, index);
-    if (def == NULL || def->header.type != DefinitionType_Function) return NULL;
-    return &def->function;
-}
-
-ArgDefinition* ArgFromIndex(Program* program, U32 index)
-{
-    Definition* def = DefinitionFromIndex(program, index);
-    if (def == NULL || def->header.type != DefinitionType_Arg) return NULL;
-    return &def->arg;
 }
 
 ArgDefinition* ArgFromName(Program* program, String name)
@@ -1468,10 +1400,10 @@ internal_fn String StringFromUnitInfo(Arena* arena, Program* program, Unit unit)
                 appendf(&builder, " = ");
             }
             
-            String identifier = fn->identifier;
+            String name = fn->name;
             Array<Value> params = unit.function_call.parameters;
             
-            appendf(&builder, "%S(", identifier);
+            appendf(&builder, "%S(", name);
             
             foreach(i, params.count) {
                 String param = StrFromValue(context.arena, program, params[i]);

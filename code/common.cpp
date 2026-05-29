@@ -121,6 +121,7 @@ void ArenaPopTo(Arena* arena, U64 position)
 {
     PROFILE_FUNCTION;
     PROFILE_ARENA(arena);
+    
 #if DEV_ASAN
     if (position == 0) ArenaProtectAndReset(arena);
     return;
@@ -244,26 +245,47 @@ void LaneGroupWait(LaneGroup* group)
     }
 }
 
-void LaneBarrier(LaneContext* lane)
+void LaneBarrierEx(LaneContext* lane, U64 hash)
 {
     PROFILE_FUNCTION;
-    volatile U32* counter = &lane->group->barrier_counter;
     
-    U32 barrier_index = (AtomicIncrement32(counter) - 1) / lane->count;
+    I32 my_sense = 1 - lane->local_sense;
     
-    U32 target = (barrier_index + 1) * lane->count;
+    U32 arrived = AtomicIncrement32(&lane->group->threads_arrived);
     
-    U32 spins = 0;
+    //PrintF("%u -> %u: s%i\n", arrived, (U32)hash, lane->local_sense);
     
-    while (*counter < target)
+    if (arrived == lane->count)
     {
-        _mm_pause();
-        spins++;
-        if (spins > 100) {
-            spins = 0;
-            OsThreadYield();
-        }
+        MemoryBarrierRelease();
+        
+        //PrintF("%u **\n", (U32)hash);
+        
+        AtomicStore32(&lane->group->threads_arrived, 0);
+        AtomicStore32(&lane->group->global_sense, my_sense);
     }
+    else
+    {
+        MemoryBarrierAcquire();
+        
+        U32 spins = 0;
+        
+        while (lane->group->global_sense != my_sense)
+        {
+            _mm_pause();
+            spins++;
+            if (spins > 100) {
+                spins = 0;
+                OsThreadYield();
+            }
+        }
+        
+        MemoryBarrierAcquire();
+    }
+    
+    lane->local_sense = my_sense;
+    
+    //PrintF("%u <- %u: s%i\n", arrived, (U32)hash, lane->local_sense);
 }
 
 B32 LaneNarrow(LaneContext* lane, U32 index)
@@ -336,7 +358,7 @@ B32 LaneTaskFetch(LaneGroup* group, U32* index)
 
 B32 LaneDynamicTaskIsBusy(LaneGroup* group)
 {
-    CompilerReadBarrier();
+    MemoryBarrierAcquire();
     return group->task_finished < group->task_total;
 }
 
@@ -372,7 +394,7 @@ void MutexLock(Mutex* mutex)
 
 B32 MutexIsLocked(Mutex* mutex)
 {
-    CompilerReadBarrier();
+    MemoryBarrierAcquire();
     return *mutex != 0;
 }
 
@@ -1650,6 +1672,16 @@ void PrintEx(PrintLevel level, String str, ...)
     va_start(args, str);
     String result = string_format_with_args(context.arena, str, args);
     va_end(args);
+    
+    if (level != PrintLevel_UserCode)
+    {
+        // Discard ansi sequences
+        for (U64 i = 0; i < result.size - 1; i++) {
+            if (StrStarts(StrSub(result, i, result.size - i), "\x1b[")) {
+                result[i] = 'x';
+            }
+        }
+    }
     
     if (system_info.supports_ansi_seq)
     {

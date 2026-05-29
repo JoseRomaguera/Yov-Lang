@@ -162,7 +162,7 @@ void RuntimeStart(Runtime* runtime, String function_name)
     LogFlow("Starting Execution");
     LogFlow(SEPARATOR_STRING);
     
-    FunctionDefinition* fn = FunctionFromIdentifier(program, function_name);
+    FunctionDefinition* fn = FunctionFromName(program, function_name);
     
     if (fn == NULL) {
         ReportErrorNoCode("Function '%S' not found", function_name);
@@ -858,7 +858,7 @@ void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Ar
         Array<Reference> returns = ArrayAlloc<Reference>(context.arena, fn->returns.count);
         
         if (fn->intrinsic.fn == NULL) {
-            report_intrinsic_not_resolved(fn->identifier);
+            report_intrinsic_not_resolved(fn->name);
             return;
         }
         
@@ -2625,7 +2625,7 @@ void ref_assign_FileInfo(Runtime* runtime, Reference ref, FileInfo info)
 void ref_assign_FunctionDefinition(Runtime* runtime, Reference ref, FunctionDefinition* fn)
 {
     Program* program = runtime->program;
-    ref_member_set_string(runtime, ref, "identifier", fn->identifier);
+    ref_member_set_string(runtime, ref, "name", fn->name);
     
     Reference parameters = AllocArray(runtime, Type_ObjectDefinition, fn->parameters.count);
     foreach(i, fn->parameters.count) {

@@ -290,9 +290,11 @@ String StringFromDefinitionType(DefinitionType type);
 struct DefinitionHeader {
     DefinitionType type;
     
-    String identifier;
+    String ID;
+    String name;
     Location location;
     volatile DefinitionStage stage;
+    B32 is_global;
 };
 
 struct Runtime;
@@ -355,10 +357,8 @@ struct Program
     Mutex types_mutex;
     BArray<Type> types;
     
-    Array<Definition> definitions;
-    U32 function_count;
-    U32 struct_count;
-    U32 enum_count;
+    Mutex definitions_mutex;
+    BArray<Definition> definitions;
     U32 arg_count;
     
     Array<Global> globals;
@@ -436,8 +436,6 @@ B32 B32FromCompiletime(Value value);
 Type* TypeFromCompiletime(Program* program, Value value);
 B32 CompiletimeEquals(Program* program, Value v0, Value v1);
 
-void DefinitionIdentify(Program* program, U32 index, DefinitionType type, String identifier, Location location);
-
 void EnumDefine(Program* program, EnumDefinition* def, Array<String> names, Array<Location> expression_locations);
 void EnumResolve(Program* program, EnumDefinition* def, Array<I64> values);
 
@@ -451,16 +449,11 @@ void FunctionResolve(Program* program, FunctionDefinition* def, IR ir);
 void ArgDefine(Program* program, ArgDefinition* def, Type* type);
 void ArgResolve(Program* program, ArgDefinition* def, String name, String description, B32 required, Value default_value);
 
-Definition* DefinitionFromIdentifier(Program* program, String identifier);
-Definition* DefinitionFromIndex(Program* program, U32 index);
-B32 DefinitionExists(Program* program, String identifier);
-StructDefinition* StructFromIdentifier(Program* program, String identifier);
-StructDefinition* StructFromIndex(Program* program, U32 index);
-EnumDefinition* EnumFromIdentifier(Program* program, String identifier);
-EnumDefinition* EnumFromIndex(Program* program, U32 index);
-FunctionDefinition* FunctionFromIdentifier(Program* program, String identifier);
-FunctionDefinition* FunctionFromIndex(Program* program, U32 index);
-ArgDefinition* ArgFromIndex(Program* program, U32 index);
+Definition* DefinitionFromName(Program* program, String name);
+B32 DefinitionExists(Program* program, String name);
+StructDefinition* StructFromName(Program* program, String name);
+EnumDefinition* EnumFromName(Program* program, String name);
+FunctionDefinition* FunctionFromName(Program* program, String name);
 ArgDefinition* ArgFromName(Program* program, String name);
 
 void GlobalDefine(Program* program, U32 index, Type* type, B32 is_constant);
@@ -486,7 +479,7 @@ void PrintIr(Program* program, String name, IR ir);
 
 //- HIGH LEVEL CALLS 
 
-IntrinsicFunction* IntrinsicFromIdentifier(String identifier);
+IntrinsicFunction* IntrinsicFromName(String identifier);
 
 Program* ProgramFromInput(Arena* arena, Input* input, Reporter* reporter);
 
