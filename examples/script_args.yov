@@ -3,9 +3,9 @@
   Specify script args after path
  Examples:
       yov.exe script_args.yov -help
-yov.exe script_args.yov -foo=A
-yov.exe script_args.yov -foo=B -print_all
-yov.exe script_args.yov -foo=B -opt_foo=B
+yov.exe script_args.yov -foo A
+yov.exe script_args.yov -foo B -print_all
+yov.exe script_args.yov -foo B -opt_foo B
 */
 
 script_description : String : "This is an example of how to define and use script arguments.\nTo document a script, define the constant 'script_description' within the script itself.";

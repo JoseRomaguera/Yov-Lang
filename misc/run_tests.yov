@@ -1,8 +1,17 @@
 
-ITERATIONS  : UInt : 1;
-REPEAT      : UInt : 1;
-SHOW_PRINTS : Bool : false;
+ITERATIONS :: arg -> UInt {
+    name = "-it";
+    default = 1;
+}
 
+REPEAT :: arg -> UInt {
+    name = "-repeat";
+    default =  1;
+}
+
+SHOW_PRINTS :: arg {
+    name = "-show_prints";
+}
 
 test_count : Int = 0;
 failed_count : Int = 0;
@@ -28,7 +37,7 @@ RunAllTests :: func
     RunTest("examples/errors.yov", "", 0);
     RunTest("examples/external_calls.yov", "", 0);
     RunTest("examples/file_system.yov", "", 0);
-    RunTest("examples/script_args.yov", "-foo=A", 0);
+    RunTest("examples/script_args.yov", "-foo A", 0);
     
     RunTest("tests/basics.yov", "", 0);
     RunTest("tests/expressions.yov", "", 0);

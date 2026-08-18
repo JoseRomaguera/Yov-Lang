@@ -2,9 +2,175 @@
 
 //- CORE
 
+void Intrinsic_SetupRuntime(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+{
+    PROFILE_FUNCTION;
+
+    TypeSystem* tsys = runtime->tsys;
+    Reporter* reporter = runtime->reporter;
+    
+    LogFlow("Starting Init Globals");
+    F64 start_time = TimerNow();
+    
+    // Yov struct
+    if (Type_YovInfo != nil_type)
+    {
+        runtime->common_globals.yov = RuntimeLoadGlobal(runtime, "yov");
+        Reference ref = runtime->common_globals.yov;
+        
+        RefSetUIntMember(runtime, ref, "minor", YOV_MINOR_VERSION);
+        RefSetUIntMember(runtime, ref, "major", YOV_MAJOR_VERSION);
+        RefSetUIntMember(runtime, ref, "revision", YOV_REVISION_VERSION);
+        ref_member_set_string(runtime, ref, "version", YOV_VERSION);
+        ref_member_set_string(runtime, ref, "path", system_info.executable_path);
+    }
+    
+    // OS struct
+    if (Type_OS != nil_type)
+    {
+        runtime->common_globals.os = RuntimeLoadGlobal(runtime, "os");
+        Reference ref = runtime->common_globals.os;
+        
+#if OS_WINDOWS
+        set_enum_index_member(runtime, ref, "kind", 0);
+#else
+#error TODO
+#endif
+    }
+    
+    // Context struct
+    if (Type_Context != nil_type)
+    {
+        runtime->common_globals.context = RuntimeLoadGlobal(runtime, "context");
+        Reference ref = runtime->common_globals.context;
+        
+        ref_member_set_string(runtime, ref, "cd", runtime->settings.origin_dir);
+        ref_member_set_string(runtime, ref, "origin_dir", runtime->settings.origin_dir);
+        ref_member_set_string(runtime, ref, "caller_dir", runtime->settings.caller_dir);
+        RefMemberSetUInt(runtime, ref, "seed", OsTimerGet());
+        
+        // Args
+        {
+            Array<String> args = runtime->input->script_args;
+            Reference array = AllocArray(runtime, string_type, args.count);
+            foreach(i, args.count) {
+                ref_set_member(runtime, array, i, AllocString(runtime, args[i]));
+            }
+            
+            ref_set_member(runtime, ref, TypeGetMember(runtime, Type_Context, "args").index, array);
+        }
+        
+        // Types
+        {
+            U32 first_type_id = any_type->id + 1;
+            U32 last_type_id = TypeGetLastID(runtime->tsys);
+
+            U32 type_count = last_type_id - first_type_id;
+            Reference array = AllocArray(runtime, type_type, type_count);
+
+            foreach(i, type_count) {
+                U32 id = i + first_type_id;
+                Reference element = object_alloc(runtime, type_type);
+                RefSetType(runtime, element, id);
+                ref_set_member(runtime, array, i, element);
+            }
+            
+            ref_set_member(runtime, ref, TypeGetMember(runtime, Type_Context, "types").index, array);
+        }
+    }
+    
+    // Calls struct
+    if (Type_CallsContext != nil_type)
+    {
+        Reference ref = RuntimeLoadGlobal(runtime, "calls");
+        runtime->common_globals.calls = ref;
+    }
+    
+    // User args
+    {
+        Input* input = runtime->input;
+        Array<B8> defined_flags = ArrayAlloc<B8>(context.arena, runtime->args.count);
+        
+        B32 show_script_help = false;
+
+        foreach(i, input->script_args.count)
+        {
+            String arg_name = input->script_args[i];
+
+            if (arg_name == "-help") {
+                show_script_help = true;
+                continue;
+            }
+
+            String arg_value = ((i + 1) < input->script_args.count) ? input->script_args[i + 1] : "";
+
+            I32 arg_index = -1;
+            foreach(i, runtime->args.count) {
+                if (runtime->args[i].name == arg_name) {
+                    arg_index = i;
+                    break;
+                }
+            }
+
+            if (arg_index < 0) {
+                ReportErrorNoCode("Unknown argument '%S'", arg_name);
+                show_script_help = true;
+                continue;
+            }
+
+            if (defined_flags[arg_index]) {
+                ReportErrorNoCode("Argument already defined '%S'", arg_name);
+                continue;
+            }
+            defined_flags[arg_index] = true;
+
+            ArgDefinition* def = &runtime->args[arg_index];
+            ObjectDefinition obj_def = runtime->global_objects[def->global_index];
+            Type* value_type = TypeGet(obj_def.type_id);
+
+            Value value = ValueNone();
+
+            if (value_type == bool_type) {
+                value = ValueFromBool(true);
+            }
+            else {
+                i++;
+                value = ValueFromStringExpression(context.arena, runtime, arg_value, value_type);
+
+                if (value.kind == ValueKind_None) {
+                    report_arg_wrong_value(def->name, arg_value);
+                    continue;
+                }
+            }
+
+            Reference ref = RefFromValue(runtime, NULL, value);
+            RuntimeStore(runtime, NULL, RegIndexFromGlobal(def->global_index), ref);
+        }
+
+        if (show_script_help) {
+            I32 global_index = GlobalIndexFromName(runtime, "__YovScriptHelp");
+        
+            if (global_index >= 0)
+            {
+                ObjectDefinition* obj = &runtime->global_objects[global_index];
+                Reference ref = RefFromValue(runtime, NULL, ValueFromGlobal(obj->type_id, global_index));
+                String help_str = StrFromRef(context.arena, runtime, ref, true);
+
+                reporter->exit_requested = true;
+                ReportEx(reporter, ReportLevel_Info, NO_CODE, 0, {}, help_str);
+            }
+        }
+    }
+    
+    F64 ellapsed = TimerNow() - start_time;
+    LogFlow("Init globals finished: %S", StringFromEllapsedTime(ellapsed));
+    
+    ArenaPopTo(context.arena, 0);
+}
+
 void Intrinsic_Typeof(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Program* program = runtime->program;
+    TypeSystem* tsys = runtime->tsys;
     
     Reference ref = params[0];
     Type* type = ref.type;
@@ -14,8 +180,8 @@ void Intrinsic_Typeof(Runtime* runtime, Array<Reference> params, Array<Reference
         type = void_type;
     }
     
-    Reference res = object_alloc(runtime, Type_Type);
-    ref_assign_Type(runtime, res, type);
+    Reference res = object_alloc(runtime, type_type);
+    RefSetType(runtime, res, type->id);
     returns[0] = res;
 }
 
@@ -146,7 +312,7 @@ void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Ref
         array = AllocArray(runtime, string_type, values.count);
         
         foreach(i, values.count) {
-            Reference element = ref_get_member(runtime, array, i);
+            Reference element = RefGetMember(runtime, array, i);
             String path = values[i];
             path = PathResolve(context.arena, path);
             ref_string_set(runtime, element, path);
@@ -162,7 +328,9 @@ void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Ref
 
 void Intrinsic_ArrayAppendBack(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Assert(TypeIsReference(params[0].type) && TypeIsArray(TypeGetNext(runtime->program, params[0].type)));
+    TypeSystem* tsys = runtime->tsys;
+
+    Assert(TypeIsReference(params[0].type) && TypeIsArray(TypeGetNext(tsys, params[0].type)));
     Assert(TypeIsArray(params[1].type));
     
     Reference dst = RefDereference(runtime, params[0]);
@@ -176,16 +344,16 @@ void Intrinsic_ArrayAppendBack(Runtime* runtime, Array<Reference> params, Array<
     for (U32 i = 0; i < src_array->count; i++)
     {
         U32 dst_index = dst_array->count++;
-        ref_set_member(runtime, dst, dst_index, ref_get_member(runtime, src, i));
+        ref_set_member(runtime, dst, dst_index, RefGetMember(runtime, src, i));
     }
 }
 
 void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Program* program = runtime->program;
-    
-    Type* array_type = TypeGetNext(program, params[0].type);
-    Type* element_type = TypeGetNext(program, array_type);
+    TypeSystem* tsys = runtime->tsys;
+
+    Type* array_type = TypeGetNext(tsys, params[0].type);
+    Type* element_type = TypeGetNext(tsys, array_type);
     Assert(TypeIsReference(params[0].type) && TypeIsArray(array_type));
     Assert(element_type == params[1].type);
     
@@ -202,15 +370,15 @@ void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params,
 
 void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Program* program = runtime->program;
-    
-    if (!TypeIsReference(params[0].type) || !TypeIsArray(TypeGetNext(program, params[0].type))) {
+    TypeSystem* tsys = runtime->tsys;
+
+    if (!TypeIsReference(params[0].type) || !TypeIsArray(TypeGetNext(tsys, params[0].type))) {
         ReportErrorRT("First parameter is not an array reference");
         return;
     }
     
-    Type* array_type = TypeGetNext(program, params[0].type);
-    Type* element_type = TypeGetNext(program, array_type);
+    Type* array_type = TypeGetNext(tsys, params[0].type);
+    Type* element_type = TypeGetNext(tsys, array_type);
     
     Reference dst = RefDereference(runtime, params[0]);
     U64 index = RefGetUInt(params[1]);
@@ -222,9 +390,9 @@ void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Refe
         return;
     }
     
-    U32 element_size = TypeGetSize(element_type);
+    U64 element_size = TypeGetSize(runtime, element_type);
     
-    ref_release_internal(runtime, ref_get_member(runtime, dst, (U32)index), true);
+    ref_release_internal(runtime, RefGetMember(runtime, dst, (U32)index), true);
     
     dst_array->count--;
     for (U32 i = (U32)index; i < dst_array->count; i++)
@@ -237,15 +405,15 @@ void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Refe
 
 void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Program* program = runtime->program;
-    
-    if (!TypeIsReference(params[0].type) || !TypeIsArray(TypeGetNext(program, params[0].type))) {
+    TypeSystem* tsys = runtime->tsys;
+
+    if (!TypeIsReference(params[0].type) || !TypeIsArray(TypeGetNext(tsys, params[0].type))) {
         ReportErrorRT("First parameter is not an array reference");
         return;
     }
     
-    Type* array_type = TypeGetNext(program, params[0].type);
-    Type* element_type = TypeGetNext(program, array_type);
+    Type* array_type = TypeGetNext(tsys, params[0].type);
+    Type* element_type = TypeGetNext(tsys, array_type);
     
     Reference dst = RefDereference(runtime, params[0]);
     U64 index = RefGetUInt(params[1]);
@@ -257,9 +425,9 @@ void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, A
         return;
     }
     
-    U32 element_size = TypeGetSize(element_type);
+    U64 element_size = TypeGetSize(runtime, element_type);
     
-    ref_release_internal(runtime, ref_get_member(runtime, dst, (U32)index), true);
+    ref_release_internal(runtime, RefGetMember(runtime, dst, (U32)index), true);
     
     U32 last_index = dst_array->count - 1;
     
@@ -274,15 +442,13 @@ void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, A
 
 void Intrinsic_ArrayMakeEmpty(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Program* program = runtime->program;
-    
     Type* base_type = RefGetType(runtime, params[0]);
     Reference arr_ref = params[1];
     ObjectData_Array* arr = RefGetArray(arr_ref);
     
     Array<I64> dimensions = ArrayAlloc<I64>(context.arena, arr->count);
     foreach(i, dimensions.count) {
-        dimensions[i] = RefGetUInt(ref_get_member(runtime, arr_ref, i));
+        dimensions[i] = RefGetUInt(RefGetMember(runtime, arr_ref, i));
     }
     
     returns[0] = AllocArrayMultidimensional(runtime, base_type, dimensions);
@@ -323,7 +489,7 @@ void Intrinsic_ConsoleRead(Runtime* runtime, Array<Reference> params, Array<Refe
 
 internal_fn void ReturnFromExternalCall(Runtime* runtime, CallOutput res, Array<Reference> returns)
 {
-    Program* program = runtime->program;
+    TypeSystem* tsys = runtime->tsys;
     Reference call_result = object_alloc(runtime, Type_CallOutput);
     ref_assign_CallOutput(runtime, call_result, res);
     
@@ -462,9 +628,9 @@ void Intrinsic_PathResolve(Runtime* runtime, Array<Reference> params, Array<Refe
 
 internal_fn U64 RuntimeRandom(Runtime* runtime)
 {
-    Program* program = runtime->program;
+    TypeSystem* tsys = runtime->tsys;
     
-    Reference seed_ref = ref_get_member(runtime, runtime->common_globals.context, TypeGetMember(Type_Context, "seed").index);
+    Reference seed_ref = RefGetMember(runtime, runtime->common_globals.context, TypeGetMember(runtime, Type_Context, "seed").index);
     U64 seed = RefGetUInt(seed_ref);
     
     seed += 0x9E3779B97F4A7C15;
@@ -722,7 +888,7 @@ void Intrinsic_FileDelete(Runtime* runtime, Array<Reference> params, Array<Refer
 
 void Intrinsic_FileGetInfo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Program* program = runtime->program;
+    TypeSystem* tsys = runtime->tsys;
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
     FileInfo info;
@@ -737,7 +903,7 @@ void Intrinsic_FileGetInfo(Runtime* runtime, Array<Reference> params, Array<Refe
 
 void Intrinsic_DirGetInfo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
 {
-    Program* program = runtime->program;
+    TypeSystem* tsys = runtime->tsys;
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
     Array<FileInfo> infos;
@@ -746,7 +912,7 @@ void Intrinsic_DirGetInfo(Runtime* runtime, Array<Reference> params, Array<Refer
     Reference ret = AllocArray(runtime, Type_FileInfo, infos.count);
     if (!res.failed) {
         foreach(i, infos.count) {
-            Reference element = ref_get_member(runtime, ret, i);
+            Reference element = RefGetMember(runtime, ret, i);
             ref_assign_FileInfo(runtime, element, infos[i]);
         }
     }
@@ -762,7 +928,7 @@ void Intrinsic_WriteEntireFile(Runtime* runtime, Array<Reference> params, Array<
     // TODO(Jose): B32 append = get_bool(params[2]);
     
     Result res = RuntimeUserAssertion(runtime, StrFormat(context.arena, "Write entire file:\n'%S'", path));
-    if (!res.failed) res = OsWriteEntireFile(path, { content.data, content.size });
+    if (!res.failed) res = OsWriteEntireFile(path, RBufferFromStr(content));
     
     returns[0] = ref_from_Result(runtime, res);
 }
@@ -802,6 +968,8 @@ struct IntrinsicRegistry {
 };
 
 IntrinsicRegistry intrinsics[] = {
+    { Intrinsic_SetupRuntime, "__YovSetupRuntime" },
+    
     { Intrinsic_Typeof, "Typeof" },
     { Intrinsic_Print, "Print" },
     { Intrinsic_PrintLn, "PrintLn" },

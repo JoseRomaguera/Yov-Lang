@@ -1,18 +1,22 @@
 #pragma once
 
+#ifndef DEV
+#define DEV 0
+#endif
+
 #define YOV_MAJOR_VERSION 0
 #define YOV_MINOR_VERSION 2
 #define YOV_REVISION_VERSION 0
-#define YOV_VERSION STR("v"MACRO_STR(YOV_MAJOR_VERSION)"."MACRO_STR(YOV_MINOR_VERSION)"."MACRO_STR(YOV_REVISION_VERSION))
 
 // DEBUG
 
-#define DEV_ASAN DEV && 1
+#define DEV_ASAN             DEV && 0
 #define DEV_UNSORTED_REPORTS DEV && 0
+#define DEV_SINGLE_THREAD    DEV && 0
 
 #define LOG_FLOW_ENABLED   DEV && 0
 #define LOG_TYPE_ENABLED   DEV && 0
-#define LOG_IR_ENABLED     DEV && 1
+#define LOG_IR_ENABLED     DEV && 0
 #define LOG_MEMORY_ENABLED DEV && 0
 #define LOG_TRACE_ENABLED  DEV && 0
 
@@ -215,12 +219,12 @@ void CStrFromF64(char* dst, F64 value, U32 decimals);
 struct Arena;
 
 struct RBuffer {
-    void* data;
+    U8* data;
     U64 size;
     
     inline U8& operator[](U64 index) {
         Assert(index < size);
-        return ((U8*)data)[index];
+        return data[index];
     }
 };
 
@@ -523,6 +527,12 @@ U64 U64DivideHigh(U64 n0, U64 n1);
 U32 U32DivideHigh(U32 n0, U32 n1);
 U32 PagesFromBytes(U64 bytes);
 
+//- RBUFFER
+
+RBuffer RBufferAlloc(Arena* arena, U64 size);
+RBuffer RBufferCopy(Arena* arena, RBuffer src);
+RBuffer RBufferFromStr(String str);
+
 //- STRING
 
 String StrMake(const char* cstr, U64 size);
@@ -625,6 +635,99 @@ U32 BBufferCalculateIndex(BBuffer* buffer, void* ptr);
 
 #include "templates.h"
 
+//- SERIALIZER
+
+struct Serializer {
+    LinkedList<RBuffer> ll;
+    Arena* arena;
+    U8* buffer;
+    U64 buffer_size;
+    U64 buffer_pos;
+    U64 size;
+};
+
+Serializer* SerializerAlloc(Arena* arena);
+void SerializerWrite(Serializer* s, RBuffer data);
+RBuffer RBufferFromSerializer(Arena* arena, Serializer* s);
+
+void WriteI8(Serializer* s, I8 v);
+void WriteI16(Serializer* s, I16 v);
+void WriteI32(Serializer* s, I32 v);
+void WriteI64(Serializer* s, I64 v);
+void WriteU8(Serializer* s, U8 v);
+void WriteU16(Serializer* s, U16 v);
+void WriteU32(Serializer* s, U32 v);
+void WriteU64(Serializer* s, U64 v);
+
+void WriteF32(Serializer* s, F32 v);
+void WriteF64(Serializer* s, F64 v);
+
+void WriteB8(Serializer* s, B32 v);
+
+void WriteString(Serializer* s, String v);
+
+#define WriteArray(_s, _src, _WriteElement) \
+    do { \
+        WriteU32(_s, (_src).count); \
+        foreach(i, (_src).count) _WriteElement(s, _src[i]); \
+    } while (0)
+
+#define WriteBArray(_s, _src, _WriteElement) \
+    do { \
+        WriteU32(_s, (_src).count); \
+        foreach_BArray(it, &(_src)) _WriteElement(_s, *(it.value)); \
+    } while (0)
+
+//- DESERIALIZER
+
+struct Deserializer {
+    RBuffer data;
+    U64 cursor;
+    B32 failed;
+};
+
+Deserializer* DeserializerAlloc(Arena* arena, RBuffer data);
+void* DeserializerRead(Deserializer* s, U64 bytes);
+void DeserializerFailed(Deserializer* s);
+U32 ReadVersionU32(Deserializer* s, U32 min, U32 max);
+
+I8 ReadI8(Deserializer* s);
+I16 ReadI16(Deserializer* s);
+I32 ReadI32(Deserializer* s);
+I64 ReadI64(Deserializer* s);
+U8 ReadU8(Deserializer* s);
+U16 ReadU16(Deserializer* s);
+U32 ReadU32(Deserializer* s);
+U64 ReadU64(Deserializer* s);
+
+F32 ReadF32(Deserializer* s);
+F64 ReadF64(Deserializer* s);
+
+B8 ReadB8(Deserializer* s);
+
+String ReadStringView(Deserializer* s);
+String ReadString(Arena* arena, Deserializer* s);
+
+template<typename T, typename Fn>
+Array<T> ReadArray(Arena* arena, Deserializer* s, Fn* fn) {
+    U32 count = ReadU32(s);
+    Array<T> dst = ArrayAlloc<T>(arena, count);
+    foreach(i, dst.count) {
+        dst[i] = fn(s);
+    }
+    return dst;
+}
+
+template<typename T, typename Fn>
+Array<T> ReadArrayArena(Arena* arena, Deserializer* s, Fn* fn) {
+    U32 count = ReadU32(s);
+    Array<T> dst = ArrayAlloc<T>(arena, count);
+    foreach(i, dst.count) {
+        dst[i] = fn(arena, s);
+    }
+    return dst;
+}
+
 //- LOCATION
 
 struct Location {
@@ -638,6 +741,9 @@ inline_fn Location _NoCodeMake() { Location c{}; c.script_id = -1; return c; }
 Location LocationMake(U64 start, U64 end, I32 script_id);
 B32 LocationIsValid(Location location);
 inline_fn Location LocationStartScript(I32 script_id) { return LocationMake(0, 0, script_id); }
+
+void WriteLocation(Serializer* s, Location src);
+Location ReadLocation(Deserializer* s);
 
 //- REPORTER 
 
@@ -710,17 +816,23 @@ void LogInternal(String tag, String str, ...);
 
 #define SEPARATOR_STRING "========================="
 
-struct Report {
-    String text;
-    Location location;
-    
-    String path;
-    U32 line;
+
+#define YOV_VERSION STR("v"MACRO_STR(YOV_MAJOR_VERSION)"."MACRO_STR(YOV_MINOR_VERSION)"."MACRO_STR(YOV_REVISION_VERSION))
+
+enum ReportLevel {
+    ReportLevel_Info,
+    ReportLevel_Warning,
+    ReportLevel_Error,
 };
 
-struct ScriptArg {
-    String name;
-    String value;
+struct Report {
+    ReportLevel level;
+    String text;
+    Location location;
+    U32 index;
+
+    String path;
+    U32 line;
 };
 
 struct YovSettings {
@@ -762,12 +874,12 @@ struct Reporter {
     BArray<Report> reports;
     
     B8 exit_requested;
-    I64 exit_code;
     B8 exit_code_is_set;
+    I64 exit_code;
 };
 
 Reporter* ReporterAlloc(Arena* arena);
-void ReportErrorEx(Reporter* reporter, Location location, U32 line, String path, String text, ...);
+void ReportEx(Reporter* reporter, ReportLevel level, Location location, U32 line, String path, String text, ...);
 void ReporterSetExitCode(Reporter* reporter, I64 exit_code);
 void ReporterPrint(Reporter* reporter);
 String StringFromReport(Arena* arena, Report report);
@@ -783,17 +895,370 @@ struct Input {
     String main_script_path;
     String caller_dir;
     YovSettings settings;
-    Array<ScriptArg> script_args;
+    Array<String> script_args;
 };
 
 Input* InputFromArgs(Arena* arena, Reporter* reporter);
-ScriptArg* InputFindScriptArg(Input* input, String name);
+I32 InputFindScriptArg(Input* input, String name);
 
 //- REPORTS 
 
-#define ReportErrorNoCode(_text, ...) ReportErrorEx(reporter, NO_CODE, 0, {}, _text, __VA_ARGS__);
+#define ReportErrorNoCode(_text, ...) ReportEx(reporter, ReportLevel_Error, NO_CODE, 0, {}, _text, __VA_ARGS__);
 
 #define report_arg_wrong_value(_n, _v) ReportErrorNoCode("Invalid argument assignment '%S = %S'", _n, _v);
 #define report_arg_unknown(_v) ReportErrorNoCode("Unknown argument '%S'", _v);
 
 #define report_intrinsic_not_resolved(_n) ReportErrorNoCode("Intrinsic '%S' can't be resolved", _n);
+
+//- TYPE SYSTEM
+
+#define Type_Result TypeFromName(tsys, "Result")
+#define Type_CopyMode TypeFromName(tsys, "CopyMode")
+#define Type_YovInfo TypeFromName(tsys, "YovInfo")
+#define Type_Context TypeFromName(tsys, "Context")
+#define Type_CallsContext TypeFromName(tsys, "CallsContext")
+#define Type_OS TypeFromName(tsys, "OS")
+#define Type_CallOutput TypeFromName(tsys, "CallOutput")
+#define Type_FileInfo TypeFromName(tsys, "FileInfo")
+#define Type_YovParseOutput TypeFromName(tsys, "YovParseOutput")
+#define Type_ObjectDefinition TypeFromName(tsys, "ObjectDefinition")
+#define Type_FunctionDefinition TypeFromName(tsys, "FunctionDefinition")
+#define Type_StructDefinition TypeFromName(tsys, "StructDefinition")
+#define Type_EnumDefinition TypeFromName(tsys, "EnumDefinition")
+
+enum PrimitiveType {
+    PrimitiveType_Int,
+    PrimitiveType_UInt,
+    PrimitiveType_Bool,
+    PrimitiveType_Float,
+    PrimitiveType_String,
+    PrimitiveType_Type,
+};
+
+String StringFromPrimitive(PrimitiveType type);
+
+enum VKind {
+    VKind_Nil,
+    VKind_Void,
+    VKind_Any,
+    VKind_Primitive,
+    VKind_Struct,
+    VKind_Enum,
+    VKind_Reference,
+    VKind_Array,
+    VKind_List,
+};
+
+struct Type;
+
+struct TypeChild {
+    Type* type;
+    String name;
+    I32 index;
+    B32 is_property;
+};
+
+TypeChild TypeChildMake(Type* type, String name, I32 index, B32 is_property);
+TypeChild TypeChildCopy(Arena* arena, TypeChild src);
+
+struct Type {
+    String name;
+    VKind kind;
+    U32 id;
+    
+    union {
+        PrimitiveType primitive;
+        U32 definition_index;
+        U32 reference_next_id;
+        U32 element_type_id;
+    };
+};
+
+global_var Type* nil_type;
+global_var Type* void_type;
+global_var Type* any_type;
+
+global_var Type* int_type;
+global_var Type* uint_type;
+global_var Type* bool_type;
+global_var Type* float_type;
+global_var Type* string_type;
+global_var Type* type_type;
+
+struct TypeSystem {
+    Arena* arena;
+    Mutex types_mutex;
+    BArray<Type> types;
+};
+
+TypeSystem* TypeSystemAlloc(Arena* arena);
+
+B32 TypeIsValid(Type* type);
+Type* TypeGetNext(TypeSystem* tsys, Type* type);
+Type* TypeGetBase(TypeSystem* tsys, Type* type);
+U32 TypeGetLastID(TypeSystem* tsys);
+
+Type* TypeAddStruct(TypeSystem* tsys, String name, U32 definition_index);
+Type* TypeAddEnum(TypeSystem* tsys, String name, U32 definition_index);
+
+#define TypeGet(_id) TypeFromID(tsys, _id)
+
+Type* TypeFromID(TypeSystem* tsys, U32 ID);
+Type* TypeFromName(TypeSystem* tsys, String name);
+Type* TypeFromArray(TypeSystem* tsys, Type* element, U32 dimension);
+Type* TypeFromList(TypeSystem* tsys, Type* element, U32 dimension);
+Type* TypeFromReference(TypeSystem* tsys, Type* base_type);
+Type* TypeFromPrimitive(PrimitiveType primitive);
+Type* TypeFromStruct(TypeSystem* tsys, U32 definition_index);
+Type* TypeFromEnum(TypeSystem* tsys, U32 definition_index);
+B32 TypeIsEnum(Type* type);
+B32 TypeIsArray(Type* type);
+B32 TypeIsList(Type* type);
+B32 TypeIsStruct(Type* type);
+B32 TypeIsReference(Type* type);
+B32 TypeIsAnyInt(Type* type);
+
+U32 RegIndexFromGlobal(U32 global_index);
+U32 RegIndexFromLocal(U32 local_index);
+I32 LocalFromRegIndex(I32 register_index);
+I32 GlobalFromRegIndex(I32 register_index);
+
+Array<TypeChild> TypeGetProperties(Type* type);
+TypeChild TypeGetProperty(Type* type, String property);
+TypeChild TypeGetPropertyAt(Type* type, U32 index);
+
+void WriteType(TypeSystem* tsys, Serializer* s, Type src);
+Type* ReadType(TypeSystem* tsys, Deserializer* s);
+
+//- VALUE
+
+enum ValueKind {
+    ValueKind_None,
+    ValueKind_LValue,            // LValue
+    ValueKind_Register,          // RValue
+    ValueKind_StringComposition, // RValue
+    ValueKind_Array,             // RValue
+    ValueKind_MultipleReturn,    // RValue
+    ValueKind_Literal,     // Compile-Time RValue
+    ValueKind_ZeroInit,    // Compile-Time RValue
+    ValueKind_count,
+};
+
+struct Value {
+    U32 type_id;
+    ValueKind kind;
+    union {
+        struct {
+            I32 index;
+            I32 reference_op; // 0 -> None; 1 -> Take Reference; -1 -> Dereference
+        } reg;
+        
+        I64 literal_sint;
+        U64 literal_uint;
+        B32 literal_bool;
+        F64 literal_float;
+        String literal_string;
+        U32 literal_type_id;
+        struct {
+            Array<Value> values;
+        } array;
+        
+        Array<Value> string_composition;
+        Array<Value> multiple_return;
+    };
+};
+
+B32 ValueIsCompiletime(Value value);
+I32 ValueGetRegister(Value value);
+B32 ValueIsRValue(Value value);
+B32 ValueIsNull(Value value);
+
+B32 ValueEquals(Value v0, Value v1);
+Value ValueCopy(Arena* arena, Value src);
+Array<Value> ValueArrayCopy(Arena* arena, Array<Value> src);
+
+Value ValueNone();
+Value ValueNull();
+Value ValueFromRegister(I32 index, U32 type_id, B32 is_lvalue);
+Value ValueFromReference(TypeSystem* tsys, Value value);
+Value ValueFromDereference(TypeSystem* tsys, Value value);
+Value ValueFromInt(I64 value);
+Value ValueFromUInt(U64 value);
+Value ValueFromBool(B32 value);
+Value ValueFromFloat(F64 value);
+Value ValueFromEnum(Type* type, I64 value);
+Value ValueFromString(Arena* arena, String value);
+Value ValueFromStringArray(Arena* arena, Array<Value> values);
+Value ValueFromType(Type* type);
+Value ValueFromArray(Arena* arena, Type* array_type, Array<Value> elements);
+Value ValueFromZero(Type* type);
+Value ValueFromGlobal(U32 type_id, U32 global_index);
+Value ValueFromReturn(Arena* arena, Array<Value> values);
+
+Array<Value> ValuesFromReturn(Arena* arena, Value value, B32 empty_on_void);
+
+B32 StringFromCompiletime(Arena* arena, String* dst, Value value);
+B32 B32FromCompiletime(Value value);
+Type* TypeFromCompiletime(TypeSystem* tsys, Value value);
+B32 CompiletimeEquals(TypeSystem* tsys, Value v0, Value v1);
+
+void WriteValue(Serializer* s, Value src);
+Value ReadValue(Arena* arena, Deserializer* s);
+
+//- UNIT
+
+enum OperatorKind {
+    OperatorKind_Unknown,
+    OperatorKind_None,
+    
+    OperatorKind_Addition,
+    OperatorKind_Substraction,
+    OperatorKind_Multiplication,
+    OperatorKind_Division,
+    OperatorKind_Modulo,
+    
+    OperatorKind_LogicalNot,
+    OperatorKind_LogicalOr,
+    OperatorKind_LogicalAnd,
+    
+    OperatorKind_Equals,
+    OperatorKind_NotEquals,
+    OperatorKind_LessThan,
+    OperatorKind_LessEqualsThan,
+    OperatorKind_GreaterThan,
+    OperatorKind_GreaterEqualsThan,
+    
+    OperatorKind_Is,
+};
+
+String StringFromOperatorKind(OperatorKind op);
+B32 OperatorKindIsArithmetic(OperatorKind op);
+B32 OperatorKindIsComparison(OperatorKind op);
+
+
+enum UnitKind {
+    // IR only
+    UnitKind_Error,
+    UnitKind_Empty,
+    
+    UnitKind_Copy,
+    UnitKind_Store,
+    UnitKind_FunctionCall,
+    UnitKind_Return,
+    UnitKind_Jump,
+    UnitKind_Child,
+    UnitKind_ResultEval,
+    
+    UnitKind_Add, UnitKind_Sub, UnitKind_Mul,
+    UnitKind_Div, UnitKind_Mod,
+    
+    UnitKind_Eql, UnitKind_Neq,
+    UnitKind_Gtr, UnitKind_Lss,
+    UnitKind_Geq, UnitKind_Leq,
+    
+    UnitKind_Or, UnitKind_And, UnitKind_Not,
+    UnitKind_Neg,
+    
+    UnitKind_Cast,
+    UnitKind_BitCast,
+    
+    UnitKind_Is,
+
+    UnitKind_count,
+};
+
+String StringFromUnitKind(Arena* arena, UnitKind unit);
+
+struct Unit {
+    UnitKind kind;
+    U32 line;
+    I32 dst_index;
+    Value src0;
+    Value src1;
+    
+    PrimitiveType op_dst_type;
+    
+    union {
+        struct {
+            U32 header_index;
+            Array<Value> parameters;
+        } function_call;
+        
+        struct {
+            I32 condition; // 0 -> None; 1 -> true; -1 -> false
+            I32 offset;
+        } jump;
+        
+        struct {
+            B32 child_is_property;
+        } child;
+        
+    };
+};
+
+Unit UnitCopy(Arena* arena, Unit src);
+void WriteUnit(Serializer* s, Unit src);
+Unit ReadUnit(Arena* arena, Deserializer* s);
+
+//- IR
+
+struct ObjectDefinition {
+    U32 type_id;
+    B32 is_constant;
+    String name;
+    Location location;
+};
+
+ObjectDefinition ObjDefMake(String name, U32 type_id, Location location, B32 is_constant);
+ObjectDefinition ObjectDefinitionCopy(Arena* arena, ObjectDefinition src);
+
+enum RegisterKind {
+    RegisterKind_None,
+    RegisterKind_Local,
+    RegisterKind_Parameter,
+    RegisterKind_Return,
+    RegisterKind_Global,
+    RegisterKind_count,
+};
+
+struct Register {
+    RegisterKind kind;
+    B32 is_constant;
+    U32 type_id;
+};
+
+inline_fn B32 RegisterIsValid(Register reg) { return reg.kind != RegisterKind_None; }
+
+struct IR {
+    B32 valid;
+    Array<Unit> instructions;
+    Array<Register> local_registers;
+    Value output_value;
+};
+
+void WriteObjectDefinition(Serializer* s, ObjectDefinition src);
+void WriteRegister(Serializer* s, Register src);
+void WriteIR(Serializer* s, IR src);
+
+ObjectDefinition ReadObjectDefinition(Arena* arena, Deserializer* s);
+IR ReadIR(Arena* arena, Deserializer* s);
+
+//- RUNTIME COMMON
+
+struct RuntimeSettings {
+    B8 user_assert;
+    B8 no_user;
+    String origin_dir;
+    String caller_dir;
+};
+
+RuntimeSettings RuntimeSettingsCopy(Arena* arena, RuntimeSettings src);
+
+//- HIGH LEVEL CALLS 
+
+RBuffer YovCompile(Arena* arena, Reporter* reporter, String path);
+
+void ExecuteProgram(RBuffer binary, Input* input, Reporter* reporter, RuntimeSettings settings);
+
+I64 CompileAndRunFromArgs();
+I64 CompileAndDebugFromArgs();

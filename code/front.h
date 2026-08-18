@@ -1,8 +1,10 @@
 #pragma once
 
-#include "program.h"
+#include "common.h"
 
 // PARSER / TOKENIZER
+
+struct FrontContext;
 
 enum TokenKind {
     TokenKind_None,
@@ -116,7 +118,7 @@ enum SentenceKind {
     SentenceKind_ArgDef,
 };
 
-struct YovScript {
+struct FrontScript {
     I32 id;
     String path;
     String name;
@@ -125,20 +127,92 @@ struct YovScript {
     Array<U64> lines;
 };
 
+enum DefinitionType {
+    DefinitionType_Unknown,
+    DefinitionType_Function,
+    DefinitionType_Struct,
+    DefinitionType_Enum,
+    DefinitionType_Global,
+    DefinitionType_Arg,
+};
+
+String StringFromDefinitionType(DefinitionType type);
+
+struct FunctionHeader {
+    String name;
+    Location location;
+    Location body_location;
+    U32 index;
+
+    Array<ObjectDefinition> parameters;
+    Array<ObjectDefinition> returns;
+};
+
+struct FunctionBody {
+    IR ir;
+    U32 function_header_index;
+};
+
+struct ArgDefinition
+{
+    Location location;
+    
+    I32 global_index;
+    
+    String arg_name;
+    B32 required;
+
+    Location description_location;
+    Location default_value_location;
+};
+
+struct StructDefinition {
+    String name;
+    Location location;
+    U32 index;
+    
+    Array<String> names;
+    Array<U32> types;
+};
+
+struct EnumDefinition {
+    String name;
+    Location location;
+    U32 index;
+
+    Array<String> names;
+    Array<I64> values;
+};
+
+struct GlobalDefinition {
+    Location location;
+    B32 is_constant;
+};
+
+struct FrontDefinition {
+    String name;
+    Location location;
+    DefinitionType type;
+    U32 index;
+    B32 is_global;
+};
+
 struct Parser {
-    YovScript* script;
+    FrontScript* script;
     I32 script_id;
     String text;
     RangeU64 range;
     U64 cursor;
     
 #if DEV
-    String debug_str;
+    String ranged_text;
+    String prev_value;
+    String current_view;
 #endif
     // TODO(Jose): Cache tokens
 };
 
-Parser* ParserAlloc(YovScript* script, RangeU64 range);
+Parser* ParserAlloc(FrontScript* script, RangeU64 range);
 Parser* ParserSub(Parser* parser, Location location);
 Location LocationFromParser(Parser* parser, U64 end = U64_MAX);
 
@@ -163,30 +237,9 @@ SentenceKind GuessSentenceKind(Parser* parser);
 
 // IR GENERATON
 
-struct IR_Unit {
-    UnitKind kind;
+struct IR_Unit : Unit {
     Location location;
-    I32 dst_index;
-    Value src0;
-    Value src1;
-    PrimitiveType op_dst_type;
-    
-    union {
-        struct {
-            FunctionDefinition* fn;
-            Array<Value> parameters;
-        } function_call;
-        
-        struct {
-            I32 condition; // 0 -> None; 1 -> true; -1 -> false
-            IR_Unit* unit;
-        } jump;
-        
-        struct {
-            B32 child_is_member;
-        } child;
-    };
-    
+    IR_Unit* jump_unit;
     IR_Unit* prev;
     IR_Unit* next;
 };
@@ -207,7 +260,7 @@ struct IR_Object {
 };
 
 struct IR_Definition {
-    Definition* definition;
+    FrontDefinition* definition;
     I32 scope;
 };
 
@@ -219,8 +272,7 @@ struct IR_LoopingScope {
 struct IR_Context {
     Arena* arena;
     
-    Program* program;
-    Reporter* reporter;
+    FrontContext* front;
     
     BArray<Register> local_registers;
     BArray<IR_Object> objects;
@@ -252,13 +304,13 @@ struct ObjectDefinitionResult {
     B32 success;
 };
 
-ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Reporter* reporter, Program* program, B32 require_single, RegisterKind register_kind);
+ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Reporter* reporter, TypeSystem* tsys, B32 require_single, RegisterKind register_kind);
 ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, IR_Context* ir, B32 require_single, RegisterKind register_kind);
-ObjectDefinitionResult ReadDefinitionList(Arena* arena, Parser* parser, Reporter* reporter, Program* program, RegisterKind register_kind);
-ObjectDefinitionResult ReadDefinitionListWithIr(Arena* arena, Parser* parser, IR_Context* ir, RegisterKind register_kind);
+ObjectDefinitionResult ReadObjectDefinitionList(Arena* arena, Parser* parser, Reporter* reporter, TypeSystem* tsys, RegisterKind register_kind);
+ObjectDefinitionResult ReadObjectDefinitionListWithIr(Arena* arena, Parser* parser, IR_Context* ir, RegisterKind register_kind);
 
 IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, Type* type, Array<Type*> expected_types, Parser* parser);
-Type* ReadObjectType(Parser* parser, Reporter* reporter, Program* program);
+Type* ReadObjectType(Parser* parser, Reporter* reporter, TypeSystem* tsys);
 
 Value ValueFromIrObject(IR_Object* object);
 
@@ -277,7 +329,7 @@ IR_Group IRFromDefineTemporal(IR_Context* ir, Type* type, Location location);
 IR_Group IRFromReference(IR_Context* ir, B32 expects_lvalue, Value value, Location location);
 IR_Group IRFromDereference(IR_Context* ir, Value value, Location location);
 IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location);
-IR_Group IRFromFunctionCall(IR_Context* ir, FunctionDefinition* fn, Array<Value> parameters, ExpresionContext context, Location location);
+IR_Group IRFromFunctionCall(IR_Context* ir, FunctionHeader* fn, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromDefaultInitializer(IR_Context* ir, Type* type, Location location);
 IR_Group IRFromEmptyArray(IR_Context* ir, Type* base_type, Array<Value> dimensions, Location location);
@@ -291,25 +343,25 @@ IR_Group IRFromBinaryOperator(IR_Context* ir, Value left, Value right, OperatorK
 IR_Group IRFromSignOperator(IR_Context* ir, Value src, OperatorKind op, Location location);
 IR_Group IRFromCasting(IR_Context* ir, Value src, Type* type, B32 bitcast, Location location);
 IR_Group IRFromOptionalCasting(IR_Context* ir, Value src, Type* type, Location location);
-IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_member, Type* type, Location location);
+IR_Group IRFromChild(IR_Context* ir, Value src, Value index, B32 is_property, Type* type, Location location);
 IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, ExpresionContext context, Location location);
 IR_Group IRFromIfStatement(IR_Context* ir, Value condition, IR_Group success, IR_Group failure, Location location);
 IR_Group IRFromLoop(IR_Context* ir, IR_Group init, IR_Group condition, IR_Group content, IR_Group update, Location location);
 IR_Group IRFromFlowModifier(IR_Context* ir, B32 is_break, Location location);
 IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location);
 
-IR MakeIR(Arena* arena, Program* program, Array<Register> local_registers, IR_Group group, YovScript* script);
-IR_Context* IrContextAlloc(Program* program, Reporter* reporter);
-Array<Type*> ReturnsFromRegisters(Arena* arena, Array<Register> registers);
+IR MakeIR(Arena* arena, Array<Register> local_registers, IR_Group group, FrontScript* script);
+IR_Context* IrContextAlloc(FrontContext* front);
+Array<Type*> ReturnsFromRegisters(Arena* arena, TypeSystem* tsys, Array<Register> registers);
 
-IR IrFromValue(Arena* arena, Program* program, Value value);
+IR IrFromValue(Arena* arena, Value value);
 
 B32 IRValidateReturnPath(Array<Unit> units);
 
 enum SymbolKind {
     SymbolKind_None,
     SymbolKind_Object,
-    SymbolKind_Function,
+    SymbolKind_FunctionHeader,
     SymbolKind_Type,
 };
 
@@ -318,7 +370,7 @@ struct Symbol {
     String name;
     
     IR_Object* object;
-    FunctionDefinition* function;
+    FunctionHeader* function_header;
     Type* type;
 };
 
@@ -328,7 +380,7 @@ IR_Object* ir_find_object_from_register(IR_Context* ir, I32 register_index);
 IR_Object* IRDefineObject(IR_Context* ir, String name, Type* type, I32 scope, I32 register_index);
 IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, Type* type);
 
-IR_Definition* IRAddDefinition(IR_Context* ir, Definition* definition, I32 scope);
+IR_Definition* IRAddDefinition(IR_Context* ir, FrontDefinition* definition, I32 scope);
 IR_Definition* IRFindDefinition(IR_Context* ir, String name, B32 parent_scopes);
 
 Symbol IRFindSymbol(IR_Context* ir, String name);
@@ -346,83 +398,74 @@ Register IRRegisterFromValue(IR_Context* ir, Value value);
 
 // FRONT
 
-struct CodeDefinition {
-    DefinitionType type;
-    String name;
-    Definition* definition;
-    Location entire_location;
-    union {
-        struct {
-            Location body_location;
-            Location parameters_location;
-            Location returns_location;
-            Location generics_location;
-            B32 return_is_list;
-        } function;
-        struct {
-            Location body_location;
-        } enum_or_struct;
-        struct {
-        } global;
-        struct {
-            Location type_location;
-            Location body_location;
-        } arg;
-    };
-};
-
-Definition* AddDefinition(Program* program, Reporter* reporter, DefinitionType type, String name, B32 is_global, Location location);
-B32 ReadCodeDefinition(CodeDefinition* dst, Parser* parser, Reporter* reporter, SentenceKind op);
-
-B32 ReadEnumDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
-B32 ReadStructDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
-B32 ReadFunctionDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
-B32 ReadArgDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
-
-B32 ResolveEnumDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
-B32 ResolveStructDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
-B32 ResolveFunctionDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
-B32 ResolveArgDefinition(Parser* parser, Program* program, Reporter* reporter, CodeDefinition* code);
+FrontDefinition* ReadDefinition(FrontContext* front, Parser* parser, B32 is_global);
+B32 ResolveDefinition(FrontContext* front, FrontDefinition* def);
+B32 GenerateIR(FrontContext* front, FrontDefinition* def);
 
 struct FrontContext {
     Arena* arena;
     
+    TypeSystem* tsys;
     Reporter* reporter;
-    Input* input;
-    Program* program;
+
+    String main_script_path;
     
     Mutex mutex;
-    BArray<YovScript> scripts;
-    BArray<CodeDefinition> definitions;
-    BArray<Location> global_location_list;
+    BArray<FrontScript> scripts;
+    BArray<FrontDefinition> definitions;
+    BArray<ObjectDefinition> global_objects;
     
-    BArray<Global> global_list;
-    IR_Group global_initialize_group;
-    U32 number_of_registers_for_global_initialize;
-    
-    volatile U32 resolve_count;
-    U32 last_resolve_count;
-    U32 resolve_iterations;
+    BArray<FunctionBody> functions;
+    BArray<FunctionHeader> function_headers;
+    BArray<StructDefinition> structs;
+    BArray<EnumDefinition> enums;
+    BArray<GlobalDefinition> globals;
+    BArray<ArgDefinition> args;
 };
 
-YovScript* FrontAddScript(FrontContext* front, String path);
-YovScript* FrontAddCoreScript(FrontContext* front);
-YovScript* FrontGetScript(FrontContext* front, I32 script_id);
-U32 LineFromLocation(Location location, YovScript* script);
+struct FrontWriteContext {
+    Serializer* s;
+    BArray<Type*> types_table;
+};
+
+RBuffer BinaryFromFrontContext(Arena* arena, FrontContext* src);
+
+void WriteFrontScript(Serializer* s, FrontScript src);
+void WriteFunctionBody(Serializer* s, FunctionBody src);
+void WriteFunctionHeader(Serializer* s, FunctionHeader src);
+void WriteStructDefinition(Serializer* s, StructDefinition src);
+void WriteEnumDefinition(Serializer* s, EnumDefinition src);
+void WriteGlobalDefinition(Serializer* s, GlobalDefinition src);
+void WriteArgDefinition(Serializer* s, ArgDefinition src);
+
+TypeChild TypeGetMember(FrontContext* front, Type* type, String member);
+TypeChild TypeGetChild(FrontContext* front, Type* type, String name);
+
+FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String name, B32 is_global, Location location);
+I32 AddGlobal(FrontContext* front, String name, U32 type_id, B32 is_constant, Location location);
+FunctionBody* AddBody(FrontContext* front, U32 header_index, IR ir);
+
+FrontScript* FrontAddScript(FrontContext* front, String path);
+FrontScript* FrontAddCoreScript(FrontContext* front);
+FrontScript* FrontGetScript(FrontContext* front, I32 script_id);
+U32 LineFromLocation(Location location, FrontScript* script);
+
+FrontDefinition* FrontDefinitionFromName(FrontContext* front, String name);
+I32 FrontGlobalIndexFromName(FrontContext* front, String name);
+ObjectDefinition* FrontGlobalRegisterFromRegIndex(FrontContext* front, U32 register_index);
+FunctionHeader* FrontFunctionHeaderFromName(FrontContext* front, String name);
 
 Parser* ParserFromLocation(FrontContext* front, Location location);
 
-void FrontReadLocationsAndImports(FrontContext* front, YovScript* script, LaneGroup* lane_group);
-void FrontReadAllScripts(LaneContext* lane, FrontContext* front)
-;
-void FrontDefineDefinitions(LaneContext* lane, FrontContext* front);
-void FrontDefineGlobals(LaneContext* lane, FrontContext* front);
-void FrontResolveGlobals(LaneContext* lane, FrontContext* front);
-void FrontResolveDefinitions(LaneContext* lane, FrontContext* front);
+#if DEV
+
+void PrintIr(FrontContext* front, String name, IR ir);
+
+#endif
 
 //- REPORTS 
 
-#define ReportErrorFront(_location, text, ...) ReportErrorEx(reporter, _location, 0, {}, text, __VA_ARGS__);
+#define ReportErrorFront(_location, text, ...) ReportEx(reporter, ReportLevel_Error, _location, 0, {}, text, __VA_ARGS__);
 
 
 #define report_common_missing_closing_bracket(_code) ReportErrorFront(_code, "Missing closing bracket");
@@ -508,7 +551,6 @@ void FrontResolveDefinitions(LaneContext* lane, FrontContext* front);
 #define report_ref_expects_non_constant(_code) ReportErrorFront(_code, "Can't get a reference of a constant");
 #define report_arg_invalid_name(_code, _v) ReportErrorFront(_code, "Invalid arg name '%S'", _v);
 #define report_arg_duplicated_name(_code, _v) ReportErrorFront(_code, "Duplicated arg name '%S'", _v);
-#define report_arg_is_required(_code, _v) ReportErrorFront(_code, "Argument '%S' is required", _v);
 #define report_break_inside_loop(_code) ReportErrorFront(_code, "Break keyword must be used inside a loop");
 #define report_continue_inside_loop(_code) ReportErrorFront(_code, "Continue keyword must be used inside a loop");
 

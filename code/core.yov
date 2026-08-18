@@ -13,13 +13,9 @@ YovInfo :: struct {
     revision: UInt;
 }
 
-Type :: struct {
-    name: String;
-}
-
 Context :: struct {
     cd: String;
-    script_dir: String;
+    origin_dir: String;
     caller_dir: String;
     args: Array[String];
     types: Array[Type];
@@ -42,6 +38,15 @@ CallsContext :: struct {
     redirect_stdout: RedirectStdout;
 }
 
+yov: YovInfo;
+os: OS;
+context: Context;
+calls: CallsContext;
+
+__YovScriptHelp: String;
+__YovSetupRuntime :: func;
+__YovEntryPoint :: func;
+
 // Core
 
 Typeof  :: func(object: Any) -> Type;
@@ -60,15 +65,14 @@ EnvPath      :: func(name: String) -> (value: String, result: Result);
 EnvPathArray :: func(name: String) -> (value: Array[String], result: Result);
 
 /*
-ArrayMakeEmpty :: func[T](count: UInt) -> List[T];
-
-ListMakeEmpty          :: func[T](count: UInt) -> List[T];
-ListAppendBack         :: func[T](dst: Array[T]&, src: Array[T]);
-ListAppendFront        :: func[T](dst: Array[T]&, src: Array[T]);
-ListAppendElementBack  :: func[T](dst: Array[T]&, src: T);
-ListAppendElementFront :: func[T](dst: Array[T]&, src: T);
-ListRemove             :: func[T](dst: Array[T]&, index: UInt);
-ListUnorderedRemove    :: func[T](dst: Array[T]&, index: UInt);
+ArrayMakeEmpty :: func(count: UInt) -> Array[$T];
+ListMakeEmpty          :: func(count: UInt) -> List[$T];
+ListAppendBack         :: func(dst: Array[$T]&, src: Array[$T]);
+ListAppendFront        :: func(dst: Array[$T]&, src: Array[$T]);
+ListAppendElementBack  :: func(dst: Array[$T]&, src: $T);
+ListAppendElementFront :: func(dst: Array[$T]&, src: $T);
+ListRemove             :: func(dst: Array[$T]&, index: UInt);
+ListUnorderedRemove    :: func(dst: Array[$T]&, index: UInt);
 */
 
 ArrayAppendBack         :: func(dst: Any, src: Any);

@@ -422,6 +422,27 @@ U32 PagesFromBytes(U64 bytes) {
     return (U32)U64DivideHigh(bytes, system_info.page_size);
 }
 
+// RBUFFER
+
+RBuffer RBufferAlloc(Arena* arena, U64 size) {
+    RBuffer dst;
+    dst.data = (U8*)ArenaPush(arena, size);
+    dst.size = size;
+    return dst;
+}
+
+RBuffer RBufferCopy(Arena* arena, RBuffer src) {
+    RBuffer dst;
+    dst.data = (U8*)ArenaPush(arena, src.size);
+    dst.size = src.size;
+    memcpy(dst.data, src.data, src.size);
+    return dst;
+}
+
+RBuffer RBufferFromStr(String str) {
+    return { (U8*)str.data, str.size };
+}
+
 //- CSTRING 
 
 U32 CStrSize(const char* str) {
@@ -1037,7 +1058,7 @@ String StrJoin(Arena* arena, LinkedList<String> ll)
 
 Array<String> StrSplit(Arena* arena, String str, String separator)
 {
-    LinkedList<String> ll = ll_make<String>(context.arena);
+    LinkedList<String> ll = LLMake<String>(context.arena);
     
     U64 next_offset = 0;
     
@@ -1049,7 +1070,7 @@ Array<String> StrSplit(Arena* arena, String str, String separator)
         if (StrEquals(sub, separator)) {
             
             String next = StrSub(str, next_offset, cursor - next_offset);
-            ll_push(&ll, next);
+            LLPush(&ll, next);
             
             cursor += separator.size;
             next_offset = cursor;
@@ -1059,10 +1080,10 @@ Array<String> StrSplit(Arena* arena, String str, String separator)
     
     if (next_offset < cursor) {
         String next = StrSub(str, next_offset, cursor - next_offset);
-        ll_push(&ll, next);
+        LLPush(&ll, next);
     }
     
-    return array_from_ll(arena, ll);
+    return ArrayFromLL(arena, ll);
 }
 
 String StrReplace(Arena* arena, String str, String old_str, String new_str)
@@ -1071,7 +1092,7 @@ String StrReplace(Arena* arena, String str, String old_str, String new_str)
     
     if (str.size < old_str.size) return str;
     
-    LinkedList<String> ll = ll_make<String>(context.arena);
+    LinkedList<String> ll = LLMake<String>(context.arena);
     
     U64 next_offset = 0;
     
@@ -1082,8 +1103,8 @@ String StrReplace(Arena* arena, String str, String old_str, String new_str)
         if (StrEquals(sub, old_str)) {
             
             String next = StrSub(str, next_offset, cursor - next_offset);
-            ll_push(&ll, next);
-            ll_push(&ll, new_str);
+            LLPush(&ll, next);
+            LLPush(&ll, new_str);
             
             cursor += old_str.size;
             next_offset = cursor;
@@ -1095,7 +1116,7 @@ String StrReplace(Arena* arena, String str, String old_str, String new_str)
     
     if (next_offset < str.size) {
         String next = StrSub(str, next_offset, str.size - next_offset);
-        ll_push(&ll, next);
+        LLPush(&ll, next);
     }
     
     return StrJoin(arena, ll);
@@ -1333,9 +1354,14 @@ String PathResolve(Arena* arena, String path)
     Array<String> elements = PathSubdivide(context.arena, res);
     
     {
+        I32 starting_index = 0;
+
+        while (starting_index < elements.count && elements[starting_index] == "..")
+            starting_index++;
+
         I32 remove_prev_element_count = 0;
         
-        for (I32 i = (I32)elements.count - 1; i >= 0; --i) {
+        for (I32 i = (I32)elements.count - 1; i >= starting_index; --i) {
             if (elements[i] == "..") {
                 ArrayErase(&elements, i);
                 remove_prev_element_count++;
@@ -1367,6 +1393,7 @@ String PathResolveImport(Arena* arena, String caller_script_dir, String path)
     
     if (!OsPathIsAbsolute(path)) {
         path = PathAppend(context.arena, caller_script_dir, path);
+        path = PathResolve(context.arena, path);
     }
     
     return StrCopy(arena, path);
@@ -1402,7 +1429,7 @@ String PathGetFolder(String path)
 
 StringBuilder string_builder_make(Arena* arena) {
     StringBuilder builder{};
-    builder.ll = ll_make<String>(arena);
+    builder.ll = LLMake<String>(arena);
     builder.arena = arena;
     builder.buffer_size = 128;
     builder.buffer = (char*)ArenaPush(arena, builder.buffer_size);
@@ -1414,7 +1441,7 @@ inline_fn void _string_builder_push_buffer(StringBuilder* builder) {
     
     String str = StrMake(builder->buffer, builder->buffer_pos);
     str = StrCopy(builder->arena, str);
-    ll_push(&builder->ll, str);
+    LLPush(&builder->ll, str);
     
     builder->buffer_pos = 0;
 }
@@ -1437,7 +1464,7 @@ void append(StringBuilder* builder, String str)
         _string_builder_push_buffer(builder);
         
         String str_node = StrCopy(builder->arena, str);
-        ll_push(&builder->ll, str_node);
+        LLPush(&builder->ll, str_node);
     }
     else {
         U64 bytes_left = builder->buffer_size - builder->buffer_pos;
@@ -1650,6 +1677,159 @@ U32 BBufferCalculateIndex(BBuffer* buffer, void* ptr)
     return U32_MAX;
 }
 
+// SERIALIZER
+
+Serializer* SerializerAlloc(Arena* arena)
+{
+    Serializer* s = ArenaPushStruct<Serializer>(arena);
+    s->ll = LLMake<RBuffer>(arena);
+    s->arena = arena;
+    s->buffer_size = Kb(16);
+    s->buffer = (U8*)ArenaPush(arena, s->buffer_size);
+    return s;
+}
+
+internal_fn void SerializerPushBuffer(Serializer* s) {
+    if (s->buffer_pos == 0) return;
+    
+    RBuffer block = RBufferCopy(s->arena, { s->buffer, s->buffer_pos });
+    
+    LLPush(&s->ll, block);
+    s->buffer_pos = 0;
+}
+
+void SerializerWrite(Serializer* s, RBuffer data)
+{
+    if (data.size == 0) return;
+    
+    if (data.size > s->buffer_size) {
+        SerializerPushBuffer(s);
+        
+        RBuffer block = RBufferCopy(s->arena, data);
+        LLPush(&s->ll, block);
+    }
+    else {
+        U64 bytes_left = s->buffer_size - s->buffer_pos;
+        if (data.size > bytes_left) {
+            SerializerPushBuffer(s);
+        }
+        
+        memcpy(s->buffer + s->buffer_pos, data.data, data.size);
+        s->buffer_pos += data.size;
+    }
+
+    s->size += data.size;
+}
+
+RBuffer RBufferFromSerializer(Arena* arena, Serializer* s)
+{
+    SerializerPushBuffer(s);
+
+    RBuffer dst = RBufferAlloc(arena, s->size);
+
+    U64 offset = 0;
+    for (LLNode* node = s->ll.root; node != NULL; node = node->next)
+    {
+        RBuffer block = *(RBuffer*)(node + 1);
+        Assert(offset + block.size <= dst.size);
+        memcpy(dst.data + offset, block.data, block.size);
+        offset += block.size;
+    }
+
+    Assert(offset == s->size);
+    return dst;
+}
+
+void WriteI8(Serializer* s, I8 v) { SerializerWrite(s, bufferof(v)); }
+void WriteI16(Serializer* s, I16 v) { SerializerWrite(s, bufferof(v)); }
+void WriteI32(Serializer* s, I32 v) { SerializerWrite(s, bufferof(v)); }
+void WriteI64(Serializer* s, I64 v) { SerializerWrite(s, bufferof(v)); }
+void WriteU8(Serializer* s, U8 v) { SerializerWrite(s, bufferof(v)); }
+void WriteU16(Serializer* s, U16 v) { SerializerWrite(s, bufferof(v)); }
+void WriteU32(Serializer* s, U32 v) { SerializerWrite(s, bufferof(v)); }
+void WriteU64(Serializer* s, U64 v) { SerializerWrite(s, bufferof(v)); }
+
+void WriteF32(Serializer* s, F32 v) { SerializerWrite(s, bufferof(v)); }
+void WriteF64(Serializer* s, F64 v) { SerializerWrite(s, bufferof(v)); }
+
+void WriteB8(Serializer* s, B32 v) { B8 v0 = (B8)v; SerializerWrite(s, bufferof(v0)); }
+
+void WriteString(Serializer* s, String v) {
+    WriteU32(s, (U32)v.size);
+    SerializerWrite(s, RBufferFromStr(v));
+}
+
+//- DESERIALIZER
+
+Deserializer* DeserializerAlloc(Arena* arena, RBuffer data)
+{
+    Deserializer* s = ArenaPushStruct<Deserializer>(arena);
+    s->data = data;
+    return s;
+}
+
+void* DeserializerRead(Deserializer* s, U64 bytes) {
+    if (s->failed) return NULL;
+    
+    if (s->cursor + bytes > s->data.size) {
+        DeserializerFailed(s);
+        return NULL;
+    }
+
+    void* res = s->data.data + s->cursor;
+    s->cursor += bytes;
+    return res;
+}
+
+void DeserializerFailed(Deserializer* s)
+{
+    s->failed = true;
+}
+
+U32 ReadVersionU32(Deserializer* s, U32 min, U32 max)
+{
+    if (s->failed) return 0;
+    U32 version = ReadU32(s);
+    if (version < min || version > max) {
+        DeserializerFailed(s);
+        return 0;
+    }
+    return version;
+}
+
+template<typename T>
+inline T _ReadFromDeserializer(Deserializer* s) {
+    T* res = (T*)DeserializerRead(s, sizeof(T));
+    if (res == NULL) return {};
+    return *res;
+}
+
+I8 ReadI8(Deserializer* s) { return _ReadFromDeserializer<I8>(s); }
+I16 ReadI16(Deserializer* s) { return _ReadFromDeserializer<I16>(s); }
+I32 ReadI32(Deserializer* s) { return _ReadFromDeserializer<I32>(s); }
+I64 ReadI64(Deserializer* s) { return _ReadFromDeserializer<I64>(s); }
+U8 ReadU8(Deserializer* s) { return _ReadFromDeserializer<U8>(s); }
+U16 ReadU16(Deserializer* s) { return _ReadFromDeserializer<U16>(s); }
+U32 ReadU32(Deserializer* s) { return _ReadFromDeserializer<U32>(s); }
+U64 ReadU64(Deserializer* s) { return _ReadFromDeserializer<U64>(s); }
+
+F32 ReadF32(Deserializer* s) { return _ReadFromDeserializer<F32>(s); }
+F64 ReadF64(Deserializer* s) { return _ReadFromDeserializer<F64>(s); }
+
+B8 ReadB8(Deserializer* s) { return _ReadFromDeserializer<B8>(s); }
+
+String ReadStringView(Deserializer* s) {
+    U32 size = ReadU32(s);
+    return StrMake((const char*)DeserializerRead(s, size), size);
+}
+
+String ReadString(Arena* arena, Deserializer* s) {
+    U32 size = ReadU32(s);
+    const char* str = (const char*)DeserializerRead(s, size);
+    if (str == NULL) return {};
+    return StrCopy(arena, StrMake(str, size));
+}
+
 //- LOCATION
 
 Location LocationMake(U64 start, U64 end, I32 script_id)
@@ -1662,6 +1842,22 @@ Location LocationMake(U64 start, U64 end, I32 script_id)
 
 B32 LocationIsValid(Location location) {
     return location.script_id >= 0;
+}
+
+void WriteLocation(Serializer* s, Location src)
+{
+    WriteI32(s, src.script_id);
+    WriteU64(s, src.range.min);
+    WriteU64(s, src.range.max);
+}
+
+Location ReadLocation(Deserializer* s)
+{
+    Location dst = {};
+    dst.script_id = ReadI32(s);
+    dst.range.min = ReadU64(s);
+    dst.range.max = ReadU64(s);
+    return dst;
 }
 
 //- REPORT 
@@ -1759,7 +1955,7 @@ Reporter* ReporterAlloc(Arena* arena)
     return reporter;
 }
 
-void ReportErrorEx(Reporter* reporter, Location location, U32 line, String path, String text, ...)
+void ReportEx(Reporter* reporter, ReportLevel level, Location location, U32 line, String path, String text, ...)
 {
     va_list args;
     va_start(args, text);
@@ -1767,17 +1963,24 @@ void ReportErrorEx(Reporter* reporter, Location location, U32 line, String path,
     va_end(args);
     
     Report report;
+    report.level = level;
     report.text = StrCopy(reporter->arena, formatted_text);
     report.location = location;
     report.line = line;
     report.path = StrCopy(reporter->arena, path);
     
     MutexLock(&reporter->mutex);
+    
+    report.index = reporter->reports.count;
     BArrayAdd(&reporter->reports, report);
-    reporter->exit_requested = true;
-    if (!reporter->exit_code_is_set) {
-        reporter->exit_code = -1;
+
+    if (level == ReportLevel_Error) {
+        reporter->exit_requested = true;
+        if (!reporter->exit_code_is_set) {
+            reporter->exit_code = -1;
+        }
     }
+
     PROFILE_LOG(formatted_text);
     MutexUnlock(&reporter->mutex);
 }
@@ -1797,7 +2000,10 @@ internal_fn I32 ReportCompare(const void* _0, const void* _1)
     const Report* r0 = (const Report*)_0;
     const Report* r1 = (const Report*)_1;
     
-    if (r0->location.range.min == r1->location.range.min) return 0;
+    if (r0->location.range.min == r1->location.range.min) {
+        return (r0->index < r1->index) ? -1 : 1;
+    }
+
     return (r0->location.range.min < r1->location.range.min) ? -1 : 1;
 }
 
@@ -1824,38 +2030,13 @@ String StringFromReport(Arena* arena, Report report)
 
 void PrintReport(Report report) {
     String str = StringFromReport(context.arena, report);
-    PrintEx(PrintLevel_ErrorReport, "%S\n", str);
-}
 
-internal_fn Array<ScriptArg> GenerateScriptArgs(Arena* arena, Reporter* reporter, Array<String> raw_args)
-{
-    Array<ScriptArg> args = ArrayAlloc<ScriptArg>(arena, raw_args.count);
-    
-    foreach(i, raw_args.count)
-    {
-        String raw = raw_args[i];
-        
-        Array<String> split = StrSplit(context.arena, raw, "=");
-        
-        ScriptArg arg{};
-        if (split.count == 1) {
-            arg.name = StrCopy(arena, split[0]);
-            arg.value = "";
-        }
-        else if (split.count == 2) {
-            arg.name = StrCopy(arena, split[0]);
-            arg.value = StrCopy(arena, split[1]);
-        }
-        else {
-            ReportErrorNoCode("Invalid arg '%S', expected format: name=value\n", raw);
-            arg.name = "?";
-            arg.value = "0";
-        }
-        
-        args[i] = arg;
-    }
-    
-    return args;
+    PrintLevel level = PrintLevel_ErrorReport;
+    if (report.level == ReportLevel_Info) level = PrintLevel_InfoReport;
+    else if (report.level == ReportLevel_Warning) level = PrintLevel_WarningReport;
+    else if (report.level == ReportLevel_Error) level = PrintLevel_ErrorReport;
+
+    PrintEx(level, "%S\n", str);
 }
 
 #include "autogenerated/help.h"
@@ -1908,26 +2089,1566 @@ Input* InputFromArgs(Arena* arena, Reporter* reporter)
         return input;
     }
     
-    Array<String> script_args_str = ArraySub(args, script_args_start_index, args.count - script_args_start_index);
-    input->script_args = GenerateScriptArgs(arena, reporter, script_args_str);
+    input->script_args = ArraySub(args, script_args_start_index, args.count - script_args_start_index);
+    input->script_args = StrArrayCopy(arena, input->script_args);
     
     input->main_script_path = PathResolveImport(arena, input->caller_dir, input->main_script_path);
-    
-    {
-        ScriptArg* help_arg = InputFindScriptArg(input, "-help");
-        
-        if (help_arg != NULL && !StrEquals(help_arg->value, "")) {
-            report_arg_wrong_value(help_arg->name, help_arg->value);
-        }
-    }
     
     return input;
 }
 
-ScriptArg* InputFindScriptArg(Input* input, String name) {
+I32 InputFindScriptArg(Input* input, String name) {
     foreach(i, input->script_args.count) {
-        ScriptArg* arg = &input->script_args[i];
-        if (StrEquals(arg->name, name)) return arg;
+        String arg = input->script_args[i];
+        if (StrEquals(arg, name)) return i;
     }
-    return NULL;
+    return -1;
 }
+
+String StringFromPrimitive(PrimitiveType type)
+{
+    switch (type)
+    {
+        case PrimitiveType_Int: return "Int";
+        case PrimitiveType_UInt: return "UInt";
+        case PrimitiveType_Bool: return "Bool";
+        case PrimitiveType_Float: return "Float";
+        case PrimitiveType_String: return "String";
+        case PrimitiveType_Type: return "Type";
+    }
+    
+    InvalidCodepath();
+    return "?";
+}
+
+TypeChild TypeChildMake(Type* type, String name, I32 index, B32 is_property) {
+    TypeChild res = {};
+    res.type = type;
+    res.name = name;
+    res.index = index;
+    res.is_property = is_property;
+    return res;
+}
+
+TypeChild TypeChildCopy(Arena* arena, TypeChild src) {
+    TypeChild dst = src;
+    dst.name = StrCopy(arena, src.name);
+    return dst;
+}
+
+
+inline_fn Type _MakeSpecialType(const char* name, VKind kind, U32 id) {
+    Type type = {};
+    type.name = name;
+    type.kind = kind;
+    type.id = id;
+    return type;
+}
+
+inline_fn Type _MakePrimitive(const char* name, PrimitiveType primitive, U32 id) {
+    Type type = {};
+    type.name = name;
+    type.kind = VKind_Primitive;
+    type.primitive = primitive;
+    type.id = id;
+    return type;
+}
+
+
+read_only Type _nil_type = _MakeSpecialType("Nil", VKind_Nil, 0);
+read_only Type _void_type = _MakeSpecialType("void", VKind_Void, 1);
+read_only Type _any_type = _MakeSpecialType("Any", VKind_Any, 2);
+
+read_only Type _int_type = _MakePrimitive("Int", PrimitiveType_Int, 3);
+read_only Type _uint_type = _MakePrimitive("UInt", PrimitiveType_UInt, 4);
+read_only Type _bool_type = _MakePrimitive("Bool", PrimitiveType_Bool, 5);
+read_only Type _float_type = _MakePrimitive("Float", PrimitiveType_Float, 6);
+read_only Type _string_type = _MakePrimitive("String", PrimitiveType_String, 7);
+read_only Type _type_type = _MakePrimitive("Type", PrimitiveType_Type, 8);
+
+#define TYPE_ID_BASE 8
+
+Type* nil_type = &_nil_type;
+Type* void_type = &_void_type;
+Type* any_type = &_any_type;
+
+Type* int_type = &_int_type;
+Type* uint_type = &_uint_type;
+Type* bool_type = &_bool_type;
+Type* float_type = &_float_type;
+Type* string_type = &_string_type;
+Type* type_type = &_type_type;
+
+TypeSystem* TypeSystemAlloc(Arena* arena)
+{
+    TypeSystem* tsys = ArenaPushStruct<TypeSystem>(arena);
+    tsys->arena = arena;
+    tsys->types = BArrayMake<Type>(arena, 128);
+    return tsys;
+}
+
+B32 TypeIsValid(Type* type) {
+    return type->kind > VKind_Any;
+}
+
+Type* TypeGetNext(TypeSystem* tsys, Type* type)
+{
+    PROFILE_FUNCTION;
+    
+    if (type->kind == VKind_Array || type->kind == VKind_List) {
+        return TypeGet(type->element_type_id);
+    }
+    
+    if (type->kind == VKind_Reference) {
+        return TypeGet(type->reference_next_id);
+    }
+    
+    return nil_type;
+}
+
+Type* TypeGetBase(TypeSystem* tsys, Type* type)
+{
+    PROFILE_FUNCTION;
+    
+    Type* next = type;
+    while (next != nil_type) {
+        type = next;
+        next = TypeGetNext(tsys, next);
+    }
+    
+    return type;
+}
+
+U32 TypeGetLastID(TypeSystem* tsys)
+{
+    MutexLockGuard(&tsys->types_mutex);
+    return tsys->types.count + TYPE_ID_BASE;
+}
+
+internal_fn Type* AllocType(TypeSystem* tsys, VKind kind)
+{
+    Assert(MutexIsLocked(&tsys->types_mutex));
+    Type* type = BArrayAdd(&tsys->types);
+    type->kind = kind;
+    type->id = tsys->types.count + TYPE_ID_BASE;
+    return type;
+}
+
+Type* TypeAddStruct(TypeSystem* tsys, String name, U32 definition_index)
+{
+    Assert(TypeFromName(tsys, name) != NULL);
+    
+    MutexLockGuard(&tsys->types_mutex);
+
+    Type* type = AllocType(tsys, VKind_Struct);
+    type->name = StrCopy(tsys->arena, name);
+    type->definition_index = definition_index;
+    return type;
+}
+
+Type* TypeAddEnum(TypeSystem* tsys, String name, U32 definition_index)
+{
+    Assert(TypeFromName(tsys, name) != NULL);
+
+    MutexLockGuard(&tsys->types_mutex);
+
+    Type* type = AllocType(tsys, VKind_Enum);
+    type->name = StrCopy(tsys->arena, name);
+    type->definition_index = definition_index;
+    return type;
+}
+
+Type* TypeFromID(TypeSystem* tsys, U32 ID)
+{
+    switch (ID)
+    {
+    case 0: return nil_type;
+    case 1: return void_type;
+    case 2: return any_type;
+    case 3: return int_type;
+    case 4: return uint_type;
+    case 5: return bool_type;
+    case 6: return float_type;
+    case 7: return string_type;
+    case 8: return type_type;
+    }
+
+    U32 index = ID - (TYPE_ID_BASE + 1);
+
+    MutexLockGuard(&tsys->types_mutex);
+
+    if (index >= tsys->types.count) return nil_type;
+    return &tsys->types[index];
+}
+
+Type* TypeFromName(TypeSystem* tsys, String name)
+{
+    if (name == "Any") return any_type;
+    if (name == "void") return void_type;
+    if (name == "Int") return int_type;
+    if (name == "UInt") return uint_type;
+    if (name == "Bool") return bool_type;
+    if (name == "Float") return float_type;
+    if (name == "String") return string_type;
+    if (name == "Type") return type_type;
+    
+    MutexLockGuard(&tsys->types_mutex);
+    
+    foreach_BArray(it, &tsys->types) {
+        Type* t = it.value;
+        if (t->name == name) {
+            return t;
+        }
+    }
+    return nil_type;
+}
+
+Type* TypeFromArray(TypeSystem* tsys, Type* element, U32 dimension)
+{
+    MutexLockGuard(&tsys->types_mutex);
+    
+    Type* type = element;
+    
+    while (dimension > 0)
+    {
+        element = type;
+        
+        foreach_BArray(it, &tsys->types)
+        {
+            Type* t = it.value;
+            
+            if (t->kind == VKind_Array && t->element_type_id == element->id) {
+                return t;
+            }
+        }
+        
+        type = AllocType(tsys, VKind_Array);
+        type->name = StrFormat(tsys->arena, "Array[%S]", element->name);
+        type->element_type_id = element->id;
+        
+        dimension--;
+    }
+    
+    return type;
+}
+
+Type* TypeFromList(TypeSystem* tsys, Type* element, U32 dimension)
+{
+    MutexLockGuard(&tsys->types_mutex);
+    
+    Type* type = element;
+    
+    while (dimension > 0)
+    {
+        element = type;
+        
+        foreach_BArray(it, &tsys->types)
+        {
+            Type* t = it.value;
+            
+            if (t->kind == VKind_List && t->element_type_id == element->id) {
+                return t;
+            }
+        }
+        
+        type = AllocType(tsys, VKind_List);
+        type->name = StrFormat(tsys->arena, "List[%S]", element->name);
+        type->element_type_id = element->id;
+        
+        dimension--;
+    }
+    
+    return type;
+}
+
+Type* TypeFromReference(TypeSystem* tsys, Type* base_type)
+{
+    MutexLockGuard(&tsys->types_mutex);
+    
+    foreach_BArray(it, &tsys->types)
+    {
+        Type* t = it.value;
+        
+        if (t->kind == VKind_Reference && t->reference_next_id == base_type->id) {
+            return t;
+        }
+    }
+    
+    Type* type = AllocType(tsys, VKind_Reference);
+    type->name = StrFormat(tsys->arena, "%S&", base_type->name);
+    type->reference_next_id = base_type->id;
+    return type;
+}
+
+Type* TypeFromPrimitive(PrimitiveType primitive)
+{
+    switch (primitive) {
+        case PrimitiveType_Int: return int_type;
+        case PrimitiveType_UInt: return uint_type;
+        case PrimitiveType_Bool: return bool_type;
+        case PrimitiveType_Float: return float_type;
+        case PrimitiveType_String: return string_type;
+        case PrimitiveType_Type: return type_type;
+    }
+    
+    return nil_type;
+}
+
+Type* TypeFromStruct(TypeSystem* tsys, U32 definition_index)
+{
+    MutexLockGuard(&tsys->types_mutex);
+    
+    foreach_BArray(it, &tsys->types)
+    {
+        Type* t = it.value;
+        
+        if (t->kind == VKind_Struct && t->definition_index == definition_index) {
+            return t;
+        }
+    }
+    
+    return nil_type;
+}
+
+Type* TypeFromEnum(TypeSystem* tsys, U32 definition_index)
+{
+    MutexLockGuard(&tsys->types_mutex);
+    
+    foreach_BArray(it, &tsys->types)
+    {
+        Type* t = it.value;
+        
+        if (t->kind == VKind_Enum && t->definition_index == definition_index) {
+            return t;
+        }
+    }
+    
+    return nil_type;
+}
+
+B32 TypeIsEnum(Type* type) { return type->kind == VKind_Enum; }
+B32 TypeIsArray(Type* type) { return type->kind == VKind_Array; }
+B32 TypeIsList(Type* type) { return type->kind == VKind_List; }
+B32 TypeIsStruct(Type* type) { return type->kind == VKind_Struct; }
+B32 TypeIsReference(Type* type) { return type->kind == VKind_Reference; }
+B32 TypeIsAnyInt(Type* type) { return type == int_type || type == uint_type; }
+
+U32 RegIndexFromGlobal(U32 global_index) {
+    return global_index | Bit(30);
+}
+
+U32 RegIndexFromLocal(U32 local_index) {
+    return local_index;
+}
+
+I32 LocalFromRegIndex(I32 register_index)
+{
+    if (register_index & Bit(30)) return -1;
+    return register_index;
+}
+
+I32 GlobalFromRegIndex(I32 register_index)
+{
+    if (!(register_index & Bit(30))) return -1;
+    return register_index & 0xBFFFFFFF;
+}
+
+TypeChild string_properties[] = {
+    TypeChildMake(uint_type, "size", 0, true)
+};
+
+TypeChild array_properties[] = {
+    TypeChildMake(uint_type, "count", 0, true)
+};
+
+TypeChild enum_properties[] = {
+    TypeChildMake(int_type, "index", 0, true),
+    TypeChildMake(int_type, "value", 1, true),
+    TypeChildMake(string_type, "name", 2, true),
+};
+
+TypeChild type_properties[] = {
+    TypeChildMake(string_type, "name", 0, true),
+};
+
+Array<TypeChild> TypeGetProperties(Type* type)
+{
+    if (type == string_type) {
+        return arrayof(string_properties);
+    }
+
+    if (type == type_type) {
+        return arrayof(type_properties);
+    }
+    
+    if (TypeIsArray(type)) {
+        return arrayof(array_properties);
+    }
+    
+    if (TypeIsEnum(type)) {
+        return arrayof(enum_properties);
+    }
+    
+    return {};
+}
+
+TypeChild TypeGetProperty(Type* type, String property)
+{
+    Array<TypeChild> props = TypeGetProperties(type);
+    foreach(i, props.count) {
+        if (props[i].name == property) return props[i];
+    }
+    return TypeChildMake(nil_type, "", -1, true);
+}
+
+TypeChild TypeGetPropertyAt(Type* type, U32 index)
+{
+    Array<TypeChild> props = TypeGetProperties(type);
+    if (index < props.count) return props[index];
+    return TypeChildMake(nil_type, "", -1, true);
+}
+
+void WriteType(TypeSystem* tsys, Serializer* s, Type src)
+{
+    WriteU32(s, 0); // VERSION
+    
+    WriteU8(s, (U8)src.kind);
+
+    WriteU32(s, src.id);
+    WriteString(s, src.name);
+    
+    switch (src.kind)
+    {
+    case VKind_Primitive:
+    WriteU8(s, (U8)src.primitive);
+    break;
+
+    case VKind_Struct:
+    case VKind_Enum:
+    WriteU32(s, src.definition_index);
+    break;
+
+    case VKind_Reference:
+    {
+        WriteU32(s, src.reference_next_id);
+        break;
+    }
+
+    case VKind_Array:
+    case VKind_List:
+    {
+        WriteU32(s, src.element_type_id);
+        break;
+    }
+
+    case VKind_Nil:
+    case VKind_Void:
+    case VKind_Any:
+    break;
+    }
+}
+
+Type* ReadType(TypeSystem* tsys, Deserializer* s)
+{
+    U32 version = ReadVersionU32(s, 0, 0);
+
+    VKind kind = (VKind)ReadU8(s);
+
+    MutexLockGuard(&tsys->types_mutex);
+
+    Type* type = AllocType(tsys, kind);
+
+    if (type->id != ReadU32(s)) {
+        DeserializerFailed(s);
+        return nil_type;
+    }
+
+    type->name = ReadString(tsys->arena, s);
+
+    switch (kind)
+    {
+    case VKind_Primitive:
+    {
+        type->primitive = (PrimitiveType)ReadU8(s);
+        break;
+    }
+
+    case VKind_Struct:
+    case VKind_Enum:
+    {
+        type->definition_index = ReadU32(s);
+        break;
+    }
+    
+    case VKind_Reference:
+    {
+        type->reference_next_id = ReadU32(s);
+        break;
+    }
+
+    case VKind_Array:
+    case VKind_List:
+    {
+        type->element_type_id = ReadU32(s);
+        break;
+    }
+
+    case VKind_Nil:
+    case VKind_Void:
+    case VKind_Any:
+    break;
+
+    }
+
+    return type;
+}
+
+//- VALUES
+
+B32 ValueIsCompiletime(Value value)
+{
+    if (value.kind == ValueKind_Array)
+    {
+        foreach(i, value.array.values.count) {
+            if (!ValueIsCompiletime(value.array.values[i])) return false;
+        }
+        return true;
+    }
+    
+    return value.kind == ValueKind_Literal || value.kind == ValueKind_ZeroInit || value.kind == ValueKind_None;
+}
+
+I32 ValueGetRegister(Value value) {
+    if (value.kind != ValueKind_LValue && value.kind != ValueKind_Register) return -1;
+    return value.reg.index;
+}
+
+B32 ValueIsRValue(Value value) { return value.kind != ValueKind_None && value.kind != ValueKind_LValue; }
+
+B32 ValueIsNull(Value value) {
+    return value.kind == ValueKind_Literal && value.type_id == void_type->id;
+}
+
+B32 ValueEquals(Value v0, Value v1)
+{
+    if (v0.kind != v1.kind) return false;
+    
+    if (v0.kind == ValueKind_LValue || v0.kind == ValueKind_Register) {
+        return v0.reg.index == v1.reg.index && v0.reg.reference_op == v1.reg.reference_op;
+    }
+    
+    return false;
+}
+
+Value ValueCopy(Arena* arena, Value src)
+{
+    Value dst = src;
+    
+    if (src.kind == ValueKind_Literal && src.type_id == string_type->id) {
+        dst.literal_string = StrCopy(arena, src.literal_string);
+    }
+    else if (src.kind == ValueKind_Array) {
+        dst.array.values = ValueArrayCopy(arena, src.array.values);
+    }
+    else if (src.kind == ValueKind_StringComposition) {
+        dst.string_composition = ValueArrayCopy(arena, src.string_composition);
+    }
+    else if (src.kind == ValueKind_MultipleReturn) {
+        dst.multiple_return = ValueArrayCopy(arena, src.multiple_return);
+    }
+    
+    return dst;
+}
+
+Array<Value> ValueArrayCopy(Arena* arena, Array<Value> src)
+{
+    Array<Value> dst = ArrayAlloc<Value>(arena, src.count);
+    foreach(i, dst.count) {
+        dst[i] = ValueCopy(arena, src[i]);
+    }
+    return dst;
+}
+
+Value ValueNone() {
+    Value v{};
+    v.type_id = void_type->id;
+    v.reg.index = -1;
+    return v;
+}
+
+Value ValueNull() {
+    Value v{};
+    v.type_id = void_type->id;
+    v.kind = ValueKind_Literal;
+    return v;
+}
+
+Value ValueFromRegister(I32 index, U32 type_id, B32 is_lvalue) {
+    Assert(index >= 0);
+    Value v{};
+    v.type_id = type_id;
+    v.reg.index = index;
+    v.reg.reference_op = 0;
+    v.kind = is_lvalue ? ValueKind_LValue : ValueKind_Register;
+    return v;
+}
+
+Value ValueFromReference(TypeSystem* tsys, Value value)
+{
+    Assert(value.kind == ValueKind_LValue || value.kind == ValueKind_Register);
+    Assert(value.reg.reference_op <= 0);
+    
+    Value v{};
+    v.type_id = TypeFromReference(tsys, TypeFromID(tsys, value.type_id))->id;
+    v.reg.index = value.reg.index;
+    v.reg.reference_op = value.reg.reference_op + 1;
+    v.kind = value.kind;
+    return v;
+}
+
+Value ValueFromDereference(TypeSystem* tsys, Value value)
+{
+    Type* type = TypeFromID(tsys, value.type_id);
+
+    Assert(value.kind == ValueKind_LValue || value.kind == ValueKind_Register);
+    Assert(type->kind == VKind_Reference);
+    
+    Value v{};
+    v.type_id = TypeGetNext(tsys, type)->id;
+    v.reg.index = value.reg.index;
+    v.reg.reference_op = value.reg.reference_op - 1;
+    v.kind = value.kind;
+    return v;
+}
+
+Value ValueFromInt(I64 value) {
+    Value v{};
+    v.type_id = int_type->id;
+    v.kind = ValueKind_Literal;
+    v.literal_sint = value;
+    return v;
+}
+
+Value ValueFromUInt(U64 value) {
+    Value v{};
+    v.type_id = uint_type->id;
+    v.kind = ValueKind_Literal;
+    v.literal_uint = value;
+    return v;
+}
+
+Value ValueFromBool(B32 value) {
+    Value v{};
+    v.type_id = bool_type->id;
+    v.kind = ValueKind_Literal;
+    v.literal_bool = value;
+    return v;
+}
+
+Value ValueFromFloat(F64 value) {
+    Value v{};
+    v.type_id = float_type->id;
+    v.kind = ValueKind_Literal;
+    v.literal_float = value;
+    return v;
+}
+
+Value ValueFromEnum(Type* type, I64 value) {
+    Value v{};
+    v.type_id = type->id;
+    v.kind = ValueKind_Literal;
+    v.literal_sint = value;
+    return v;
+}
+
+Value ValueFromString(Arena* arena, String value) {
+    Value v{};
+    v.type_id = string_type->id;
+    v.kind = ValueKind_Literal;
+    v.literal_string = StrCopy(arena, value);
+    return v;
+}
+
+Value ValueFromStringArray(Arena* arena, Array<Value> values)
+{
+    BArray<Value> composition = BArrayMake<Value>(context.arena, 8);
+    StringBuilder builder = string_builder_make(context.arena);
+
+    foreach(i, values.count)
+    {
+        Value value = values[i];
+
+        String ct_str;
+        if (StringFromCompiletime(context.arena, &ct_str, value)) {
+            append(&builder, ct_str);
+        }
+        else
+        {
+            String literal = string_from_builder(context.arena, &builder);
+            if (literal.size > 0) {
+                builder = string_builder_make(context.arena);
+                BArrayAdd(&composition, ValueFromString(arena, literal));
+            }
+            
+            BArrayAdd(&composition, value);
+        }
+    }
+
+    if (composition.count == 0) {
+        return ValueFromString(arena, string_from_builder(context.arena, &builder));
+    }
+
+    String literal = string_from_builder(context.arena, &builder);
+    if (literal.size > 0) {
+        BArrayAdd(&composition, ValueFromString(arena, literal));
+    }
+
+    Value v{};
+    v.type_id = string_type->id;
+    v.kind = ValueKind_StringComposition;
+    v.string_composition = ArrayCopy(arena, ArrayFromBArray(context.arena, composition));
+    return v;
+}
+
+Value ValueFromType(Type* type) {
+    Value v{};
+    v.type_id = type_type->id;
+    v.kind = ValueKind_Literal;
+    v.literal_type_id = type->id;
+    return v;
+}
+
+Value ValueFromArray(Arena* arena, Type* array_type, Array<Value> elements)
+{
+    Assert(array_type->kind == VKind_Array);
+    Value v{};
+    v.type_id = array_type->id;
+    v.kind = ValueKind_Array;
+    v.array.values = ArrayCopy(arena, elements);
+    return v;
+}
+
+Value ValueFromZero(Type* type)
+{
+    if (type == int_type) {
+        return ValueFromInt(0);
+    }
+    if (type == uint_type) {
+        return ValueFromUInt(0);
+    }
+    if (type == bool_type) {
+        return ValueFromBool(false);
+    }
+    if (type == float_type) {
+        return ValueFromFloat(0.0);
+    }
+    
+    if (type == any_type) {
+        return ValueNull();
+    }
+    
+    Value v{};
+    v.type_id = type->id;
+    v.kind = ValueKind_ZeroInit;
+    return v;
+}
+
+Value ValueFromGlobal(U32 type_id, U32 global_index)
+{
+    I32 register_index = RegIndexFromGlobal(global_index);
+    return ValueFromRegister(register_index, type_id, true);
+}
+
+Value ValueFromReturn(Arena* arena, Array<Value> values)
+{
+    if (values.count == 0) return ValueNone();
+    if (values.count == 1) return values[0];
+    
+    Value v{};
+    v.type_id = any_type->id;
+    v.kind = ValueKind_MultipleReturn;
+    v.multiple_return = ArrayCopy(arena, values);
+    return v;
+}
+
+Array<Value> ValuesFromReturn(Arena* arena, Value value, B32 empty_on_void)
+{
+    if (value.kind == ValueKind_MultipleReturn) return value.multiple_return;
+    
+    if (value.kind == ValueKind_None) {
+        return {};
+    }
+    
+    Array<Value> values = ArrayAlloc<Value>(arena, 1);
+    values[0] = value;
+    return values;
+}
+
+B32 StringFromCompiletime(Arena* arena, String* dst, Value value)
+{
+    *dst = {};
+
+    if (!ValueIsCompiletime(value)) {
+        return false;
+    }
+    
+    if (value.type_id == string_type->id) {
+        if (value.kind == ValueKind_Literal) {
+            *dst = StrCopy(arena, value.literal_string);
+            return true;
+        }
+        
+        if (value.kind == ValueKind_ZeroInit) {
+            *dst = {};
+            return true;
+        }
+    }
+
+    if (value.type_id == int_type->id) {
+        *dst = StrFromI64(arena, value.literal_sint);
+        return true;
+    }
+
+    if (value.type_id == uint_type->id) {
+        *dst = StrFromU64(arena, value.literal_uint);
+        return true;
+    }
+
+    if (value.type_id == float_type->id) {
+        *dst = StrFromF64(arena, value.literal_float, 8);
+        return true;
+    }
+
+    if (value.type_id == bool_type->id) {
+        *dst = value.literal_bool ? "true" : "false";
+        return true;
+    }
+
+    return false;
+}
+
+B32 B32FromCompiletime(Value value)
+{
+    if (!ValueIsCompiletime(value)) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    if (value.type_id != bool_type->id) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    if (value.kind == ValueKind_Literal) {
+        return value.literal_bool;
+    }
+    
+    if (value.kind == ValueKind_ZeroInit) {
+        return false;
+    }
+    
+    InvalidCodepath();
+    return false;
+}
+
+Type* TypeFromCompiletime(TypeSystem* tsys, Value value)
+{
+    if (!ValueIsCompiletime(value)) {
+        InvalidCodepath();
+        return void_type;
+    }
+
+    Type* type = TypeFromID(tsys, value.type_id);
+    
+    if (type != type_type) {
+        InvalidCodepath();
+        return void_type;
+    }
+    
+    if (value.kind == ValueKind_Literal) {
+        return TypeFromID(tsys, value.literal_type_id);
+    }
+    
+    if (value.kind == ValueKind_ZeroInit) {
+        return void_type;
+    }
+    
+    InvalidCodepath();
+    return void_type;
+}
+
+B32 CompiletimeEquals(TypeSystem* tsys, Value v0, Value v1)
+{
+    if (!ValueIsCompiletime(v0) || !ValueIsCompiletime(v1)) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    if (v0.type_id != v1.type_id) {
+        InvalidCodepath();
+        return false;
+    }
+    
+    Type* type = TypeFromID(tsys, v0.type_id);
+    
+    if (type == int_type) {
+        return v0.literal_sint == v1.literal_sint;
+    }
+    if (type == uint_type) {
+        return v0.literal_uint == v1.literal_uint;
+    }
+    if (type == bool_type) {
+        return v0.literal_bool == v1.literal_bool;
+    }
+    if (type == float_type) {
+        return v0.literal_float == v1.literal_float;
+    }
+    if (type == string_type) {
+        return v0.literal_string == v1.literal_string;
+    }
+    if (TypeIsEnum(type)) {
+        return v0.literal_sint == v1.literal_sint;
+    }
+    if (type == type_type) {
+        return v0.literal_type_id == v1.literal_type_id;
+    }
+    
+    InvalidCodepath();
+    return false;
+}
+
+void WriteValue(Serializer* s, Value src)
+{
+    WriteU32(s, 0); // VERSION
+
+    WriteU8(s, (U8)src.kind);
+    WriteU32(s, src.type_id);
+
+    switch (src.kind)
+    {
+    
+    case ValueKind_LValue:
+    case ValueKind_Register:
+    {
+        WriteI32(s, src.reg.index);
+        WriteI32(s, src.reg.reference_op);
+        break;
+    }
+
+    case ValueKind_StringComposition:
+    {
+        WriteArray(s, src.string_composition, WriteValue);
+        break;
+    }
+
+    case ValueKind_Array:
+    {
+        WriteArray(s, src.array.values, WriteValue);
+        break;
+    }
+
+    case ValueKind_MultipleReturn:
+    {
+        WriteArray(s, src.multiple_return, WriteValue);
+        break;
+    }
+
+    case ValueKind_Literal:
+    {
+        if (src.type_id == int_type->id) WriteI64(s, src.literal_sint);
+        else if (src.type_id == uint_type->id) WriteU64(s, src.literal_uint);
+        else if (src.type_id == bool_type->id) WriteB8(s, src.literal_bool);
+        else if (src.type_id == float_type->id) WriteF64(s, src.literal_float);
+        else if (src.type_id == string_type->id) WriteString(s, src.literal_string);
+        else if (src.type_id == type_type->id) WriteU32(s, src.literal_type_id);
+        else if (src.type_id == void_type->id) {}
+        else WriteI64(s, src.literal_sint);
+        break;
+    }
+
+    case ValueKind_None:
+    case ValueKind_ZeroInit:
+    break;
+
+    case ValueKind_count: break;
+    }
+}
+
+Value ReadValue(Arena* arena, Deserializer* s)
+{
+    U32 version = ReadVersionU32(s, 0, 0);
+
+    Value dst = {};
+
+    dst.kind = (ValueKind)ReadU8(s);
+
+    if (dst.kind >= ValueKind_count) {
+        DeserializerFailed(s);
+        return {};
+    }
+
+    dst.type_id = ReadU32(s);
+
+    switch (dst.kind)
+    {
+    
+    case ValueKind_LValue:
+    case ValueKind_Register:
+    {
+        dst.reg.index = ReadI32(s);
+        dst.reg.reference_op = ReadI32(s);
+        break;
+    }
+
+    case ValueKind_StringComposition:
+    {
+        dst.string_composition = ReadArrayArena<Value>(arena, s, ReadValue);
+        break;
+    }
+
+    case ValueKind_Array:
+    {
+        dst.array.values = ReadArrayArena<Value>(arena, s, ReadValue);
+        break;
+    }
+
+    case ValueKind_MultipleReturn:
+    {
+        dst.multiple_return = ReadArrayArena<Value>(arena, s, ReadValue);
+        break;
+    }
+
+    case ValueKind_Literal:
+    {
+        if (dst.type_id == int_type->id) dst.literal_sint = ReadI64(s);
+        else if (dst.type_id == uint_type->id) dst.literal_uint = ReadU64(s);
+        else if (dst.type_id == bool_type->id) dst.literal_bool = ReadB8(s);
+        else if (dst.type_id == float_type->id) dst.literal_float = ReadF64(s);
+        else if (dst.type_id == string_type->id) dst.literal_string = ReadString(arena, s);
+        else if (dst.type_id == type_type->id) dst.literal_type_id = ReadU32(s);
+        else if (dst.type_id == void_type->id) {}
+        else dst.literal_sint = ReadI64(s);
+        break;
+    }
+
+    case ValueKind_None:
+    case ValueKind_ZeroInit:
+    break;
+
+    case ValueKind_count: break;
+    }
+
+    return dst;
+}
+
+//- UNIT
+
+String StringFromOperatorKind(OperatorKind op) {
+    if (op == OperatorKind_Addition) return "+";
+    if (op == OperatorKind_Substraction) return "-";
+    if (op == OperatorKind_Multiplication) return "*";
+    if (op == OperatorKind_Division) return "/";
+    if (op == OperatorKind_Modulo) return "%";
+    if (op == OperatorKind_LogicalNot) return "!";
+    if (op == OperatorKind_LogicalOr) return "||";
+    if (op == OperatorKind_LogicalAnd) return "&&";
+    if (op == OperatorKind_Equals) return "==";
+    if (op == OperatorKind_NotEquals) return "!=";
+    if (op == OperatorKind_LessThan) return "<";
+    if (op == OperatorKind_LessEqualsThan) return "<=";
+    if (op == OperatorKind_GreaterThan) return ">";
+    if (op == OperatorKind_GreaterEqualsThan) return ">=";
+    if (op == OperatorKind_Is) return "is";
+    Assert(0);
+    return "?";
+}
+
+B32 OperatorKindIsArithmetic(OperatorKind op) {
+    if (op == OperatorKind_Addition) return true;
+    if (op == OperatorKind_Substraction) return true;
+    if (op == OperatorKind_Multiplication) return true;
+    if (op == OperatorKind_Division) return true;
+    if (op == OperatorKind_Modulo) return true;
+    return false;
+}
+
+B32 OperatorKindIsComparison(OperatorKind op) {
+    if (op == OperatorKind_Equals) return true;
+    if (op == OperatorKind_NotEquals) return true;
+    if (op == OperatorKind_LessThan) return true;
+    if (op == OperatorKind_GreaterThan) return true;
+    if (op == OperatorKind_LessEqualsThan) return true;
+    if (op == OperatorKind_GreaterEqualsThan) return true;
+    if (op == OperatorKind_LogicalAnd) return true;
+    if (op == OperatorKind_LogicalOr) return true;
+    if (op == OperatorKind_LogicalNot) return true;
+    return false;
+}
+
+String StringFromUnitKind(Arena* arena, UnitKind unit)
+{
+    switch (unit)
+    {
+        case UnitKind_Error: return "error";
+        case UnitKind_Copy: return "copy";
+        case UnitKind_Store: return "store";
+        case UnitKind_FunctionCall: return "call";
+        case UnitKind_Return: return "return";
+        case UnitKind_Jump: return "jump";
+        case UnitKind_Child: return "child";
+        case UnitKind_ResultEval: return "eval";
+        case UnitKind_Empty: return "empty";
+        case UnitKind_Add: return "add";
+        case UnitKind_Sub: return "sub";
+        case UnitKind_Mul: return "mul";
+        case UnitKind_Div: return "div";
+        case UnitKind_Mod: return "mod";
+        
+        case UnitKind_Eql: return "eql";
+        
+        case UnitKind_Neq: return "neq";
+        case UnitKind_Gtr: return "gtr";
+        case UnitKind_Lss: return "lss";
+        case UnitKind_Geq: return "geq";
+        case UnitKind_Leq: return "leq";
+        
+        case UnitKind_Or: return "or";
+        case UnitKind_And: return "and";
+        case UnitKind_Not: return "not";
+        case UnitKind_Neg: return "neg";
+        
+        case UnitKind_Cast: return "cast";
+        case UnitKind_BitCast: return "bcast";
+        
+        case UnitKind_Is: return "is";
+
+        case UnitKind_count: break;
+    }
+    
+    InvalidCodepath();
+    return "?";
+}
+
+Unit UnitCopy(Arena* arena, Unit src)
+{
+    if (src.kind == UnitKind_Error || src.kind == UnitKind_Empty) return {};
+    
+    UnitKind kind = src.kind;
+
+    Unit dst = {};
+    dst.kind = kind;
+    dst.dst_index = src.dst_index;
+    dst.src0 = ValueCopy(arena, src.src0);
+    dst.src1 = ValueCopy(arena, src.src1);
+    dst.op_dst_type = src.op_dst_type;
+    
+    if (kind == UnitKind_FunctionCall) {
+        dst.function_call.header_index = src.function_call.header_index;
+        dst.function_call.parameters = ValueArrayCopy(arena, src.function_call.parameters);
+    }
+    else if (kind == UnitKind_Jump) {
+        dst.jump.condition = src.jump.condition;
+        dst.jump.offset = src.jump.offset;
+    }
+    else if (kind == UnitKind_Child) {
+        dst.child.child_is_property = src.child.child_is_property;
+    }
+    
+    return dst;
+}
+
+void WriteUnit(Serializer* s, Unit src)
+{
+    WriteU32(s, 0); // VERSION
+
+    WriteU8(s, (U8)src.kind);
+    WriteI32(s, src.dst_index);
+
+    switch (src.kind)
+    {
+    case UnitKind_Copy:
+    case UnitKind_Store:
+    {
+        WriteValue(s, src.src0);
+        break;
+    }
+
+    case UnitKind_FunctionCall:
+    {
+        WriteU32(s, src.function_call.header_index);
+        WriteArray(s, src.function_call.parameters, WriteValue);
+        break;
+    }
+
+    case UnitKind_Jump:
+    {
+        WriteValue(s, src.src0);
+        WriteI32(s, src.jump.condition);
+        WriteI32(s, src.jump.offset);
+        break;
+    }
+
+    case UnitKind_Child:
+    {
+        WriteValue(s, src.src0);
+        WriteValue(s, src.src1);
+        WriteB8(s, src.child.child_is_property);
+        break;
+    }
+
+    case UnitKind_ResultEval:
+    {
+        WriteValue(s, src.src0);
+        break;
+    }
+
+    case UnitKind_Add:
+    case UnitKind_Sub:
+    case UnitKind_Mul:
+    case UnitKind_Div:
+    case UnitKind_Mod:
+    case UnitKind_Eql:
+    case UnitKind_Neq:
+    case UnitKind_Gtr:
+    case UnitKind_Lss:
+    case UnitKind_Geq:
+    case UnitKind_Leq:
+    case UnitKind_Or:
+    case UnitKind_And:
+    {
+        WriteValue(s, src.src0);
+        WriteValue(s, src.src1);
+        WriteU8(s, (U8)src.op_dst_type);
+        break;
+    }
+
+    case UnitKind_Not:
+    case UnitKind_Neg:
+    case UnitKind_Cast:
+    case UnitKind_BitCast:
+    {
+        WriteValue(s, src.src0);
+        WriteU8(s, (U8)src.op_dst_type);
+        break;
+    }
+
+    case UnitKind_Is:
+    {
+        WriteValue(s, src.src0);
+        WriteValue(s, src.src1);
+        break;
+    }
+
+    case UnitKind_Return:
+    break;
+
+    case UnitKind_Error:
+    case UnitKind_Empty:
+    break;
+
+    case UnitKind_count: break;
+    }
+
+    WriteU32(s, src.line);
+}
+
+Unit ReadUnit(Arena* arena, Deserializer* s)
+{
+    U32 version = ReadVersionU32(s, 0, 0);
+
+    Unit dst = {};
+
+    dst.kind = (UnitKind)ReadU8(s);
+
+    if (dst.kind >= UnitKind_count) {
+        DeserializerFailed(s);
+        return {};
+    }
+
+    dst.dst_index = ReadI32(s);
+
+    switch (dst.kind)
+    {
+    case UnitKind_Copy:
+    case UnitKind_Store:
+    {
+        dst.src0 = ReadValue(arena, s);
+        break;
+    }
+
+    case UnitKind_FunctionCall:
+    {
+        dst.function_call.header_index = ReadU32(s);
+        dst.function_call.parameters = ReadArrayArena<Value>(arena, s, ReadValue);
+        break;
+    }
+
+    case UnitKind_Jump:
+    {
+        dst.src0 = ReadValue(arena, s);
+        dst.jump.condition = ReadI32(s);
+        dst.jump.offset = ReadI32(s);
+        break;
+    }
+
+    case UnitKind_Child:
+    {
+        dst.src0 = ReadValue(arena, s);
+        dst.src1 = ReadValue(arena, s);
+        dst.child.child_is_property = ReadB8(s);
+        break;
+    }
+
+    case UnitKind_ResultEval:
+    {
+        dst.src0 = ReadValue(arena, s);
+        break;
+    }
+
+    case UnitKind_Add:
+    case UnitKind_Sub:
+    case UnitKind_Mul:
+    case UnitKind_Div:
+    case UnitKind_Mod:
+    case UnitKind_Eql:
+    case UnitKind_Neq:
+    case UnitKind_Gtr:
+    case UnitKind_Lss:
+    case UnitKind_Geq:
+    case UnitKind_Leq:
+    case UnitKind_Or:
+    case UnitKind_And:
+    {
+        dst.src0 = ReadValue(arena, s);
+        dst.src1 = ReadValue(arena, s);
+        dst.op_dst_type = (PrimitiveType)ReadU8(s);
+        break;
+    }
+
+    case UnitKind_Not:
+    case UnitKind_Neg:
+    case UnitKind_Cast:
+    case UnitKind_BitCast:
+    {
+        dst.src0 = ReadValue(arena, s);
+        dst.op_dst_type = (PrimitiveType)ReadU8(s);
+        break;
+    }
+
+    case UnitKind_Is:
+    {
+        dst.src0 = ReadValue(arena, s);
+        dst.src1 = ReadValue(arena, s);
+        break;
+    }
+
+    case UnitKind_Return:
+    break;
+
+    case UnitKind_Error:
+    case UnitKind_Empty:
+    break;
+
+    case UnitKind_count: break;
+    }
+
+    dst.line = ReadU32(s);
+
+    return dst;
+}
+
+//- IR
+
+void WriteObjectDefinition(Serializer* s, ObjectDefinition src)
+{
+    WriteU32(s, 0); // VERSION
+
+    WriteString(s, src.name);
+    WriteU32(s, src.type_id);
+    WriteB8(s, src.is_constant);
+
+    WriteLocation(s, src.location);
+}
+
+void WriteRegister(Serializer* s, Register src)
+{
+    WriteU8(s, (U8)src.kind);
+    WriteU32(s, src.type_id);
+    WriteB8(s, (B8)src.is_constant);
+}
+
+void WriteIR(Serializer* s, IR src)
+{
+    WriteU32(s, 0); // VERSION
+
+    WriteB8(s, src.valid);
+
+    if (src.valid)
+    {
+        WriteArray(s, src.instructions, WriteUnit);
+        WriteArray(s, src.local_registers, WriteRegister);
+        WriteValue(s, src.output_value);
+    }
+}
+
+ObjectDefinition ReadObjectDefinition(Arena* arena, Deserializer* s)
+{
+    U32 version = ReadVersionU32(s, 0, 0);
+
+    ObjectDefinition dst = {};
+
+    dst.name = ReadString(arena, s);
+    dst.type_id = ReadU32(s);
+    dst.is_constant = ReadB8(s);
+    dst.location = ReadLocation(s);
+
+    return dst;
+}
+
+Register ReadRegister(Deserializer* s)
+{
+    Register dst = {};
+    dst.kind = (RegisterKind)ReadU8(s);
+
+    if (dst.kind >= RegisterKind_count) {
+        DeserializerFailed(s);
+        return {};
+    }
+
+    dst.type_id = ReadU32(s);
+    dst.is_constant = ReadB8(s);
+    return dst;
+}
+
+IR ReadIR(Arena* arena, Deserializer* s)
+{
+    IR dst = {};
+
+    U32 version = ReadVersionU32(s, 0, 0);
+
+    dst.valid = ReadB8(s);
+
+    if (dst.valid)
+    {
+        dst.instructions = ReadArrayArena<Unit>(arena, s, ReadUnit);
+        dst.local_registers = ReadArray<Register>(arena, s, ReadRegister);
+        dst.output_value = ReadValue(arena, s);
+    }
+
+    return dst;
+}
+
+//- RUNTIME COMMON
+
+RuntimeSettings RuntimeSettingsCopy(Arena* arena, RuntimeSettings src)
+{
+    RuntimeSettings dst = {};
+    dst.no_user = src.no_user;
+    dst.user_assert = src.user_assert;
+    dst.caller_dir = StrCopy(arena, src.caller_dir);
+    dst.origin_dir = StrCopy(arena, src.origin_dir);
+    return dst;
+}
+
+//- HIGH LEVEL CALLS
+
+I64 CompileAndRunFromArgs()
+{
+    PROFILE_FUNCTION;
+    
+    Arena* arena = ArenaAlloc(Gb(32), 8, "Arena Main");
+    defer (ArenaFree(arena));
+    
+    Reporter* reporter = ReporterAlloc(arena);
+    Input* input = InputFromArgs(arena, reporter);
+    
+    if (!reporter->exit_requested)
+    {
+        RBuffer binary = YovCompile(arena, reporter, input->main_script_path);
+        
+        if (!reporter->exit_requested && !input->settings.analyze_only) {
+            RuntimeSettings settings = {};
+            settings.user_assert = input->settings.user_assert;
+            settings.no_user = input->settings.no_user;
+            settings.origin_dir = PathGetFolder(input->main_script_path);
+            settings.caller_dir = system_info.working_path;
+            
+            ExecuteProgram(binary, input, reporter, settings);
+        }
+    }
+    
+    ReporterPrint(reporter);
+    
+    if (input->settings.wait_end) {
+        OsConsoleWait();
+    }
+    
+    return reporter->exit_code;
+}
+
+#if 0 // TODO(Jose)
+
+// TEMP
+#include <Windows.h>
+I32 StepPressed() {
+    if (GetAsyncKeyState('A') & 1) return 1;
+    if (GetAsyncKeyState('W') & 1) return 2;
+    if (GetAsyncKeyState('D') & 1) return 3;
+    if (GetAsyncKeyState(VK_RETURN) & 1) return 4;
+    return 0;
+}
+
+I64 CompileAndDebugFromArgs()
+{
+    Arena* arena = ArenaAlloc(Gb(32), 8, "Arena Main");
+    defer (ArenaFree(arena));
+    
+    Reporter* reporter = ReporterAlloc(arena);
+    Input* input = InputFromArgs(arena, reporter);
+    
+    RBuffer binary = YovCompile(arena, reporter, input->main_script_path);
+    
+    if (!input->settings.analyze_only) {
+        RuntimeSettings settings = {};
+        settings.user_assert = input->settings.user_assert;
+        settings.no_user = input->settings.no_user;
+        
+        Runtime* runtime = RuntimeAlloc(binary, reporter, settings);
+        RuntimeInitializeGlobals(runtime);
+        
+        if (!reporter->exit_requested)
+        {
+            RuntimeStart(runtime);
+            
+            while (1)
+            {
+                I32 press = StepPressed();
+                
+                B32 running = true;
+                
+                if (press == 1) running = RuntimeStepOver(runtime);
+                else if (press == 2) running = RuntimeStepInto(runtime);
+                else if (press == 3) running = RuntimeStepOut(runtime);
+                else if (press == 4) {
+                    RuntimeStepAll(runtime);
+                    running = false;
+                }
+                else OsThreadSleep(10);
+                
+                if (!running) break;
+            }
+        }
+        
+        RuntimeFree(runtime);
+    }
+    
+    ReporterPrint(reporter);
+    
+    if (input->settings.wait_end) {
+        OsConsoleWait();
+    }
+    
+    return reporter->exit_code;
+}
+
+#endif

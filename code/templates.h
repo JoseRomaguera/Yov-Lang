@@ -37,6 +37,14 @@ inline_fn Array<T> ArrayCopy(Arena* arena, Array<T> src)
     return dst;
 }
 
+template<typename T, typename Fn>
+inline_fn Array<T> ArrayCopyRecursive(Arena* arena, Array<T> src, Fn fn)
+{
+	Array<T> dst = ArrayAlloc<T>(arena, src.count);
+    foreach(i, src.count) dst[i] = fn(arena, src[i]);
+    return dst;
+}
+
 template<typename T>
 inline_fn void ArrayErase(Array<T>* array, U32 index)
 {
@@ -97,6 +105,14 @@ inline_fn Array<T> ArrayFromBArray(Arena* arena, BArray<T> src)
 {
     Array<T> dst = ArrayAlloc<T>(arena, src.count);
     foreach(i, src.count) dst[i] = src[i];
+    return dst;
+}
+
+template<typename T, typename Fn>
+inline_fn Array<T> ArrayFromBArrayRecursive(Arena* arena, BArray<T> src, Fn fn)
+{
+    Array<T> dst = ArrayAlloc<T>(arena, src.count);
+    foreach(i, src.count) dst[i] = fn(arena, src[i]);
     return dst;
 }
 
@@ -204,14 +220,14 @@ inline_fn void operator--(BArrayIterator<T>& it)
 //- LINKED LIST
 
 template<typename T>
-inline_fn LinkedList<T> ll_make(Arena* arena) {
+inline_fn LinkedList<T> LLMake(Arena* arena) {
     LinkedList<T> ll{};
     ll.arena = arena;
     return ll;
 }
 
 template<typename T>
-inline_fn T* ll_push(LinkedList<T>* ll)
+inline_fn T* LLPush(LinkedList<T>* ll)
 {
     LLNode* node = (LLNode*)ArenaPush(ll->arena, sizeof(LLNode) + sizeof(T));
     ll->count++;
@@ -229,15 +245,15 @@ inline_fn T* ll_push(LinkedList<T>* ll)
 }
 
 template<typename T>
-inline_fn T* ll_push(LinkedList<T>* ll, const T& data)
+inline_fn T* LLPush(LinkedList<T>* ll, const T& data)
 {
-    T* v = ll_push(ll);
+    T* v = LLPush(ll);
     *v = data;
     return v;
 }
 
 template<typename T>
-inline_fn void* ll_push_back(LinkedList<T>* ll)
+inline_fn void* LLPushBack(LinkedList<T>* ll)
 {
     Assert(ll->stride > 0);
     LLNode* node = (LLNode*)ArenaPush(ll->arena, sizeof(LLNode) + sizeof(T));
@@ -256,7 +272,7 @@ inline_fn void* ll_push_back(LinkedList<T>* ll)
 }
 
 template<typename T>
-inline_fn Array<T> array_from_ll(Arena* arena, LinkedList<T> src) {
+inline_fn Array<T> ArrayFromLL(Arena* arena, LinkedList<T> src) {
     Array<T> dst = ArrayAlloc<T>(arena, src.count);
     U32 i = 0;
     for (LLNode* node = src.root; node != NULL; node = node->next) {

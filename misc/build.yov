@@ -1,5 +1,4 @@
 
-//import "transpiler.yov";
 import "generate_string_literal.yov";
 
 script_description : String : "This script builds the Yov programming language.
@@ -34,7 +33,7 @@ Main :: func
     
     APP_NAME := "yov";
     
-    root_path := context.script_dir / "..";
+    root_path := context.origin_dir / "..";
     SetCD(root_path);
     
     {
@@ -53,7 +52,7 @@ Main :: func
     
     //- Build 
     {
-        PrintLn("Compiling...");
+        PrintLn("Generating command...");
         
         DirCreate("build", true);
         SetCD("build");
@@ -68,7 +67,6 @@ Main :: func
         // Units
         {
             sources += ["code/main.cpp",
-                        "code/program.cpp",
                         "code/front.cpp",
                         "code/parser.cpp",
                         "code/common.cpp",
@@ -134,19 +132,21 @@ Main :: func
         // Call msvc
         
         msvc: String = "cl ";
-        for (src : sources) msvc += "{root_path}/{src} ";
-        for (inc : include) msvc += "/I{inc} ";
+        for (src : sources) msvc += "{PathResolve(root_path)/src} ";
+        for (inc : include) msvc += "/I{PathResolve(inc)} ";
         for (def : defines) msvc += "/D{def}=1 ";
-        for (lib : libs)    msvc += "{lib} ";
+        for (lib : libs)    msvc += "{PathResolve(lib)} ";
         for (flag : cflags) msvc += "/{flag} ";
         msvc += "/I ../code/ /link ";
         for (flag : lflags) msvc += "/{flag} ";
         
+        PrintLn("Importing MSVC environment...");
         MsvcImportEnvX64();
         
         calls.redirect_stdout = .Console;
-        PrintLn(msvc);
+        PrintLn("Compiling: \n\n{msvc}\n");
         Call(msvc);
+        PrintLn("");
         
         SetCD(root_path);
     }

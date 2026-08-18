@@ -1,6 +1,40 @@
 #pragma once
 
-#include "program.h"
+#include "common.h"
+
+struct Object {
+    U32 ID;
+    I32 ref_count;
+    Type* type;
+    Object* prev;
+    Object* next;
+};
+
+struct ObjectData_Array {
+    U32 count;
+    U32 capacity;
+    U8* data;
+};
+
+struct ObjectData_Ref {
+    Object* parent;
+    void* address;
+};
+
+struct ObjectData_String {
+    char* chars;
+    U64 capacity;
+    U64 size;
+};
+
+global_var Object* nil_obj;
+global_var Object* null_obj;
+
+struct Reference {
+    Object* parent;
+    Type* type;
+    void* address;
+};
 
 struct Scope {
     IR ir;
@@ -13,11 +47,54 @@ struct Scope {
     I32 unit_counter;
 };
 
+struct FunctionHeader {
+    String name;
+    Array<ObjectDefinition> parameters;
+    Array<ObjectDefinition> returns;
+};
+
+struct FunctionBody {
+    IR ir;
+    U32 header_index;
+};
+
+struct StructDefinition {
+    String name;
+    Array<String> names;
+    Array<U32> types;
+    Array<U32> offsets;
+    U32 size;
+    B32 needs_internal_release;
+};
+
+struct EnumDefinition {
+    String name;
+    Array<String> names;
+    Array<I64> values;
+};
+
+struct ArgDefinition {
+    U32 global_index;
+    String name;
+    B32 required;
+};
+
 struct Runtime {
     Arena* arena;
-    
-    Program* program;
+
+    TypeSystem* tsys;
     Reporter* reporter;
+    Input* input;
+
+    Array<ObjectDefinition> global_objects;
+    Array<Reference> global_registers;
+    
+    Array<FunctionBody> functions;
+    Array<FunctionHeader> function_headers;
+    Array<StructDefinition> structs;
+    Array<EnumDefinition> enums;
+    //Array<GlobalDefinition> globals;
+    Array<ArgDefinition> args;
     
     RuntimeSettings settings;
     
@@ -28,8 +105,6 @@ struct Runtime {
         I32 object_count;
         I32 allocation_count;
     } gc;
-    
-    Array<Reference> globals;
     
     Array<Scope> stack;
     U32 stack_counter;
@@ -44,11 +119,15 @@ struct Runtime {
     U64 started_time;
 };
 
-Runtime* RuntimeAlloc(Program* program, Reporter* reporter, RuntimeSettings settings);
+typedef void IntrinsicFunction(Runtime* runtime, Array<Reference> params, Array<Reference> returns);
+
+IntrinsicFunction* IntrinsicFromName(String identifier);
+
+Runtime* RuntimeAlloc(RBuffer binary, Input* input, Reporter* reporter, RuntimeSettings settings);
 void RuntimeFree(Runtime* runtime);
 void RuntimeInitializeGlobals(Runtime* runtime);
 
-void RuntimeStart(Runtime* runtime, String function_name);
+void RuntimeStart(Runtime* runtime);
 
 void RuntimePushScope(Runtime* runtime, I32 return_index, U32 return_count, IR ir, Array<Value> params);
 void RuntimePopScope(Runtime* runtime);
@@ -58,8 +137,6 @@ B32 RuntimeStepInto(Runtime* runtime);
 B32 RuntimeStepOver(Runtime* runtime);
 B32 RuntimeStepOut(Runtime* runtime);
 void RuntimeStepAll(Runtime* runtime);
-
-void RuntimePrintScriptHelp(Runtime* runtime);
 
 void RuntimeExit(Runtime* runtime, I64 exit_code);
 void RuntimeReportError(Runtime* runtime, Result result);
@@ -82,14 +159,24 @@ String PathAbsoluteToCD(Arena* arena, Runtime* runtime, String path);
 RedirectStdout RuntimeGetCallsRedirectStdout(Runtime* runtime);
 
 Reference RefFromValue(Runtime* runtime, Scope* scope, Value value);
+Value ValueFromStringExpression(Arena* arena, Runtime* runtime, String str, Type* type);
+
+U64 TypeGetSize(Runtime* runtime, Type* type);
+B32 TypeNeedsInternalRelease(Runtime* runtime, Type* type);
+TypeChild TypeGetMember(Runtime* runtime, Type* type, String member);
+
+I32 GlobalIndexFromName(Runtime* runtime, String name);
+FunctionBody* FunctionBodyFromCall(Runtime* runtime, FunctionHeader* header);
 
 void RunInstruction(Runtime* runtime, Unit unit);
 void RunStore(Runtime* runtime, I32 dst_index, Reference src);
 void RunCopy(Runtime* runtime, I32 dst_index, Reference src);
 void RunReturn(Runtime* runtime);
 void RunJump(Runtime* runtime, Reference ref, I32 condition, I32 offset);
-void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionDefinition* fn, Array<Value> parameters);
-void RunChild(Runtime* runtime, I32 dst_index, Reference src, Reference index, B32 is_member);
+void RunFunctionCall(Runtime* runtime, I32 dst_index, FunctionHeader* fn, Array<Value> parameters);
+void RunFunction(Runtime* runtime, I32 dst_index, FunctionBody* fn, FunctionHeader* header, Array<Value> parameters);
+void RunIntrinsic(Runtime* runtime, I32 dst_index, IntrinsicFunction* intrinsic, FunctionHeader* header, Array<Value> parameters);
+void RunChild(Runtime* runtime, I32 dst_index, Reference src, Reference index, B32 is_property);
 
 void RunAdd(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
 void RunSub(Runtime* runtime, I32 dst_index, PrimitiveType type, Reference left, Reference right);
@@ -131,13 +218,13 @@ Reference ref_from_address(Object* parent, Type* type, void* address);
 
 void ref_set_member(Runtime* runtime, Reference ref, U32 index, Reference member);
 
-Reference ref_get_child(Runtime* runtime, Reference ref, U32 index, B32 is_member);
-Reference ref_get_member(Runtime* runtime, Reference ref, U32 index);
-Reference ref_get_property(Runtime* runtime, Reference ref, U32 index);
+Reference RefGetChild(Runtime* runtime, Reference ref, U32 index, B32 is_property);
+Reference RefGetMember(Runtime* runtime, Reference ref, U32 index);
+Reference RefGetProperty(Runtime* runtime, Reference ref, U32 index);
 
-U32 RefGetChildCount(Runtime* runtime, Reference ref, B32 is_member);
+U32 RefGetChildCount(Runtime* runtime, Reference ref, B32 is_property);
 U32 RefGetPropertyCount(Runtime* runtime, Reference ref);
-U32 RefGetMemberCount(Reference ref);
+U32 RefGetMemberCount(Runtime* runtime, Reference ref);
 
 Reference AllocSInt(Runtime* runtime, I64 value);
 Reference AllocUInt(Runtime* runtime, U64 value);
@@ -163,7 +250,7 @@ B32 is_string(Reference ref);
 B32 RefIsArray(Reference ref);
 B32 is_enum(Reference ref);
 B32 RefIsReference(Reference ref);
-B32 RefIsType(Program* program, Reference ref);
+B32 RefIsType(TypeSystem* tsys, Reference ref);
 
 I64 RefGetSInt(Reference ref);
 U64 RefGetUInt(Reference ref);
@@ -185,6 +272,7 @@ void RefSetUInt(Reference ref, U64 v);
 void RefSetFloat(Reference ref, F64 v);
 void RefSetBool(Reference ref, B32 v);
 void set_enum_index(Reference ref, I64 v);
+void RefSetType(Runtime* runtime, Reference ref, U32 type_id);
 
 ObjectData_String* ref_string_get_data(Runtime* runtime, Reference ref);
 void ref_string_prepare(Runtime* runtime, Reference ref, U64 new_size, B32 can_discard);
@@ -215,12 +303,10 @@ inline_fn CopyMode get_enum_CopyMode(Reference ref) {
 void ref_assign_Result(Runtime* runtime, Reference ref, Result res);
 void ref_assign_CallOutput(Runtime* runtime, Reference ref, CallOutput out);
 void ref_assign_FileInfo(Runtime* runtime, Reference ref, FileInfo info);
-void ref_assign_FunctionDefinition(Runtime* runtime, Reference ref, FunctionDefinition* fn);
+void ref_assign_FunctionDefinition(Runtime* runtime, Reference ref, FunctionHeader* fn);
 void ref_assign_StructDefinition(Runtime* runtime, Reference ref, Type* type);
 void ref_assign_EnumDefinition(Runtime* runtime, Reference ref, Type* type);
 void ref_assign_ObjectDefinition(Runtime* runtime, Reference ref, ObjectDefinition def);
-
-void ref_assign_Type(Runtime* runtime, Reference ref, Type* type);
 
 Reference ref_from_Result(Runtime* runtime, Result res);
 Result Result_from_ref(Runtime* runtime, Reference ref);
@@ -249,7 +335,7 @@ void LogMemoryUsage(Runtime* runtime);
 
 //- REPORTS 
 
-#define ReportErrorRT(_text, ...) ReportErrorEx(runtime->reporter, NO_CODE, RuntimeGetCurrentLine(runtime), RuntimeGetCurrentFile(runtime), _text, __VA_ARGS__)
+#define ReportErrorRT(_text, ...) ReportEx(runtime->reporter, ReportLevel_Error, NO_CODE, RuntimeGetCurrentLine(runtime), RuntimeGetCurrentFile(runtime), _text, __VA_ARGS__)
 
 #define ReportNullRef() ReportErrorRT("Null reference")
 #define ReportZeroDivision() ReportErrorRT("Divided by zero")
@@ -260,3 +346,5 @@ void LogMemoryUsage(Runtime* runtime);
 
 #define lang_report_unfreed_objects() ReportErrorNoCode("[LANG_ERROR] Not all objects have been freed")
 #define lang_report_unfreed_dynamic() ReportErrorNoCode("[LANG_ERROR] Not all dynamic allocations have been freed")
+
+#define ReportArgIsRequired(_v) ReportErrorRT("Argument '%S' is required", _v);
