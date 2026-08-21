@@ -10,7 +10,7 @@ mode :: arg -> Mode {
     description = "specifies the build mode. Available options: Dev, Dist, Manual";
 }
 profiler_enabled :: arg {
-    name = "-profiler";
+    name = profiler;
     description = "enables Tracy profiler";
 }
 

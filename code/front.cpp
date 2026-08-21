@@ -198,10 +198,10 @@ internal_fn IR_Group IRGenerateScriptHelp(IR_Context* ir)
             else {
                 type_str = type->name;
             }
-            header = StrFormat(context.arena, "%S%S -> %S", space, arg->arg_name, type_str);
+            header = StrFormat(context.arena, "%S-%S -> %S", space, arg->arg_name, type_str);
         }
         else {
-            header = StrFormat(context.arena, "%S%S", space, arg->arg_name);
+            header = StrFormat(context.arena, "%S-%S", space, arg->arg_name);
         }
         
         headers[index++] = header;
@@ -1107,7 +1107,7 @@ internal_fn B32 ResolveArg(FrontContext* front, ArgDefinition* def)
 
     ObjectDefinition* global = &front->global_objects[def->global_index];
     
-    String arg_name = StrFormat(context.arena, "-%S", global->name);
+    String arg_name = global->name;
     Location description_location = NO_CODE;
     B32 required = false;
     Location default_value_location = NO_CODE;
@@ -1166,8 +1166,8 @@ internal_fn B32 ResolveArg(FrontContext* front, ArgDefinition* def)
             Token token = tokens[0];
 
             if (identifier == "name") {
-                if (token.kind != TokenKind_StringLiteral) {
-                    ReportErrorFront(expression_location, "Expecting a string literal");
+                if (token.kind != TokenKind_Identifier) {
+                    ReportErrorFront(expression_location, "Expecting an identifier");
                     return false;
                 }
                 arg_name = token.value;

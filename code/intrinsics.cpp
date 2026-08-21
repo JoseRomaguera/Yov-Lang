@@ -97,7 +97,14 @@ void Intrinsic_SetupRuntime(Runtime* runtime, Array<Reference> params, Array<Ref
         {
             String arg_name = input->script_args[i];
 
-            if (arg_name == "-help") {
+            if (!StrStarts(arg_name, "-")) {
+                ReportErrorNoCode("An argument name starts with '-'");
+                continue;
+            }
+
+            arg_name = StrSub(arg_name, 1, arg_name.size - 1);
+
+            if (arg_name == "help") {
                 show_script_help = true;
                 continue;
             }

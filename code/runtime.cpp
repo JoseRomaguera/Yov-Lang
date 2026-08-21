@@ -683,9 +683,17 @@ Value ValueFromStringExpression(Arena* arena, Runtime* runtime, String str, Type
         
         String enum_name = StrSub(str, start_name, str.size - start_name);
         EnumDefinition* enum_def = &runtime->enums[type->definition_index];
-
+        
         foreach(i, enum_def->names.count) {
             if (StrEquals(enum_def->names[i], enum_name)) return ValueFromEnum(type, i);
+        }
+
+        String enum_name_lower = StrToLower(context.arena, enum_name);
+        
+        foreach(i, enum_def->names.count) {
+            ArenaCapture(context.arena);
+            String v = StrToLower(context.arena, enum_def->names[i]);
+            if (StrEquals(v, enum_name_lower)) return ValueFromEnum(type, i);
         }
         return ValueNone();
     }

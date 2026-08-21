@@ -1,16 +1,16 @@
 
 ITERATIONS :: arg -> UInt {
-    name = "-it";
+    name = it;
     default = 1;
 }
 
 REPEAT :: arg -> UInt {
-    name = "-repeat";
+    name = repeat;
     default =  1;
 }
 
 SHOW_PRINTS :: arg {
-    name = "-show_prints";
+    name = show_prints;
 }
 
 test_count : Int = 0;

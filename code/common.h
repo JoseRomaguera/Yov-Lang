@@ -535,6 +535,8 @@ RBuffer RBufferFromStr(String str);
 
 //- STRING
 
+char CharToLower(char src);
+
 String StrMake(const char* cstr, U64 size);
 String StrFromCStr(const char* cstr);
 String StrFromRBuffer(RBuffer buffer);
@@ -547,6 +549,7 @@ String StrSub(String str, U64 offset, U64 size);
 B32 StrEquals(String s0, String s1);
 B32 StrStarts(String str, String with);
 B32 StrEnds(String str, String with);
+String StrToLower(Arena* arena, String str);
 B32 U32FromString(U32* dst, String str, U32 base = 10);
 B32 U64FromString(U64* dst, String str, U32 base = 10);
 B32 F64FromString(F64* dst, String str);

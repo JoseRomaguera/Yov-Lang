@@ -638,6 +638,13 @@ void CStrFromF64(char* dst, F64 value, U32 decimals)
 
 //- STRING 
 
+char CharToLower(char src) {
+    if (src >= 'A' && src <= 'Z') {
+        return src + ('a' - 'A');
+    }
+    return src;
+}
+
 String StrMake(const char* cstr, U64 size) {
     String str;
     str.data = (char*)cstr;
@@ -724,6 +731,14 @@ B32 StrStarts(String str, String with) {
 B32 StrEnds(String str, String with) {
     if (with.size > str.size) return false;
     return StrEquals(StrSub(str, str.size - with.size, with.size), with);
+}
+
+String StrToLower(Arena* arena, String str) {
+    String dst = StrAlloc(arena, str.size);
+    foreach(i, str.size) {
+        dst[i] = CharToLower(str[i]);
+    }
+    return dst;
 }
 
 B32 U32FromString(U32* dst, String str, U32 base)
