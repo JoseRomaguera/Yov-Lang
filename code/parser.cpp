@@ -512,8 +512,10 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
         else if (token.kind == TokenKind_BoolLiteral) {
             return IRFromNone(ValueFromBool(StrEquals(token.value, "true")));
         }
-        else if (token.kind == TokenKind_StringLiteral)
+        else if (token.kind == TokenKind_StringLiteral || token.kind == TokenKind_StringInterpolation)
         {
+            B32 is_interpolation = token.kind == TokenKind_StringInterpolation;
+
             IR_Group out = IRFromNone();
             BArray<Value> values = BArrayMake<Value>(context.arena, 8);
             
@@ -537,8 +539,8 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     else if (codepoint == 'r') append(&builder, "\r");
                     else if (codepoint == 't') append(&builder, "\t");
                     else if (codepoint == '"') append(&builder, "\"");
-                    else if (codepoint == '{') append(&builder, "{");
-                    else if (codepoint == '}') append(&builder, "}");
+                    else if (is_interpolation && codepoint == '{') append(&builder, "{");
+                    else if (is_interpolation && codepoint == '}') append(&builder, "}");
                     else if (codepoint == 'x') {
                         if (cursor + 2 > raw.size) {
                             ReportErrorFront(token.location, "Expecting hexadecimal number after \\x");
@@ -569,7 +571,7 @@ IR_Group ReadExpression(IR_Context* ir, Parser* parser, ExpresionContext expr_co
                     continue;
                 }
                 
-                if (codepoint == '{')
+                if (is_interpolation && codepoint == '{')
                 {
                     U64 start_identifier = cursor;
                     I32 depth = 1;
@@ -2550,8 +2552,9 @@ String DebugInfoFromToken(Arena* arena, Token token)
     if (k == TokenKind_EnumKeyword) return "enum";
     if (k == TokenKind_IntLiteral) return StrFormat(arena, "Int Literal: %S", token.value);
     if (k == TokenKind_FloatLiteral) return StrFormat(arena, "Float Literal: %S", token.value);
-    if (k == TokenKind_BoolLiteral) { return StrFormat(arena, "Bool Literal: %S", token.value); }
-    if (k == TokenKind_StringLiteral) { return StrFormat(arena, "String Literal: %S", token.value); }
+    if (k == TokenKind_BoolLiteral) { return StrFormat(arena, "Bool Literal: '%S'", token.value); }
+    if (k == TokenKind_StringLiteral) { return StrFormat(arena, "Str Literal: '%S'", token.value); }
+    if (k == TokenKind_StringInterpolation) { return StrFormat(arena, "Str Interpolation: %S", token.value); }
     if (k == TokenKind_Comment) { return StrFormat(arena, "Comment: %S", token.value); }
     if (k == TokenKind_Comma) return ",";
     if (k == TokenKind_Dot) return ".";
@@ -2731,6 +2734,10 @@ internal_fn Token TokenMakeDynamic(String text, U64 cursor, TokenKind kind, U64 
         Assert(token.value.size >= 2);
         token.value = StrSub(token.value, 1, token.value.size - 2);
     }
+    else if (token.kind == TokenKind_StringInterpolation) {
+        Assert(token.value.size >= 3);
+        token.value = StrSub(token.value, 2, token.value.size - 3);
+    }
     
     return token;
 }
@@ -2818,22 +2825,32 @@ Token ReadToken(String text, U64 start_cursor, I32 script_id)
         }
         return TokenMakeDynamic(text, start_cursor, TokenKind_Comment, cursor - start_cursor, script_id);
     }
-    
-    if (c0 == '"') {
-        B32 ignore_next = false;
-        U64 cursor = start_cursor + 1;
-        while (cursor < text.size) {
-            U32 codepoint = StrGetCodepoint(text, &cursor);
-            
-            if (ignore_next) {
-                ignore_next = false;
-                continue;
+
+    {
+        B32 is_string_interpolation = c0 == '$' && c1 == '"';
+        
+        if (c0 == '"' || is_string_interpolation)
+        {
+            U64 cursor_offset = is_string_interpolation ? 2 : 1;
+            U64 cursor = start_cursor + cursor_offset;
+
+            B32 ignore_next = false;
+
+            while (cursor < text.size) {
+                U32 codepoint = StrGetCodepoint(text, &cursor);
+                
+                if (ignore_next) {
+                    ignore_next = false;
+                    continue;
+                }
+                
+                if (codepoint == '\\') ignore_next = true;
+                if (codepoint == '"') break;
             }
-            
-            if (codepoint == '\\') ignore_next = true;
-            if (codepoint == '"') break;
+
+            TokenKind kind = is_string_interpolation ? TokenKind_StringInterpolation : TokenKind_StringLiteral;
+            return TokenMakeDynamic(text, start_cursor, kind, cursor - start_cursor, script_id);
         }
-        return TokenMakeDynamic(text, start_cursor, TokenKind_StringLiteral, cursor - start_cursor, script_id);
     }
     
     if (c0 == '\'') {

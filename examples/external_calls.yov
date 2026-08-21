@@ -24,19 +24,19 @@ Main :: func
     
     // Run a raw command using 'call'
     PrintLn("-> 'call'");
-    out, res = Call("{yov.path} external_calls.yov -callee");
-    PrintLn("\nresult = {res}, {out}\n");
+    out, res = Call($"{yov.path} external_calls.yov -callee");
+    PrintLn($"\nresult = {res}, {out}\n");
     
     // Suppress output from external calls
     calls.redirect_stdout = RedirectStdout.Ignore;
     
-    yov_path_without_extension := "{yov.path}" / ".." / "yov";
+    yov_path_without_extension := $"{yov.path}" / ".." / "yov";
     
     // Use 'call_exe' to invoke an executable without specifying its extension
     // The correct file is automatically chosen based on the OS
     PrintLn("-> 'call_exe'");
-    out, res = CallExe("{yov_path_without_extension}", "external_calls.yov -callee");
-    PrintLn("output = {out}\nresult = {res}\n");
+    out, res = CallExe($"{yov_path_without_extension}", "external_calls.yov -callee");
+    PrintLn($"output = {out}\nresult = {res}\n");
     
     // Capture and return the output of the call
     calls.redirect_stdout = RedirectStdout.Script;
@@ -44,9 +44,9 @@ Main :: func
     // Use 'call_script' to run another Yov script
     PrintLn("-> 'call_script' (output = 0)");
     out, res = CallScript("external_calls.yov", "-callee -output=0", "");
-    PrintLn("output = {out}\nresult = {res}\n");
+    PrintLn($"output = {out}\nresult = {res}\n");
     
     PrintLn("-> 'call_script' (output = 10)");
     out, res = CallScript("external_calls.yov", "-callee -output=10", "");
-    PrintLn("output = {out}\nresult = {res}\n");
+    PrintLn($"output = {out}\nresult = {res}\n");
 }

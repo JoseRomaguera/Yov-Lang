@@ -52,23 +52,23 @@ Main :: func
     
     PrintLn("\n-> STRING LITERALS");
     
-    string_literal := "Last expresion is: {expresion_result}";
+    string_literal := $"Last expresion is: {expresion_result}";
     PrintLn(string_literal);
     
     path := "some_path/test0" / "../test1"; // Append and resolve paths using '/'
     PrintLn("Path = " + path); // Append strings using '+'
     
-    PrintLn("Insert any expression inside braces: {5+5/2 == integer}");
-    Print("Special Chars: \\, \{, \}, \", \t, \n");
+    PrintLn($"Insert any expression inside braces: {5+5/2 == integer}");
+    Print($"Special Chars: \\, \{, \}, \", \t, \n");
     
     //==============================================
     
     PrintLn("\n-> STRUCTS");
     
     foo: Foo;
-    PrintLn("foo = {foo}");
-    PrintLn("Members = {foo.member0}, {foo.member1}");
-    PrintLn("Foo.name = {Foo.name}");
+    PrintLn($"foo = {foo}");
+    PrintLn($"Members = {foo.member0}, {foo.member1}");
+    PrintLn($"Foo.name = {Foo.name}");
     
     //==============================================
     
@@ -77,13 +77,13 @@ Main :: func
     animal0 := Animal.Cat;
     animal1: Animal = .Human;
     
-    PrintLn("animal0 = {animal0}");
-    PrintLn("animal1.index = {animal1.index}");
-    PrintLn("animal1.value = {animal1.value}");
-    PrintLn("animal1.name = {animal1.name}");
-    PrintLn("enum name = {Animal.name}");
-    PrintLn("enum count = {Animal.count}");
-    PrintLn("enum array = {Animal.array}");
+    PrintLn($"animal0 = {animal0}");
+    PrintLn($"animal1.index = {animal1.index}");
+    PrintLn($"animal1.value = {animal1.value}");
+    PrintLn($"animal1.name = {animal1.name}");
+    PrintLn($"enum name = {Animal.name}");
+    PrintLn($"enum count = {Animal.count}");
+    PrintLn($"enum array = {Animal.array}");
     
     //==============================================
     
@@ -95,8 +95,8 @@ Main :: func
     foo3 := &foo1; // 'foo3' stores the reference of 'foo1', now refers to the same object
     
     foo3.member0 = 10;
-    PrintLn("'foo2' references 'foo1' = {foo2.member0 == foo1.member0}");
-    PrintLn("'foo3' references 'foo1' = {foo3.member0 == foo1.member0}");
+    PrintLn($"'foo2' references 'foo1' = {foo2.member0 == foo1.member0}");
+    PrintLn($"'foo3' references 'foo1' = {foo3.member0 == foo1.member0}");
     
     //==============================================
     
@@ -117,29 +117,29 @@ Main :: func
     
     j := 0;
     while (j < 3) {
-        PrintLn("While: {j}");
+        PrintLn($"While: {j}");
         j+= 1;
     }
     
     for (i := 0; i < 3; i += 1) {
-        PrintLn("For: {i}");
+        PrintLn($"For: {i}");
     }
     
     for (value: Animal.array) {
-        PrintLn("For Each: {value}");
+        PrintLn($"For Each: {value}");
     }
     
     for (value, index: Animal.array) {
-        PrintLn("For Each({index}) = {value}");
+        PrintLn($"For Each({index}) = {value}");
     }
     
     for (i := 0; true; i += 1) {
         if i % 2 == 0 {
-            PrintLn("Continue on {i}");
+            PrintLn($"Continue on {i}");
             continue;
         }
         if i == 5 {
-            PrintLn("Break on {i}");
+            PrintLn($"Break on {i}");
             break;
         }
     }
@@ -152,15 +152,15 @@ Main :: func
     words += [ "dynamic", "array" ];
     words += "!";
     
-    PrintLn("words = {words}");
-    PrintLn("words.count = {words.count}");
+    PrintLn($"words = {words}");
+    PrintLn($"words.count = {words.count}");
     
     empty_array: Array[Int];
     array_with_defaults := Array[Int](5);
     array_with_defaults[2] = 20;
     
-    PrintLn("empty_array = {empty_array}");
-    PrintLn("array_with_defaults = {array_with_defaults}");
+    PrintLn($"empty_array = {empty_array}");
+    PrintLn($"array_with_defaults = {array_with_defaults}");
     
     //==============================================
     
@@ -169,12 +169,12 @@ Main :: func
     BasicFunction();
     ret0 := FunctionWithReturn();
     ret1 := FunctionWithParams(5, 5);
-    PrintLn("Functions return: {ret0}, {ret1}");
+    PrintLn($"Functions return: {ret0}, {ret1}");
     
     ret_ref := 10;
-    PrintLn("Value before: {ret_ref}");
+    PrintLn($"Value before: {ret_ref}");
     FunctionWithRefs(&ret_ref);
-    PrintLn("Value after: {ret_ref}");
+    PrintLn($"Value after: {ret_ref}");
 }
 
 BasicFunction :: func {

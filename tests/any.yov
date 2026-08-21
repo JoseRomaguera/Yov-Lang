@@ -54,14 +54,14 @@ CustomString :: func (v: Any) -> String
 {
     if (v is Int) {
         r := v + 0;
-        return "Int: {r}";
+        return $"Int: {r}";
     }
     else if (v is String) {
         r := v + "";
-        return "String: {r}";
+        return $"String: {r}";
     }
     else {
-        return "Unknown type: {Typeof(v).name}";
+        return $"Unknown type: {Typeof(v).name}";
     }
 }
 

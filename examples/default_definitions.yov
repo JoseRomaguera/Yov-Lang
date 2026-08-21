@@ -1,21 +1,21 @@
 
 Main :: func
 {
-    PrintLn("Yov Info = {yov}");
+    PrintLn($"Yov Info = {yov}");
     
     YovRequire(yov.major, yov.minor);
     YovRequireMin(0, 0);
     YovRequireMax(100, 0);
     
     // Context
-    PrintLn("Context = {context}");
+    PrintLn($"Context = {context}");
     
     // cd is "Current Directory"
     last_cd := context.cd;
     SetCD(last_cd / "../");
-    PrintLn("Last cd = {last_cd}, new cd = {context.cd}");
+    PrintLn($"Last cd = {last_cd}, new cd = {context.cd}");
     
     // OS
     
-    PrintLn("OS = {os}");
+    PrintLn($"OS = {os}");
 }

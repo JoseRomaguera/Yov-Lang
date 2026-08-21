@@ -15,6 +15,7 @@ enum TokenKind {
     TokenKind_IntLiteral,
     TokenKind_FloatLiteral,
     TokenKind_StringLiteral,
+    TokenKind_StringInterpolation,
     TokenKind_CodepointLiteral,
     TokenKind_Dot,
     TokenKind_Comma,

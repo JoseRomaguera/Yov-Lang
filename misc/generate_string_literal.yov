@@ -1,7 +1,7 @@
 
 GenerateCppStringLiteral :: func(dst_path: String, src_path: String, expr_name: String)
 {
-    //println("Reading file: {src_path}");
+    //println($"Reading file: {src_path}");
     
     raw := ReadEntireFile(src_path);
     
@@ -32,15 +32,15 @@ GenerateCppStringLiteral :: func(dst_path: String, src_path: String, expr_name: 
     
     code: String;
     
-    code += "const char* {expr_name} = \"\"\n";
+    code += $"const char* {expr_name} = \"\"\n";
     
     for (line: lines) {
-        code += "\"{line}\\n\"\n";
+        code += $"\"{line}\\n\"\n";
     }
     
-    code += "\"\";";
+    code += $"\"\";";
     
-    //println("Writing file: {dst_path}");
+    //println($"Writing file: {dst_path}");
     
     WriteEntireFile(dst_path, code);
     

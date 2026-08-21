@@ -20,7 +20,7 @@ Main :: func
         int3 %= 2;
         int3 = -int3 - 1;
         
-        PrintLn("{int0}, {int1}, {int2}, {int3}, {int4}");
+        PrintLn($"{int0}, {int1}, {int2}, {int3}, {int4}");
         Assert(int0 == -6 && int1 == 0 && int2 == 10 && int3 == -2 && int4 == 10);
     }
     
@@ -41,8 +41,8 @@ Main :: func
         path0 := "foo0/foo1/foo2" / "../foo.txt";
         Assert(path0 == "foo0/foo1/foo.txt");
         
-        inter0 := "str0.size = {str0.size}";
-        inter1 := "str0 is empty = {str0.size == 0}";
+        inter0 := $"str0.size = {str0.size}";
+        inter1 := $"str0 is empty = {str0.size == 0}";
         Assert(inter0 == "str0.size = 12");
         Assert(inter1 == "str0 is empty = false");
     }

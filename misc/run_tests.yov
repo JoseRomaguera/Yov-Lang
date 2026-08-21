@@ -26,7 +26,7 @@ Main :: func
         if failed_count > 0 then break;
     }
     
-    PrintLn("Failed: {failed_count}/{test_count}");
+    PrintLn($"Failed: {failed_count}/{test_count}");
     Exit(failed_count);
 }
 
@@ -56,13 +56,13 @@ RunTest :: func (name: String, args: String, expected_code: Int)
         
         if res.code != expected_code {
             failed_count += 1;
-            PrintLn("-> Test failed: {name}");
+            PrintLn($"-> Test failed: {name}");
             PrintLn(out.stdout);
             return;
         }
         
     }
     
-    if ITERATIONS == 1 then PrintLn("Test succeded: {name}");
-    else PrintLn("Test succeded x{ITERATIONS}: {name}");
+    if ITERATIONS == 1 then PrintLn($"Test succeded: {name}");
+    else PrintLn($"Test succeded x{ITERATIONS}: {name}");
 }

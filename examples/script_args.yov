@@ -8,15 +8,15 @@ yov.exe script_args.yov -foo B -print_all
 yov.exe script_args.yov -foo B -opt_foo B
 */
 
-script_description : String : "This is an example of how to define and use script arguments.\nTo document a script, define the constant 'script_description' within the script itself.";
+script_description : String : $"This is an example of how to define and use script arguments.\nTo document a script, define the constant 'script_description' within the script itself.";
 
 foo :: arg -> Foo {
     required = true;
-    description = "specifies the value for foo. Valid options: {Foo.array}";
+    description = $"specifies the value for foo. Valid options: {Foo.array}";
 }
 
 opt_foo :: arg -> Foo {
-    description = "same as -foo, but not required. Valid options: {Foo.array}";
+    description = $"same as -foo, but not required. Valid options: {Foo.array}";
     default = .C;
 }
 
@@ -28,11 +28,11 @@ Foo :: enum { A, B, C }
 
 Main :: func
 {
-    PrintLn("foo = {foo}");
-    PrintLn("opt_foo = {opt_foo}");
-    PrintLn("print_all = {print_all}");
+    PrintLn($"foo = {foo}");
+    PrintLn($"opt_foo = {opt_foo}");
+    PrintLn($"print_all = {print_all}");
     
-    if print_all then PrintLn("All the defined args: {context.args}");
+    if print_all then PrintLn($"All the defined args: {context.args}");
     
     if (foo == .B)
     {
