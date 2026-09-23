@@ -57,6 +57,8 @@ CustomString :: func (v: Any) -> String
         return $"Int: {r}";
     }
     else if (v is String) {
+        PrintLn(Typeof(v));
+        PrintLn(v);
         r := v + "";
         return $"String: {r}";
     }

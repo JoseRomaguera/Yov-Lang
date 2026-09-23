@@ -156,7 +156,7 @@ Main :: func
     PrintLn($"words.count = {words.count}");
     
     empty_array: Array[Int];
-    array_with_defaults := Array[Int](5);
+    array_with_defaults := ArrayMake[Int](5);
     array_with_defaults[2] = 20;
     
     PrintLn($"empty_array = {empty_array}");

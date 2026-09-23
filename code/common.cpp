@@ -330,6 +330,19 @@ void LaneTaskStart(LaneContext* lane, U32 count)
     LaneBarrier(lane);
 }
 
+void LaneTaskSetTotal(LaneGroup* group, U32 count)
+{
+    while (1)
+    {
+        U32 last = group->task_total;
+        U32 next = count;
+        if (last >= count) break;
+        
+        B32 success = AtomicCompareExchange32_Full(&group->task_total, last, next) == last;
+        if (success) break;
+    }
+}
+
 void LaneTaskAdd(LaneGroup* group, U32 count)
 {
     while (1)
@@ -401,6 +414,108 @@ B32 MutexIsLocked(Mutex* mutex)
 void MutexUnlock(Mutex* mutex)
 {
     AtomicStore32(mutex, 0);
+}
+
+void RWMutexLock_Write(RWMutex* mutex)
+{
+    PROFILE_FUNCTION;
+
+    U32 tid = context.thread_id;
+
+    if (mutex->writer_thread_id == tid) {
+        mutex->write_recursion++;
+        return;
+    }
+
+    U32 spins = 0;
+    while (1)
+    {
+        while (mutex->writer_thread_id != 0 || mutex->reader_count != 0)
+        {
+            _mm_pause();
+            spins++;
+            if (spins > 100)
+            {
+                spins = 0;
+                OsThreadYield();
+            }
+        }
+
+        if (AtomicCompareExchange32_Acquire(&mutex->writer_thread_id, 0, tid) == 0)
+        {
+            if (mutex->reader_count == 0)
+            {
+                mutex->write_recursion = 1;
+                break;
+            }
+
+            AtomicStore32(&mutex->writer_thread_id, 0);
+        }
+    }
+}
+
+void RWMutexUnlock_Write(RWMutex* mutex)
+{
+    U32 tid = context.thread_id;
+
+    MemoryBarrierAcquire();
+    if (mutex->writer_thread_id == tid)
+    {
+        mutex->write_recursion--;
+        if (mutex->write_recursion == 0) {
+            AtomicStore32(&mutex->writer_thread_id, 0);
+        }
+    }
+    else {
+        InvalidCodepath();
+    }
+}
+
+void RWMutexLock_Read(RWMutex* mutex)
+{
+    PROFILE_FUNCTION;
+
+    U32 tid = context.thread_id;
+
+    if (mutex->writer_thread_id == tid)
+    {
+        AtomicIncrement32(&mutex->reader_count);
+        return;
+    }
+
+    U32 spins = 0;
+    while (1)
+    {
+        while (mutex->writer_thread_id != 0)
+        {
+            _mm_pause();
+            spins++;
+            if (spins > 100)
+            {
+                spins = 0;
+                OsThreadYield();
+            }
+        }
+
+        AtomicIncrement32(&mutex->reader_count);
+
+        if (mutex->writer_thread_id == 0) {
+            break;
+        }
+
+        AtomicDecrement32(&mutex->reader_count);
+    }
+}
+
+void RWMutexUnlock_Read(RWMutex* mutex)
+{
+    AtomicDecrement32(&mutex->reader_count);
+}
+
+B32 RWMutexIsLocked(RWMutex* mutex)
+{
+    MemoryBarrierAcquire();
+    return (mutex->writer_thread_id != 0) || (mutex->reader_count != 0);
 }
 
 //- MATH 
@@ -1933,6 +2048,9 @@ void LogInternal(String tag, String str, ...)
     va_end(args);
     
     StringBuilder builder = string_builder_make(context.arena);
+    append(&builder, "[T");
+    append_i32(&builder, context.thread_id);
+    append(&builder, "]");
     append(&builder, "[");
     append(&builder, tag);
     append(&builder, "] ");
@@ -1947,9 +2065,9 @@ per_thread_var YovThreadContext context;
 
 void InitializeThread()
 {
-    context.thread_index = AtomicIncrement32(&system_info.thread_counter);
+    context.thread_id = AtomicIncrement32(&system_info.thread_counter);
     char thread_id[32];
-    CStrFromU64(thread_id, context.thread_index);
+    CStrFromU64(thread_id, context.thread_id);
     
     char arena_name[128] = "Arena Thread ";
     CStrAppend(arena_name, thread_id, sizeof(arena_name));
@@ -1976,6 +2094,8 @@ void ReportEx(Reporter* reporter, ReportLevel level, Location location, U32 line
     va_start(args, text);
     String formatted_text = string_format_with_args(context.arena, text, args);
     va_end(args);
+
+    LogFlow("Report: %S", formatted_text);
     
     Report report;
     report.level = level;
@@ -2210,7 +2330,7 @@ Type* TypeGetNext(TypeSystem* tsys, Type* type)
 {
     PROFILE_FUNCTION;
     
-    if (type->kind == VKind_Array || type->kind == VKind_List) {
+    if (type->kind == VKind_Array) {
         return TypeGet(type->element_type_id);
     }
     
@@ -2296,7 +2416,7 @@ Type* TypeFromID(TypeSystem* tsys, U32 ID)
     return &tsys->types[index];
 }
 
-Type* TypeFromName(TypeSystem* tsys, String name)
+Type* TypeFromName(TypeSystem* tsys, String name, B32 skip_generics)
 {
     if (name == "Any") return any_type;
     if (name == "void") return void_type;
@@ -2312,6 +2432,7 @@ Type* TypeFromName(TypeSystem* tsys, String name)
     foreach_BArray(it, &tsys->types) {
         Type* t = it.value;
         if (t->name == name) {
+            if (skip_generics && t->kind == VKind_Generic) continue;
             return t;
         }
     }
@@ -2347,35 +2468,6 @@ Type* TypeFromArray(TypeSystem* tsys, Type* element, U32 dimension)
     return type;
 }
 
-Type* TypeFromList(TypeSystem* tsys, Type* element, U32 dimension)
-{
-    MutexLockGuard(&tsys->types_mutex);
-    
-    Type* type = element;
-    
-    while (dimension > 0)
-    {
-        element = type;
-        
-        foreach_BArray(it, &tsys->types)
-        {
-            Type* t = it.value;
-            
-            if (t->kind == VKind_List && t->element_type_id == element->id) {
-                return t;
-            }
-        }
-        
-        type = AllocType(tsys, VKind_List);
-        type->name = StrFormat(tsys->arena, "List[%S]", element->name);
-        type->element_type_id = element->id;
-        
-        dimension--;
-    }
-    
-    return type;
-}
-
 Type* TypeFromReference(TypeSystem* tsys, Type* base_type)
 {
     MutexLockGuard(&tsys->types_mutex);
@@ -2392,6 +2484,24 @@ Type* TypeFromReference(TypeSystem* tsys, Type* base_type)
     Type* type = AllocType(tsys, VKind_Reference);
     type->name = StrFormat(tsys->arena, "%S&", base_type->name);
     type->reference_next_id = base_type->id;
+    return type;
+}
+
+Type* TypeFromGeneric(TypeSystem* tsys, String name)
+{
+    MutexLockGuard(&tsys->types_mutex);
+    
+    foreach_BArray(it, &tsys->types)
+    {
+        Type* t = it.value;
+        
+        if (t->kind == VKind_Generic && t->name == name) {
+            return t;
+        }
+    }
+    
+    Type* type = AllocType(tsys, VKind_Generic);
+    type->name = StrCopy(tsys->arena, name);
     return type;
 }
 
@@ -2443,7 +2553,6 @@ Type* TypeFromEnum(TypeSystem* tsys, U32 definition_index)
 
 B32 TypeIsEnum(Type* type) { return type->kind == VKind_Enum; }
 B32 TypeIsArray(Type* type) { return type->kind == VKind_Array; }
-B32 TypeIsList(Type* type) { return type->kind == VKind_List; }
 B32 TypeIsStruct(Type* type) { return type->kind == VKind_Struct; }
 B32 TypeIsReference(Type* type) { return type->kind == VKind_Reference; }
 B32 TypeIsAnyInt(Type* type) { return type == int_type || type == uint_type; }
@@ -2550,7 +2659,6 @@ void WriteType(TypeSystem* tsys, Serializer* s, Type src)
     }
 
     case VKind_Array:
-    case VKind_List:
     {
         WriteU32(s, src.element_type_id);
         break;
@@ -2559,6 +2667,7 @@ void WriteType(TypeSystem* tsys, Serializer* s, Type src)
     case VKind_Nil:
     case VKind_Void:
     case VKind_Any:
+    case VKind_Generic:
     break;
     }
 }
@@ -2602,7 +2711,6 @@ Type* ReadType(TypeSystem* tsys, Deserializer* s)
     }
 
     case VKind_Array:
-    case VKind_List:
     {
         type->element_type_id = ReadU32(s);
         break;
@@ -2611,6 +2719,7 @@ Type* ReadType(TypeSystem* tsys, Deserializer* s)
     case VKind_Nil:
     case VKind_Void:
     case VKind_Any:
+    case VKind_Generic:
     break;
 
     }

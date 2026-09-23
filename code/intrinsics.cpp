@@ -2,7 +2,7 @@
 
 //- CORE
 
-void Intrinsic_SetupRuntime(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_SetupRuntime(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     PROFILE_FUNCTION;
 
@@ -146,12 +146,20 @@ void Intrinsic_SetupRuntime(Runtime* runtime, Array<Reference> params, Array<Ref
 
                 if (value.kind == ValueKind_None) {
                     report_arg_wrong_value(def->name, arg_value);
+                    show_script_help = true;
                     continue;
                 }
             }
 
             Reference ref = RefFromValue(runtime, NULL, value);
             RuntimeStore(runtime, NULL, RegIndexFromGlobal(def->global_index), ref);
+        }
+
+        foreach(i, defined_flags.count) {
+            if (!defined_flags[i] && runtime->args[i].required) {
+                ReportErrorNoCode("Argument '%S' is required", runtime->args[i].name);
+                show_script_help = true;
+            }
         }
 
         if (show_script_help) {
@@ -175,7 +183,7 @@ void Intrinsic_SetupRuntime(Runtime* runtime, Array<Reference> params, Array<Ref
     ArenaPopTo(context.arena, 0);
 }
 
-void Intrinsic_Typeof(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Typeof(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     TypeSystem* tsys = runtime->tsys;
     
@@ -192,25 +200,25 @@ void Intrinsic_Typeof(Runtime* runtime, Array<Reference> params, Array<Reference
     returns[0] = res;
 }
 
-void Intrinsic_Print(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Print(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str = StrFromRef(context.arena, runtime, params[0]);
     PrintEx(PrintLevel_UserCode, str);
 }
 
-void Intrinsic_PrintLn(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_PrintLn(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str = StrFromRef(context.arena, runtime, params[0]);
     PrintEx(PrintLevel_UserCode, "%S\n", str);
 }
 
-void Intrinsic_Exit(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Exit(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     I64 exit_code = RefGetSInt(params[0]);
     RuntimeExit(runtime, (I32)exit_code);
 }
 
-void Intrinsic_SetCD(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_SetCD(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     Reference ref = RuntimeGetCurrentDirRef(runtime);
     String path = get_string(params[0]);
@@ -232,7 +240,7 @@ void Intrinsic_SetCD(Runtime* runtime, Array<Reference> params, Array<Reference>
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_Assert(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Assert(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     B32 result = RefGetBool(params[0]);
     
@@ -244,7 +252,7 @@ void Intrinsic_Assert(Runtime* runtime, Array<Reference> params, Array<Reference
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_Failed(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Failed(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String message = get_string(params[0]);
     I64 exit_code = RefGetSInt(params[1]);
@@ -253,13 +261,13 @@ void Intrinsic_Failed(Runtime* runtime, Array<Reference> params, Array<Reference
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_SleepMs(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_SleepMs(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     U64 millis = RefGetUInt(params[0]);
     OsThreadSleep(millis);
 }
 
-void Intrinsic_Sleep(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Sleep(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     F64 sec = RefGetFloat(params[0]);
     
@@ -281,7 +289,7 @@ void Intrinsic_Sleep(Runtime* runtime, Array<Reference> params, Array<Reference>
     }
 }
 
-void Intrinsic_Env(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Env(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
@@ -291,7 +299,7 @@ void Intrinsic_Env(Runtime* runtime, Array<Reference> params, Array<Reference> r
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_EnvPath(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_EnvPath(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
@@ -305,7 +313,7 @@ void Intrinsic_EnvPath(Runtime* runtime, Array<Reference> params, Array<Referenc
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_EnvPathArray(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String name = get_string(params[0]);
     String value;
@@ -333,7 +341,17 @@ void Intrinsic_EnvPathArray(Runtime* runtime, Array<Reference> params, Array<Ref
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_ArrayAppendBack(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ArrayMake(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
+{
+    Type* array_type = TypeFromID(runtime->tsys, header->returns[0].type_id);
+    Type* element_type = TypeGetNext(runtime->tsys, array_type);
+    Reference count_ref = params[0];
+    I64 count = RefGetInt(count_ref);
+    
+    returns[0] = AllocArray(runtime, element_type, (U32)count);
+}
+
+void Intrinsic_ArrayAppendBack(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     TypeSystem* tsys = runtime->tsys;
 
@@ -355,7 +373,7 @@ void Intrinsic_ArrayAppendBack(Runtime* runtime, Array<Reference> params, Array<
     }
 }
 
-void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ArrayAppendElementBack(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     TypeSystem* tsys = runtime->tsys;
 
@@ -375,7 +393,7 @@ void Intrinsic_ArrayAppendElementBack(Runtime* runtime, Array<Reference> params,
     ref_set_member(runtime, dst, dst_index, src);
 }
 
-void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ArrayRemove(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     TypeSystem* tsys = runtime->tsys;
 
@@ -410,7 +428,7 @@ void Intrinsic_ArrayRemove(Runtime* runtime, Array<Reference> params, Array<Refe
     }
 }
 
-void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     TypeSystem* tsys = runtime->tsys;
 
@@ -447,46 +465,27 @@ void Intrinsic_ArrayUnorderedRemove(Runtime* runtime, Array<Reference> params, A
     dst_array->count--;
 }
 
-void Intrinsic_ArrayMakeEmpty(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
-{
-    Type* base_type = RefGetType(runtime, params[0]);
-    Reference arr_ref = params[1];
-    ObjectData_Array* arr = RefGetArray(arr_ref);
-    
-    Array<I64> dimensions = ArrayAlloc<I64>(context.arena, arr->count);
-    foreach(i, dimensions.count) {
-        dimensions[i] = RefGetUInt(RefGetMember(runtime, arr_ref, i));
-    }
-    
-    returns[0] = AllocArrayMultidimensional(runtime, base_type, dimensions);
-}
-
-void Intrinsic_ListMakeEmpty(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
-{
-    InvalidCodepath();
-}
-
 //- CONSOLE 
 
-void Intrinsic_ConsoleConfigure(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ConsoleConfigure(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     B32 raw_reads = RefGetBool(params[0]);
     
     OsConsoleConfigure(raw_reads);
 }
 
-void Intrinsic_ConsoleWrite(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ConsoleWrite(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str = get_string(params[0]);
     OsConsoleWrite(str);
 }
 
-void Intrinsic_ConsoleFlush(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ConsoleFlush(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     OsConsoleFlush();
 }
 
-void Intrinsic_ConsoleRead(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ConsoleRead(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str = OsConsoleRead(context.arena);
     returns[0] = AllocString(runtime, str);
@@ -504,7 +503,7 @@ internal_fn void ReturnFromExternalCall(Runtime* runtime, CallOutput res, Array<
     returns[1] = ref_from_Result(runtime, res.result);
 }
 
-void Intrinsic_Call(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Call(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     CallOutput res = {};
     
@@ -521,7 +520,7 @@ void Intrinsic_Call(Runtime* runtime, Array<Reference> params, Array<Reference> 
     ReturnFromExternalCall(runtime, res, returns);
 }
 
-void Intrinsic_CallExe(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_CallExe(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String exe_name = get_string(params[0]);
     String args = get_string(params[1]);
@@ -539,7 +538,7 @@ void Intrinsic_CallExe(Runtime* runtime, Array<Reference> params, Array<Referenc
     ReturnFromExternalCall(runtime, res, returns);
 }
 
-void Intrinsic_CallScript(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_CallScript(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String script_name = get_string(params[0]);
     String args = get_string(params[1]);
@@ -560,7 +559,7 @@ void Intrinsic_CallScript(Runtime* runtime, Array<Reference> params, Array<Refer
 
 //- UTILS
 
-void Intrinsic_StrAppend(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrAppend(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str0 = get_string(params[0]);
     String str1 = get_string(params[1]);
@@ -572,7 +571,7 @@ void Intrinsic_StrAppend(Runtime* runtime, Array<Reference> params, Array<Refere
     returns[0] = AllocString(runtime, res);
 }
 
-void Intrinsic_StrEquals(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrEquals(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str0 = get_string(params[0]);
     String str1 = get_string(params[1]);
@@ -581,7 +580,7 @@ void Intrinsic_StrEquals(Runtime* runtime, Array<Reference> params, Array<Refere
     returns[0] = AllocBool(runtime, res);
 }
 
-void Intrinsic_StrSplit(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrSplit(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str = get_string(params[0]);
     String separator = get_string(params[1]);
@@ -596,7 +595,7 @@ void Intrinsic_StrSplit(Runtime* runtime, Array<Reference> params, Array<Referen
     returns[0] = array;
 }
 
-void Intrinsic_StrGetCodepoint(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrGetCodepoint(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str = get_string(params[0]);
     U64 cursor = RefGetUInt(params[1]);
@@ -607,7 +606,7 @@ void Intrinsic_StrGetCodepoint(Runtime* runtime, Array<Reference> params, Array<
     returns[1] = AllocUInt(runtime, cursor);
 }
 
-void Intrinsic_StrFromCodepoint(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_StrFromCodepoint(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     U32 codepoint = (U32)RefGetUInt(params[0]);
     String str = StringFromCodepoint(context.arena, codepoint);
@@ -616,7 +615,7 @@ void Intrinsic_StrFromCodepoint(Runtime* runtime, Array<Reference> params, Array
 }
 
 
-void Intrinsic_PathAppend(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_PathAppend(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String str0 = get_string(params[0]);
     String str1 = get_string(params[1]);
@@ -627,7 +626,7 @@ void Intrinsic_PathAppend(Runtime* runtime, Array<Reference> params, Array<Refer
     returns[0] = AllocString(runtime, res);
 }
 
-void Intrinsic_PathResolve(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_PathResolve(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String res = PathResolve(context.arena, get_string(params[0]));
     returns[0] = AllocString(runtime, res);
@@ -651,12 +650,12 @@ internal_fn U64 RuntimeRandom(Runtime* runtime)
     return result;
 }
 
-void Intrinsic_Random(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Random(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     returns[0] = AllocUInt(runtime, RuntimeRandom(runtime));
 }
 
-void Intrinsic_RandomRange(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_RandomRange(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     I64 min = RefGetInt(params[0]);
     I64 max = RefGetInt(params[1]);
@@ -678,7 +677,7 @@ void Intrinsic_RandomRange(Runtime* runtime, Array<Reference> params, Array<Refe
     returns[0] = AllocSInt(runtime, result);
 }
 
-void Intrinsic_Random01(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Random01(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     U64 random = RuntimeRandom(runtime);
     U64 bits = (random >> 12) | 0x3FF0000000000000;
@@ -686,12 +685,12 @@ void Intrinsic_Random01(Runtime* runtime, Array<Reference> params, Array<Referen
     returns[0] = AllocFloat(runtime, result - 1.0);
 }
 
-void Intrinsic_TimeTicks(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_TimeTicks(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     returns[0] = AllocUInt(runtime, OsTimerGet());
 }
 
-void Intrinsic_TimeElapsed(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_TimeElapsed(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     U64 time = OsTimerGet() - runtime->started_time;
     F64 elapsed = time / (F64)system_info.timer_frequency;
@@ -700,7 +699,7 @@ void Intrinsic_TimeElapsed(Runtime* runtime, Array<Reference> params, Array<Refe
 
 //- YOV
 
-void Intrinsic_YovRequire(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovRequire(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     U64 major = RefGetUInt(params[0]);
     U64 minor = RefGetUInt(params[1]);
@@ -715,7 +714,7 @@ void Intrinsic_YovRequire(Runtime* runtime, Array<Reference> params, Array<Refer
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_YovRequireMin(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovRequireMin(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     U64 major = RefGetUInt(params[0]);
     U64 minor = RefGetUInt(params[1]);
@@ -732,7 +731,7 @@ void Intrinsic_YovRequireMin(Runtime* runtime, Array<Reference> params, Array<Re
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_YovRequireMax(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovRequireMax(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     U64 major = RefGetUInt(params[0]);
     U64 minor = RefGetUInt(params[1]);
@@ -749,7 +748,7 @@ void Intrinsic_YovRequireMax(Runtime* runtime, Array<Reference> params, Array<Re
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_YovParse(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_YovParse(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
 #if 0 // TODO(Jose): 
     SCRATCH();
@@ -788,21 +787,21 @@ void Intrinsic_YovParse(Runtime* runtime, Array<Reference> params, Array<Referen
 
 //- MISC
 
-void Intrinsic_AskYesNo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_AskYesNo(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String content = get_string(params[0]);
     B32 result = RuntimeAskYesNo(runtime, "Ask", content);
     returns[0] = AllocBool(runtime, result);
 }
 
-void Intrinsic_Exists(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_Exists(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String path = get_string(params[0]);
     B32 result = OsPathExists(path);
     returns[0] = AllocBool(runtime, result);
 }
 
-void Intrinsic_DirCreate(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirCreate(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     B32 recursive = RefGetBool(params[1]);
@@ -816,7 +815,7 @@ void Intrinsic_DirCreate(Runtime* runtime, Array<Reference> params, Array<Refere
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_DirDelete(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirDelete(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
@@ -829,7 +828,7 @@ void Intrinsic_DirDelete(Runtime* runtime, Array<Reference> params, Array<Refere
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_DirCopy(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirCopy(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -843,7 +842,7 @@ void Intrinsic_DirCopy(Runtime* runtime, Array<Reference> params, Array<Referenc
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_DirMove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirMove(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -857,7 +856,7 @@ void Intrinsic_DirMove(Runtime* runtime, Array<Reference> params, Array<Referenc
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_FileCopy(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileCopy(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -870,7 +869,7 @@ void Intrinsic_FileCopy(Runtime* runtime, Array<Reference> params, Array<Referen
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_FileMove(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileMove(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String dst = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String src = PathAbsoluteToCD(context.arena, runtime, get_string(params[1]));
@@ -882,7 +881,7 @@ void Intrinsic_FileMove(Runtime* runtime, Array<Reference> params, Array<Referen
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_FileDelete(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileDelete(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
@@ -893,7 +892,7 @@ void Intrinsic_FileDelete(Runtime* runtime, Array<Reference> params, Array<Refer
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_FileGetInfo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_FileGetInfo(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     TypeSystem* tsys = runtime->tsys;
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
@@ -908,7 +907,7 @@ void Intrinsic_FileGetInfo(Runtime* runtime, Array<Reference> params, Array<Refe
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_DirGetInfo(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_DirGetInfo(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     TypeSystem* tsys = runtime->tsys;
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
@@ -928,7 +927,7 @@ void Intrinsic_DirGetInfo(Runtime* runtime, Array<Reference> params, Array<Refer
     returns[1] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_WriteEntireFile(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_WriteEntireFile(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     String content = get_string(params[1]);
@@ -940,7 +939,7 @@ void Intrinsic_WriteEntireFile(Runtime* runtime, Array<Reference> params, Array<
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_ReadEntireFile(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_ReadEntireFile(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     String path = PathAbsoluteToCD(context.arena, runtime, get_string(params[0]));
     
@@ -955,13 +954,13 @@ void Intrinsic_ReadEntireFile(Runtime* runtime, Array<Reference> params, Array<R
 
 //- MSVC
 
-void Intrinsic_MsvcImportEnvX64(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_MsvcImportEnvX64(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     Result res = MSVCImportEnv(MSVC_Env_x64);
     returns[0] = ref_from_Result(runtime, res);
 }
 
-void Intrinsic_MsvcImportEnvX86(Runtime* runtime, Array<Reference> params, Array<Reference> returns)
+void Intrinsic_MsvcImportEnvX86(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns)
 {
     Result res = MSVCImportEnv(MSVC_Env_x86);
     returns[0] = ref_from_Result(runtime, res);
@@ -990,14 +989,13 @@ IntrinsicRegistry intrinsics[] = {
     { Intrinsic_EnvPath, "EnvPath" },
     { Intrinsic_EnvPathArray, "EnvPathArray" },
     
+    { Intrinsic_ArrayMake, "ArrayMake" },
     { Intrinsic_ArrayAppendBack, "ArrayAppendBack" },
     // TODO(Jose): { Intrinsic_ArrayAppendFront, "ArrayAppendFront" },
     { Intrinsic_ArrayAppendElementBack, "ArrayAppendElementBack" },
     // TODO(Jose): { Intrinsic_ArrayAppendElementFront, "ArrayAppendElementFront" },
     { Intrinsic_ArrayRemove, "ArrayRemove" },
     { Intrinsic_ArrayUnorderedRemove, "ArrayUnorderedRemove" },
-    { Intrinsic_ArrayMakeEmpty, "ArrayMakeEmpty" },
-    { Intrinsic_ListMakeEmpty, "ListMakeEmpty" },
     
     { Intrinsic_ConsoleConfigure, "ConsoleConfigure" },
     { Intrinsic_ConsoleWrite, "ConsoleWrite" },

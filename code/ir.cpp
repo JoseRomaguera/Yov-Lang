@@ -221,26 +221,11 @@ internal_fn Value ValueFromSymbol(IR_Context* ir, String identifier, Location lo
     PROFILE_FUNCTION;
     
     TypeSystem* tsys = ir->front->tsys;
-    Symbol symbol = IRFindSymbol(ir, identifier);
+    Symbol symbol = SymbolFromName(ir, identifier);
     
-    // Define globals
-    if (symbol.kind == SymbolKind_None)
+    if (symbol.kind == SymbolKind_Value)
     {
-        I32 global_index = FrontGlobalIndexFromName(ir->front, identifier);
-        
-        if (global_index >= 0)
-        {
-            ObjectDefinition* global = &ir->front->global_objects[global_index];
-            Type* type = TypeFromID(tsys, global->type_id);
-            Assert(TypeIsValid(type));
-            return ValueFromGlobal(type->id, global_index);
-        }
-    }
-    
-    if (symbol.kind == SymbolKind_Object)
-    {
-        IR_Object* object = symbol.object;
-        return ValueFromIrObject(object);
+        return symbol.value;
     }
     else if (symbol.kind == SymbolKind_Type) {
         return ValueFromType(symbol.type);
@@ -279,6 +264,11 @@ IR_Group IRFromFunctionCall(IR_Context* ir, FunctionHeader* fn, Array<Value> par
     
     TypeSystem* tsys = ir->front->tsys;
     Reporter* reporter = ir->front->reporter;
+
+    if (parameters.count != fn->parameters.count) {
+        report_function_expecting_parameters(location, fn->name, fn->parameters.count);
+        return IRFailed();
+    }
     
     IR_Group out = IRFromNone();
     
@@ -299,16 +289,11 @@ IR_Group IRFromFunctionCall(IR_Context* ir, FunctionHeader* fn, Array<Value> par
         params[i] = param;
     }
     
-    if (params.count != fn->parameters.count) {
-        report_function_expecting_parameters(location, fn->name, fn->parameters.count);
-        return IRFailed();
-    }
-    
     // Check parameters
     foreach(i, params.count) {
         Type* type = TypeFromID(tsys, fn->parameters[i].type_id);
         if (type != any_type && type->id != params[i].type_id) {
-            report_function_wrong_parameter_type(location, fn->name, type->name, i + 1);
+            report_function_wrong_parameter_type(location, fn->name, type->name, i + 1, TypeGet(params[i].type_id)->name);
             return IRFailed();
         }
     }
@@ -348,59 +333,42 @@ IR_Group IRFromFunctionCall(IR_Context* ir, FunctionHeader* fn, Array<Value> par
     return out;
 }
 
-IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parameters, ExpresionContext context, Location location)
+IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parameters, ExpresionContext expr_context, Location location)
 {
-    TypeSystem* tsys = ir->front->tsys;
-    Reporter* reporter = ir->front->reporter;
-    
-    FunctionHeader* fn = FrontFunctionHeaderFromName(ir->front, name);
-    if (fn == NULL) {
+    FrontContext* front = ir->front;
+    TypeSystem* tsys = front->tsys;
+    Reporter* reporter = front->reporter;
+
+    Symbol symbol = SymbolFromName(ir, name);
+
+    if (symbol.kind == SymbolKind_None) {
         report_symbol_not_found(location, name);
         return IRFailed();
     }
-    return IRFromFunctionCall(ir, fn, parameters, context, location);
+
+    if (symbol.kind == SymbolKind_FunctionHeader || symbol.kind == SymbolKind_GenericFunctionHeader)
+    {
+        FunctionHeader* fn = NULL;
+
+        if (symbol.kind == SymbolKind_GenericFunctionHeader)
+        {
+            fn = ResolveFunctionHeaderGenericsFromArguments(ir, symbol.generic_function_header, parameters, location);
+            if (fn == NULL) return IRFailed();
+        }
+        else {
+            fn = symbol.function_header;
+        }
+
+        return IRFromFunctionCall(ir, fn, parameters, expr_context, location);
+    }
+    
+    ReportErrorFront(location, "Symbol '%S' is not invokable", name);
+    return IRFailed();
 }
 
 IR_Group IRFromDefaultInitializer(IR_Context* ir, Type* type, Location location) {
     Assert(TypeIsValid(type));
     return IRFromNone(ValueFromZero(type));
-}
-
-IR_Group IRFromEmptyArray(IR_Context* ir, Type* base_type, Array<Value> dimensions, Location location)
-{
-    TypeSystem* tsys = ir->front->tsys;
-    Reporter* reporter = ir->front->reporter;
-    
-    for (U32 i = 0; i < dimensions.count; i++) {
-        Assert(dimensions[i].type_id == uint_type->id);
-    }
-    
-    Array<Value> params = ArrayAlloc<Value>(context.arena, 2);
-    params[0] = ValueFromType(base_type);
-    params[1] = ValueFromArray(ir->arena, TypeFromArray(tsys, uint_type, 1), dimensions);
-    
-    Type* expected_type = TypeFromArray(tsys, base_type, dimensions.count);
-    IR_Group out = IRFromFunctionCallName(ir, "ArrayMakeEmpty", params, ExpresionContext_from_type(expected_type, 1), location);
-    if (!out.success) return IRFailed();
-
-    Value dst = out.value;
-    I32 reg_index = ValueGetRegister(dst);
-
-    if (reg_index < 0) {
-        InvalidCodepath();
-        return IRFailed();
-    }
-
-    ir->local_registers[reg_index].type_id = expected_type->id;
-
-    out.value = ValueFromRegister(reg_index, expected_type->id, false);
-    return out;
-}
-
-IR_Group IRFromEmptyList(IR_Context* ir, Type* base_type, Array<Value> dimensions, Location location)
-{
-    InvalidCodepath();
-    return IRFailed();
 }
 
 IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location)
@@ -611,6 +579,9 @@ internal_fn IR_Group IRFromArrayAppend(IR_Context* ir, Value array, Value src, B
     Array<Value> params = ArrayAlloc<Value>(context.arena, 2);
     params[0] = array;
     params[1] = src;
+
+    Assert(TypeIsReference(TypeGet(array.type_id)) && TypeIsArray(TypeGetNext(tsys, TypeGet(array.type_id))));
+
     out = IRAppend(out, IRFromFunctionCallName(ir, call, params, expr_ctx, location));
     out = IRAppend(out, IRFromDereference(ir, array, location));
     return out;
@@ -1036,7 +1007,7 @@ IR_Group IRFromChildAccess(IR_Context* ir, Value src, String child_name, Expresi
         
         if (type->kind == VKind_Enum)
         {
-            EnumDefinition* enum_def = &ir->front->enums[type->definition_index];
+            EnumDefinition* enum_def = EnumFromIndex(ir->front, type->definition_index);
 
             if (StrEquals(child_name, "count")) {
                 mem = IRFromNone(ValueFromUInt(enum_def->values.count));
@@ -1497,8 +1468,10 @@ IR MakeIR(Arena* arena, Array<Register> local_registers, IR_Group group, FrontSc
     return ir;
 }
 
-IR_Context* IrContextAlloc(FrontContext* front)
+IR_Context* IrContextAlloc(FrontContext* front, Array<ResolveGenericEntry> resolve_generics)
 {
+    LogFlow("New IR context");
+
     Arena* arena = context.arena;
     
     IR_Context* ir = ArenaPushStruct<IR_Context>(arena);
@@ -1509,6 +1482,7 @@ IR_Context* IrContextAlloc(FrontContext* front)
     ir->definitions = BArrayMake<IR_Definition>(ir->arena, 8);
     ir->looping_scopes = BArrayMake<IR_LoopingScope>(ir->arena, 8);
     ir->scope = 0;
+    ir->resolve_generics = ArrayCopyRecursive(arena, resolve_generics, ResolveGenericEntryCopy);
     return ir;
 }
 
@@ -1724,6 +1698,9 @@ IR_Object* IRDefineObject(IR_Context* ir, String name, Type* type, I32 scope, I3
     def->type = type;
     def->register_index = register_index;
     def->scope = scope;
+
+    LogFlow("Object definition '%S', type '%S', scope %i, reg %i", def->name, type->name, def->scope, def->register_index);
+
     return def;
 }
 
@@ -1736,6 +1713,9 @@ IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, Type* type)
     def->type = type;
     def->register_index = object->register_index;
     def->scope = ir->scope;
+
+    LogFlow("Type assumption '%S', type '%S', scope %i, reg %i", object->name, type->name, def->scope, def->register_index);
+
     return def;
 }
 
@@ -1762,59 +1742,6 @@ IR_Definition* IRFindDefinition(IR_Context* ir, String name, B32 parent_scopes)
     }
     
     return res;
-}
-
-Symbol IRFindSymbol(IR_Context* ir, String name)
-{    
-    Symbol symbol{};
-    symbol.name = name;
-    
-    {
-        IR_Object* obj = IRFindObject(ir, name, true);
-        
-        if (obj != NULL) {
-            symbol.kind = SymbolKind_Object;
-            symbol.object = obj;
-            return symbol;
-        }
-    }
-
-    FrontDefinition* def = NULL;
-    
-    {
-        IR_Definition* ir_def = IRFindDefinition(ir, name, true);
-
-        if (ir_def != NULL) {
-            def = ir_def->definition;
-        }
-    }
-
-    if (def == NULL) {
-        def = FrontDefinitionFromName(ir->front, name);
-        if (def != NULL && !def->is_global) def = NULL;
-    }
-
-    if (def != NULL) 
-    {
-        if (def->type == DefinitionType_Function) {
-            symbol.kind = SymbolKind_FunctionHeader;
-            symbol.function_header = &ir->front->function_headers[def->index];
-            return symbol;
-        }
-    }
-
-    
-    {
-        Type* type = TypeFromName(ir->front->tsys, name);
-        
-        if (type != nil_type) {
-            symbol.kind = SymbolKind_Type;
-            symbol.type = type;
-            return symbol;
-        }
-    }
-    
-    return {};
 }
 
 IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, Location location)
@@ -1844,6 +1771,7 @@ IR_LoopingScope* ir_get_looping_scope(IR_Context* ir) {
 void ir_scope_push(IR_Context* ir)
 {
     ir->scope++;
+    LogFlow("Scope push: %i", ir->scope);
 }
 
 void ir_scope_pop(IR_Context* ir)
@@ -1857,6 +1785,8 @@ void ir_scope_pop(IR_Context* ir)
             BArrayErase(&ir->objects, i);
         }
     }
+
+    LogFlow("Scope pop: %i", ir->scope);
 }
 
 I32 IRRegisterAlloc(IR_Context* ir, Type* type, RegisterKind kind, B32 constant) {

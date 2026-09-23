@@ -2,12 +2,33 @@
 
 String StringFromDefinitionType(DefinitionType type)
 {
-    if (type == DefinitionType_Function) return "Function";
-    if (type == DefinitionType_Struct) return "Struct";
-    if (type == DefinitionType_Enum) return "Enum";
-    if (type == DefinitionType_Arg) return "Arg";
+    switch (type) {
+        case DefinitionType_FunctionHeader: return "FunctionHeader";
+        case DefinitionType_GenericFunctionHeader: return "GenericFunctionHeader";
+        case DefinitionType_Struct: return "Struct";
+        case DefinitionType_Enum: return "Enum";
+        case DefinitionType_Arg: return "Arg";
+        case DefinitionType_Global: return "Global";
+
+        case DefinitionType_Unknown: break;
+    }
     InvalidCodepath();
     return "?";
+}
+
+ResolveGenericEntry ResolveGenericEntryCopy(Arena* arena, ResolveGenericEntry src) {
+    ResolveGenericEntry dst = {};
+    dst.name = StrCopy(arena, src.name);
+    dst.type_id = src.type_id;
+    return dst;
+}
+
+ResolveGenericEntry FindGenericType(String name, Array<ResolveGenericEntry> table)
+{
+    for (U32 i = 0; i < table.count; i++) {
+        if (table[i].name == name) return table[i];
+    }
+    return {};
 }
 
 ObjectDefinition ObjDefMake(String name, U32 type_id, Location location, B32 is_constant) {
@@ -137,12 +158,24 @@ internal_fn void DependencyPass(LaneContext* lane, FrontContext* front)
     PROFILE_FUNCTION;
     
     Reporter* reporter = front->reporter;
-    
-    RangeU32 range = LaneDistributeUniformWork(lane, front->definitions.count);
-    
-    for (U32 i = range.min; i < range.max; ++i)
+
+    U32 task_index = 0;
+
+    LaneTaskStart(lane, front->definitions.count);
+    while (LaneTaskFetch(lane->group, &task_index))
     {
-        FrontDefinition* def = &front->definitions[i];
+        FrontDefinition* def = &front->definitions[task_index];
+        if (def->type == DefinitionType_GenericFunctionHeader) continue;
+        ResolveDefinition(front, def);
+    }
+
+    LaneBarrier(lane);
+
+    LaneTaskStart(lane, front->definitions.count);
+    while (LaneTaskFetch(lane->group, &task_index))
+    {
+        FrontDefinition* def = &front->definitions[task_index];
+        if (def->type != DefinitionType_GenericFunctionHeader) continue;
         ResolveDefinition(front, def);
     }
     
@@ -174,13 +207,13 @@ internal_fn IR_Group IRGenerateScriptHelp(IR_Context* ir)
         }
     }
     
-    Array<String> headers = ArrayAlloc<String>(context.arena, front->args.count);
+    Array<String> headers = ArrayAlloc<String>(context.arena, front->_args.count);
     
     U32 index = 0;
     U32 longest_header = 0;
-    foreach(i, front->args.count)
+    foreach(i, headers.count)
     {
-        ArgDefinition* arg = &front->args[i];
+        ArgDefinition* arg = ArgFromIndex(front, i);
         ObjectDefinition* obj = &front->global_objects[arg->global_index];
         Type* type = TypeFromID(front->tsys, obj->type_id);
     
@@ -216,9 +249,9 @@ internal_fn IR_Group IRGenerateScriptHelp(IR_Context* ir)
 
     BArrayAdd(&values, ValueFromString(context.arena, "Script Arguments:\n"));
 
-    foreach(i, front->args.count)
+    foreach(i, headers.count)
     {
-        ArgDefinition* arg = &front->args[i];
+        ArgDefinition* arg = ArgFromIndex(front, i);
         ObjectDefinition* obj = &front->global_objects[arg->global_index];
         Type* type = TypeFromID(front->tsys, obj->type_id);
         
@@ -276,25 +309,25 @@ internal_fn void IRPass(LaneContext* lane, FrontContext* front)
 
     if (LaneNarrow(lane))
     {
-        FunctionHeader* header = FrontFunctionHeaderFromName(front, "__YovEntryPoint");
+        FunctionHeader* header = FunctionHeaderFromName(front, "__YovEntryPoint");
 
         if (header == NULL) {
             ReportErrorFront(NO_CODE, "Function '__YovEntryPoint' is not defined");
         }
         else
         {
-            IR_Context* ir = IrContextAlloc(front);
+            IR_Context* ir = IrContextAlloc(front, {});
 
             IR_Group group = IRFromNone();
 
             // User defined globals
-            foreach_BArray(it, &front->globals)
+            foreach_BArray(it, &front->_globals)
             {
                 GlobalDefinition* def = it.value;
 
                 Parser* parser = ParserFromLocation(front, def->location);
 
-                ObjectDefinitionResult res = ReadObjectDefinitionWithIr(context.arena, parser, ir, false, RegisterKind_Global);
+                ObjectDefinitionResult res = ReadObjectDefinitionWithIr(context.arena, ir, parser, false, RegisterKind_Global);
                 
                 if (res.success) {
                     group = IRAppend(group, res.out);
@@ -302,7 +335,7 @@ internal_fn void IRPass(LaneContext* lane, FrontContext* front)
             }
 
             // Init arg globals
-            foreach_BArray(it, &front->args)
+            foreach_BArray(it, &front->_args)
             {
                 ArgDefinition* def = it.value;
 
@@ -342,14 +375,25 @@ internal_fn void IRPass(LaneContext* lane, FrontContext* front)
         }
     }
 
+    LaneGroup* group = lane->group;
+
     LaneTaskStart(lane, front->definitions.count);
 
-    U32 def_index;
-    while (LaneTaskFetch(lane->group, &def_index))
+    while (LaneDynamicTaskIsBusy(group))
     {
-        FrontDefinition* def = &front->definitions[def_index];
-        GenerateIR(front, def);
-    }
+        U32 def_index;
+        if (LaneTaskFetch(lane->group, &def_index))
+        {
+            FrontDefinition* def = &front->definitions[def_index];
+            GenerateIR(front, def);
+
+            LaneTaskSetTotal(group, front->definitions.count);
+            LaneDynamicTaskFinish(group);
+        }
+        else {
+            OsThreadYield();
+        }
+    }    
 
     LaneBarrier(lane);
 }
@@ -481,8 +525,11 @@ void WriteStructDefinition(Serializer* s, StructDefinition src)
     WriteU32(s, 0); // VERSION
     
     WriteString(s, src.name);
-    WriteArray(s, src.names, WriteString);
 
+    WriteArray(s, src.generic_names, WriteString);
+    WriteArray(s, src.generic_types, WriteU32);
+    WriteB8(s, src.has_generics);
+    WriteArray(s, src.names, WriteString);
     WriteArray(s, src.types, WriteU32);
 
     WriteLocation(s, src.location);
@@ -537,12 +584,12 @@ RBuffer BinaryFromFrontContext(Arena* arena, FrontContext* src)
 
     WriteBArray(s, src->global_objects, WriteObjectDefinition);
 
-    WriteBArray(s, src->functions, WriteFunctionBody);
-    WriteBArray(s, src->function_headers, WriteFunctionHeader);
-    WriteBArray(s, src->structs, WriteStructDefinition);
-    WriteBArray(s, src->enums, WriteEnumDefinition);
-    WriteBArray(s, src->args, WriteArgDefinition);
-    WriteBArray(s, src->globals, WriteGlobalDefinition);
+    WriteBArray(s, src->_functions, WriteFunctionBody);
+    WriteBArray(s, src->_function_headers, WriteFunctionHeader);
+    WriteBArray(s, src->_structs, WriteStructDefinition);
+    WriteBArray(s, src->_enums, WriteEnumDefinition);
+    WriteBArray(s, src->_args, WriteArgDefinition);
+    WriteBArray(s, src->_globals, WriteGlobalDefinition);
     
     return RBufferFromSerializer(arena, s);
 }
@@ -571,12 +618,13 @@ RBuffer YovCompile(Arena* arena, Reporter* reporter, String path)
     front->definitions = BArrayMake<FrontDefinition>(front_arena, 64);
     front->global_objects = BArrayMake<ObjectDefinition>(front_arena, 32);
 
-    front->functions = BArrayMake<FunctionBody>(front_arena, 32);
-    front->function_headers = BArrayMake<FunctionHeader>(front_arena, 32);
-    front->structs = BArrayMake<StructDefinition>(front_arena, 32);
-    front->enums = BArrayMake<EnumDefinition>(front_arena, 32);
-    front->globals = BArrayMake<GlobalDefinition>(front_arena, 32);
-    front->args = BArrayMake<ArgDefinition>(front_arena, 32);
+    front->_functions = BArrayMake<FunctionBody>(front_arena, 32);
+    front->_function_headers = BArrayMake<FunctionHeader>(front_arena, 32);
+    front->_generic_function_headers = BArrayMake<GenericFunctionHeader>(front_arena, 32);
+    front->_structs = BArrayMake<StructDefinition>(front_arena, 32);
+    front->_enums = BArrayMake<EnumDefinition>(front_arena, 32);
+    front->_globals = BArrayMake<GlobalDefinition>(front_arena, 32);
+    front->_args = BArrayMake<ArgDefinition>(front_arena, 32);
 
     U32 lane_count = DEV_SINGLE_THREAD ? 1 : U32_MAX;
     
@@ -584,10 +632,10 @@ RBuffer YovCompile(Arena* arena, Reporter* reporter, String path)
     LaneGroupWait(group);
 
 #if LOG_IR_ENABLED
-    foreach(i, front->functions.count)
+    foreach(i, front->_functions.count)
     {
-        FunctionBody* fn = &front->functions[i];
-        FunctionHeader* header = &front->function_headers[fn->function_header_index];
+        FunctionBody* fn = &front->_functions[i];
+        FunctionHeader* header = &front->_function_headers[fn->function_header_index];
         PrintIr(front, header->name, fn->ir);
     }
 #endif
@@ -606,6 +654,9 @@ FrontDefinition* ReadDefinition(FrontContext* front, Parser* parser, B32 is_glob
 
     DefinitionType type = DefinitionType_Unknown;
 
+    B32 has_generics = false;
+    Array<String> generics = {};
+
     if (PeekToken(parser).kind != TokenKind_Colon) {
         type = DefinitionType_Global;
     }
@@ -613,12 +664,35 @@ FrontDefinition* ReadDefinition(FrontContext* front, Parser* parser, B32 is_glob
         AssumeToken(parser, TokenKind_Colon);
 
         TokenKind key = ConsumeToken(parser).kind;
+        Token next = PeekToken(parser);
 
-        if (key == TokenKind_FuncKeyword) type = DefinitionType_Function;
+        has_generics = next.kind == TokenKind_OpenBracket;
+
+        if (key == TokenKind_FuncKeyword) {
+            if (has_generics) type = DefinitionType_GenericFunctionHeader;
+            else type = DefinitionType_FunctionHeader;
+        }
         else if (key == TokenKind_StructKeyword) type = DefinitionType_Struct;
         else if (key == TokenKind_EnumKeyword) type = DefinitionType_Enum;
         else if (key == TokenKind_ArgKeyword) type = DefinitionType_Arg;
         else type = DefinitionType_Global;
+    }
+
+    if (has_generics && (type != DefinitionType_Struct && type != DefinitionType_GenericFunctionHeader)) {
+        ReportErrorFront(LocationFromToken(identifier_token), "Generics not allowed for this definition");
+        return NULL;
+    }
+
+    if (has_generics)
+    {
+        Location generics_location = FetchScope(parser, TokenKind_OpenBracket, false);
+        if (!LocationIsValid(generics_location)) {
+            report_common_missing_closing_bracket(LocationFromToken(identifier_token));
+            return NULL;
+        }
+
+        generics = ReadGenerics(context.arena, ParserSub(parser, generics_location), reporter);
+        if (reporter->exit_requested) return NULL;
     }
 
     Location location = NO_CODE;
@@ -669,7 +743,7 @@ FrontDefinition* ReadDefinition(FrontContext* front, Parser* parser, B32 is_glob
 
     String name = identifier_token.value;
 
-    return AddDefinition(front, type, name, is_global, location);
+    return AddDefinition(front, type, name, generics, is_global, location);
 }
 
 
@@ -696,7 +770,7 @@ internal_fn B32 ResolveEnum(FrontContext* front, EnumDefinition* def)
     BArray<I64> values = BArrayMake<I64>(context.arena, 16);
     U32 index = 0;
 
-    IR_Context* ir_context = IrContextAlloc(front);
+    IR_Context* ir_context = IrContextAlloc(front, {});
     
     while (true)
     {
@@ -767,6 +841,16 @@ internal_fn B32 ResolveEnum(FrontContext* front, EnumDefinition* def)
     return true;
 }
 
+internal_fn Array<ResolveGenericEntry> ResolveGenericsTableFromNames(Arena* arena, TypeSystem* tsys, Array<String> generics)
+{
+    Array<ResolveGenericEntry> table = ArrayAlloc<ResolveGenericEntry>(context.arena, generics.count);
+    foreach(i, generics.count) {
+        table[i].name = generics[i];
+        table[i].type_id = TypeFromGeneric(tsys, generics[i])->id;
+    }
+    return table;
+}
+
 internal_fn B32 ResolveStruct(FrontContext* front, StructDefinition* def)
 {
     PROFILE_FUNCTION;
@@ -780,6 +864,13 @@ internal_fn B32 ResolveStruct(FrontContext* front, StructDefinition* def)
     AssumeToken(parser, TokenKind_Colon);
     AssumeToken(parser, TokenKind_Colon);
     AssumeToken(parser, TokenKind_StructKeyword);
+
+    // Skip generics
+    if (PeekToken(parser).kind == TokenKind_OpenBracket) {
+        FetchScope(parser, TokenKind_OpenBracket, true);
+    }
+
+    Array<ResolveGenericEntry> resolve_generics = ResolveGenericsTableFromNames(context.arena, tsys, def->generic_names);
 
     Token open_brace_token = ConsumeToken(parser);
     if (open_brace_token.kind != TokenKind_OpenBrace) {
@@ -796,8 +887,8 @@ internal_fn B32 ResolveStruct(FrontContext* front, StructDefinition* def)
             report_expecting_semicolon(LocationFromParser(parser, parser->cursor));
             return false;
         }
-        
-        ObjectDefinitionResult read_result = ReadObjectDefinition(context.arena, ParserSub(parser, member_location), reporter, tsys, false, RegisterKind_Local);
+
+        ObjectDefinitionResult read_result = ReadObjectDefinition(context.arena, ParserSub(parser, member_location), front, false, resolve_generics, RegisterKind_Local);
         if (!read_result.success) return false;
         
         foreach(i, read_result.objects.count) {
@@ -870,7 +961,90 @@ internal_fn B32 ResolveStruct(FrontContext* front, StructDefinition* def)
     return true;
 }
 
-internal_fn B32 ResolveFunctionHeader(FrontContext* front, FunctionHeader* def)
+internal_fn Array<ObjectDefinition> ReadFunctionParameters(Arena* arena, Parser* parser, FrontContext* front, Array<String> generics)
+{
+    PROFILE_FUNCTION;
+
+    Reporter* reporter = front->reporter;
+    TypeSystem* tsys = front->tsys;
+
+    Location location = NO_CODE;
+
+    if (PeekToken(parser).kind != TokenKind_OpenParenthesis)
+        return {};
+    
+    location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+    
+    if (!LocationIsValid(location)) {
+        report_common_missing_closing_parenthesis(PeekToken(parser).location);
+        return {};
+    }
+
+    Array<ResolveGenericEntry> resolve_generics = ResolveGenericsTableFromNames(context.arena, tsys, generics);
+
+    ObjectDefinitionResult res = ReadObjectDefinitionList(arena, ParserSub(parser, location), front, resolve_generics, RegisterKind_Parameter);
+    if (!res.success) 
+        return {};
+
+    return res.objects;
+}
+
+internal_fn Array<ObjectDefinition> ReadFunctionReturns(Arena* arena, Parser* parser, FrontContext* front, Array<String> generics)
+{
+    PROFILE_FUNCTION;
+
+    Reporter* reporter = front->reporter;
+    TypeSystem* tsys = front->tsys;
+
+    Location location = NO_CODE;
+    B32 is_list = false;
+
+    if (PeekToken(parser).kind != TokenKind_Arrow) return {};
+
+    AssumeToken(parser, TokenKind_Arrow);
+    
+    Token first = PeekToken(parser);
+    
+    is_list = first.kind == TokenKind_OpenParenthesis;
+    
+    if (is_list)
+    {
+        location = FetchScope(parser, TokenKind_OpenParenthesis, false);
+        
+        if (!LocationIsValid(location)) {
+            ReportErrorFront(first.location, "Missing parenthesis for return");
+            return {};
+        }
+    }
+    else
+    {
+        location = FetchUntil(parser, false, TokenKind_OpenBrace);
+
+        if (!LocationIsValid(location)) {
+            location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
+            MoveCursor(parser, parser->range.max);
+        }
+    }
+
+    Array<ResolveGenericEntry> resolve_generics = ResolveGenericsTableFromNames(context.arena, tsys, generics);
+
+    if (is_list) {
+        ObjectDefinitionResult res = ReadObjectDefinitionList(context.arena, ParserSub(parser, location), front, resolve_generics, RegisterKind_Return);
+        if (!res.success)  return {};
+        return res.objects;
+    }
+    else {
+        IR_Context* dummy_ir = IrContextAlloc(front, resolve_generics);
+        Type* type = ReadObjectType(dummy_ir, ParserSub(parser, location));
+        if (type == nil_type) return {};
+        
+        Array<ObjectDefinition> returns = ArrayAlloc<ObjectDefinition>(context.arena, 1);
+        returns[0] = ObjDefMake("return", type->id, location, false);
+        return returns;
+    }
+}
+
+internal_fn B32 ResolveFunctionHeader(FrontContext* front, FunctionHeaderBase* def)
 {
     PROFILE_FUNCTION;
     
@@ -884,108 +1058,27 @@ internal_fn B32 ResolveFunctionHeader(FrontContext* front, FunctionHeader* def)
     AssumeToken(parser, TokenKind_Colon);
     AssumeToken(parser, TokenKind_FuncKeyword);
 
-    Location parameters_location = NO_CODE;
-    Location returns_location = NO_CODE;
-    Location body_location = NO_CODE;
-    Location generics_location = NO_CODE;
-
-    // Generics
-    if (PeekToken(parser).kind == TokenKind_OpenBracket)
-    {
-        generics_location = FetchScope(parser, TokenKind_OpenBracket, false);
-        
-        if (!LocationIsValid(generics_location)) {
-            report_common_missing_closing_bracket(PeekToken(parser).location);
-            return false;
-        }
-    }
+    def->body_location = NO_CODE;
     
-    // Parameters
-    if (PeekToken(parser).kind == TokenKind_OpenParenthesis)
-    {
-        parameters_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
-        
-        if (!LocationIsValid(parameters_location)) {
-            report_common_missing_closing_parenthesis(PeekToken(parser).location);
-            return false;
-        }
-    }
-    
-    B32 return_is_list = false;
+    Array<ObjectDefinition> parameters = ReadFunctionParameters(context.arena, parser, front, {});
+    if (reporter->exit_requested) return false;
 
-    // Returns
-    if (PeekToken(parser).kind == TokenKind_Arrow)
-    {
-        AssumeToken(parser, TokenKind_Arrow);
-        
-        Token first = PeekToken(parser);
-        
-        return_is_list = first.kind == TokenKind_OpenParenthesis;
-        
-        if (return_is_list)
-        {
-            returns_location = FetchScope(parser, TokenKind_OpenParenthesis, false);
-            
-            if (!LocationIsValid(returns_location)) {
-                ReportErrorFront(first.location, "Missing parenthesis for return");
-                return false;
-            }
-        }
-        else
-        {
-            returns_location = FetchUntil(parser, false, TokenKind_OpenBrace);
-
-            if (!LocationIsValid(returns_location)) {
-                returns_location = LocationMake(parser->cursor, parser->range.max, parser->script_id);
-                MoveCursor(parser, parser->range.max);
-            }
-        }
-    }
+    Array<ObjectDefinition> returns = ReadFunctionReturns(context.arena, parser, front, {});
+    if (reporter->exit_requested) return false;
     
     // Body
     if (PeekToken(parser).kind != TokenKind_None)
     {
-        body_location = FetchCode(parser);
+        def->body_location = FetchCode(parser);
         
-        if (!LocationIsValid(body_location)) {
+        if (!LocationIsValid(def->body_location)) {
             ReportErrorFront(PeekToken(parser).location, "Expecting the body of the function");
             return false;
         }
     }
-    
-    Array<ObjectDefinition> parameters = {};
-    Array<ObjectDefinition> returns = {};
-    
-    if (LocationIsValid(parameters_location)) {
-        ObjectDefinitionResult res = ReadObjectDefinitionList(context.arena, ParserSub(parser, parameters_location), reporter, tsys, RegisterKind_Parameter);
-        if (!res.success) 
-            return false;
-        parameters = res.objects;
-    }
-    
-    if (LocationIsValid(returns_location)) {
-        if (return_is_list) {
-            ObjectDefinitionResult res = ReadObjectDefinitionList(context.arena, ParserSub(parser, returns_location), reporter, tsys, RegisterKind_Return);
-            if (!res.success) 
-                return false;
-            returns = res.objects;
-        }
-        else {
-            Type* type = ReadObjectType(ParserSub(parser, returns_location), reporter, tsys);
-            
-            if (type != nil_type) {
-                returns = ArrayAlloc<ObjectDefinition>(context.arena, 1);
-                returns[0] = ObjDefMake("return", type->id, returns_location, false);
-            }
-        }
-        
-        if (returns.count == 0) 
-            return false;
-    }
-    
+
     def->parameters = ArrayCopyRecursive(front->arena, parameters, ObjectDefinitionCopy);
     def->returns = ArrayCopyRecursive(front->arena, returns, ObjectDefinitionCopy);
-    def->body_location = body_location;
     
     if (LOG_TYPE_ENABLED) {
         StringBuilder builder = string_builder_make(context.arena);
@@ -1008,6 +1101,65 @@ internal_fn B32 ResolveFunctionHeader(FrontContext* front, FunctionHeader* def)
         }
         
         append(&builder, ")");
+        
+        LogType(string_from_builder(context.arena, &builder));
+    }
+
+    return true;
+}
+
+internal_fn B32 ResolveGenericFunctionHeader(FrontContext* front, GenericFunctionHeader* def)
+{
+    PROFILE_FUNCTION;
+    
+    TypeSystem* tsys = front->tsys;
+    Reporter* reporter = front->reporter;
+    Parser* parser = ParserFromLocation(front, def->location);
+    Location starting_location = PeekToken(parser).location;
+    
+    AssumeToken(parser, TokenKind_Identifier);
+    AssumeToken(parser, TokenKind_Colon);
+    AssumeToken(parser, TokenKind_Colon);
+    AssumeToken(parser, TokenKind_FuncKeyword);
+
+    def->body_location = NO_CODE;
+
+    // Skip generics
+    if (PeekToken(parser).kind == TokenKind_OpenBracket) {
+        FetchScope(parser, TokenKind_OpenBracket, true);
+    }
+    
+    Array<ObjectDefinition> parameters = ReadFunctionParameters(context.arena, parser, front, def->generics);
+    if (reporter->exit_requested) return false;
+
+    Array<ObjectDefinition> returns = ReadFunctionReturns(context.arena, parser, front, def->generics);
+    if (reporter->exit_requested) return false;
+    
+    // Body
+    if (PeekToken(parser).kind != TokenKind_None)
+    {
+        def->body_location = FetchCode(parser);
+        
+        if (!LocationIsValid(def->body_location)) {
+            ReportErrorFront(PeekToken(parser).location, "Expecting the body of the function");
+            return false;
+        }
+    }
+    
+    def->parameters = ArrayCopyRecursive(front->arena, parameters, ObjectDefinitionCopy);
+    def->returns = ArrayCopyRecursive(front->arena, returns, ObjectDefinitionCopy);
+    
+    if (LOG_TYPE_ENABLED) {
+        StringBuilder builder = string_builder_make(context.arena);
+        appendf(&builder, "Generic Function Define: %S[", def->name);
+        
+        foreach(i, def->generics.count) {
+            appendf(&builder, "%S", def->generics[i]);
+            if (i + 1 < def->generics.count)
+                append(&builder, ",");
+        }
+        
+        append(&builder, "]");
         
         LogType(string_from_builder(context.arena, &builder));
     }
@@ -1092,7 +1244,8 @@ internal_fn B32 ResolveArg(FrontContext* front, ArgDefinition* def)
     
     if (LocationIsValid(type_location))
     {
-        type = ReadObjectType(ParserSub(parser, type_location), reporter, tsys);
+        IR_Context* dummy_ir = IrContextAlloc(front, {});
+        type = ReadObjectType(dummy_ir, ParserSub(parser, type_location));
         
         if (type == nil_type) return false;
         
@@ -1204,7 +1357,7 @@ internal_fn B32 ResolveGlobal(FrontContext* front, GlobalDefinition* def)
     Parser* parser = ParserFromLocation(front, def->location);
     Location starting_location = PeekToken(parser).location;
     
-    ObjectDefinitionResult res = ReadObjectDefinition(context.arena, ParserFromLocation(front, def->location), reporter, tsys, false, RegisterKind_Global);
+    ObjectDefinitionResult res = ReadObjectDefinition(context.arena, ParserFromLocation(front, def->location), front, false, {}, RegisterKind_Global);
     if (!res.success) return false;
 
     B32 success = true;
@@ -1226,24 +1379,16 @@ B32 ResolveDefinition(FrontContext* front, FrontDefinition* def)
 {
     if (def == NULL) return false;
 
-    if (def->type == DefinitionType_Enum) {
-        return ResolveEnum(front, &front->enums[def->index]);
-    }
-    
-    if (def->type == DefinitionType_Struct) {
-        return ResolveStruct(front, &front->structs[def->index]);
-    }
+    switch (def->type)
+    {
+        case DefinitionType_Enum: return ResolveEnum(front, &front->_enums[def->index]);
+        case DefinitionType_Struct: return ResolveStruct(front, &front->_structs[def->index]);
+        case DefinitionType_FunctionHeader: return ResolveFunctionHeader(front, &front->_function_headers[def->index]);
+        case DefinitionType_GenericFunctionHeader: return ResolveGenericFunctionHeader(front, &front->_generic_function_headers[def->index]);
+        case DefinitionType_Arg: return ResolveArg(front, &front->_args[def->index]);
+        case DefinitionType_Global: return ResolveGlobal(front, &front->_globals[def->index]);
 
-    if (def->type == DefinitionType_Function) {
-        return ResolveFunctionHeader(front, &front->function_headers[def->index]);
-    }
-    
-    if (def->type == DefinitionType_Arg) {
-        return ResolveArg(front, &front->args[def->index]);
-    }
-    
-    if (def->type == DefinitionType_Global) {
-        return ResolveGlobal(front, &front->globals[def->index]);
+        case DefinitionType_Unknown: break;
     }
 
     return false;
@@ -1253,13 +1398,15 @@ internal_fn FunctionBody* ReadFunctionBody(FrontContext* front, U32 function_hea
 {
     PROFILE_FUNCTION;
 
-    FunctionHeader* header = &front->function_headers[function_header_index];
+    FunctionHeader* header = FunctionHeaderFromIndex(front, function_header_index);
     Reporter* reporter = front->reporter;
     TypeSystem* tsys = front->tsys;
 
     if (!LocationIsValid(header->body_location)) return NULL;
+
+    LogFlow("Generating IR for function '%S'", header->name);
     
-    IR_Context* ir = IrContextAlloc(front);
+    IR_Context* ir = IrContextAlloc(front, header->resolve_generics);
     IR_Group out = IRFromNone();
     
     // Define parameters
@@ -1267,6 +1414,7 @@ internal_fn FunctionBody* ReadFunctionBody(FrontContext* front, U32 function_hea
     {
         ObjectDefinition obj = header->parameters[i];
         Type* type = TypeFromID(tsys, obj.type_id);
+        Assert(!TypeHasGenerics(front, type));
         out = IRAppend(out, IRFromDefineObject(ir, RegisterKind_Parameter, obj.name, type, false, obj.location));
     }
     
@@ -1275,6 +1423,7 @@ internal_fn FunctionBody* ReadFunctionBody(FrontContext* front, U32 function_hea
     {
         ObjectDefinition obj = header->returns[i];
         Type* type = TypeFromID(tsys, obj.type_id);
+        Assert(!TypeHasGenerics(front, type));
         out = IRAppend(out, IRFromDefineObject(ir, RegisterKind_Return, obj.name, type, false, obj.location));
         out = IRAppend(out, IRFromStore(ir, out.value, ValueFromZero(type), obj.location));
     }
@@ -1302,9 +1451,9 @@ internal_fn FunctionBody* ReadFunctionBody(FrontContext* front, U32 function_hea
 
 B32 GenerateIR(FrontContext* front, FrontDefinition* def)
 {
-     if (def->type == DefinitionType_Function)
+     if (def->type == DefinitionType_FunctionHeader)
      {
-        FunctionHeader* header = &front->function_headers[def->index];
+        FunctionHeader* header = FunctionHeaderFromIndex(front, def->index);
         if (LocationIsValid(header->body_location)) {
             FunctionBody* body = ReadFunctionBody(front, def->index);
             return body != NULL;
@@ -1321,7 +1470,8 @@ TypeChild TypeGetMember(FrontContext* front, Type* type, String member)
     TypeSystem* tsys = front->tsys;
 
     if (type->kind == VKind_Struct) {
-        StructDefinition* def = &front->structs[type->definition_index];
+        StructDefinition* def = StructFromIndex(front, type->definition_index);
+        Assert(def->names.count != 0 && def->types.count != 0);
         foreach(i, def->names.count) {
             if (def->names[i] == member) {
                 return TypeChildMake(TypeGet(def->types[i]), def->names[i], i, false);
@@ -1337,6 +1487,32 @@ TypeChild TypeGetChild(FrontContext* front, Type* type, String name)
     TypeChild info = TypeGetMember(front, type, name);
     if (info.index >= 0) return info;
     return TypeGetProperty(type, name);
+}
+
+B32 TypeHasGenerics(FrontContext* front, Type* type)
+{
+    if (type->kind == VKind_Generic) return true;
+
+    if (type->kind == VKind_Reference) {
+        return TypeHasGenerics(front, TypeGetBase(front->tsys, type));
+    }
+
+    if (type->kind == VKind_Array) {
+        return TypeHasGenerics(front, TypeGetNext(front->tsys, type));
+    }
+
+    if (type->kind == VKind_Struct)
+    {
+        StructDefinition* def = StructFromIndex(front, type->definition_index);
+        
+        foreach(i, def->types.count) {
+            Type* member = TypeFromID(front->tsys, def->types[i]);
+            if (TypeHasGenerics(front, member)) return true;
+        }
+        return false;
+    }
+
+    return false;
 }
 
 internal_fn U32 CountName(FrontContext* front, String name)
@@ -1356,7 +1532,7 @@ internal_fn U32 CountName(FrontContext* front, String name)
     return count;
 }
 
-FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String name, B32 is_global, Location location)
+FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String name, Array<String> generics, B32 is_global, Location location)
 {
     PROFILE_FUNCTION;
 
@@ -1374,7 +1550,7 @@ FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String 
         name = StrCopy(front->arena, name);
     }
     
-    MutexLockGuard(&front->mutex);
+    RWMutexLockGuard_Write(&front->definitions_mutex);
 
     // Check duplicated names
     if (name.size != 0)
@@ -1388,25 +1564,37 @@ FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String 
 
     U32 index = U32_MAX;
 
-    if (type == DefinitionType_Function) {
-        index = front->function_headers.count;
-        FunctionHeader* def = BArrayAdd(&front->function_headers);
+    if (type == DefinitionType_FunctionHeader) {
+        index = front->_function_headers.count;
+        FunctionHeader* def = BArrayAdd(&front->_function_headers);
         def->name = name;
         def->location = location;
         def->index = index;
+        def->generic_index = -1;
+    }
+    else if (type == DefinitionType_GenericFunctionHeader) {
+        index = front->_generic_function_headers.count;
+        GenericFunctionHeader* def = BArrayAdd(&front->_generic_function_headers);
+        def->name = name;
+        def->location = location;
+        def->index = index;
+        def->generics = StrArrayCopy(front->arena, generics);
     }
     else if (type == DefinitionType_Struct) {
-        index = front->structs.count;
-        StructDefinition* def = BArrayAdd(&front->structs);
+        index = front->_structs.count;
+        StructDefinition* def = BArrayAdd(&front->_structs);
         def->name = name;
         def->location = location;
         def->index = index;
+        def->generic_index = -1;
+        def->generic_names = StrArrayCopy(front->arena, generics);
+        def->has_generics = def->generic_names.count > 0;
 
         TypeAddStruct(front->tsys, name, index);
     }
     else if (type == DefinitionType_Enum) {
-        index = front->enums.count;
-        EnumDefinition* def = BArrayAdd(&front->enums);
+        index = front->_enums.count;
+        EnumDefinition* def = BArrayAdd(&front->_enums);
         def->name = name;
         def->location = location;
         def->index = index;
@@ -1414,13 +1602,13 @@ FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String 
         TypeAddEnum(front->tsys, name, index);
     }
     else if (type == DefinitionType_Arg) {
-        index = front->args.count;
-        ArgDefinition* def = BArrayAdd(&front->args);
+        index = front->_args.count;
+        ArgDefinition* def = BArrayAdd(&front->_args);
         def->location = location;
     }
     else if (type == DefinitionType_Global) {
-        index = front->globals.count;
-        GlobalDefinition* def = BArrayAdd(&front->globals);
+        index = front->_globals.count;
+        GlobalDefinition* def = BArrayAdd(&front->_globals);
         def->location = location;
     }
     
@@ -1440,7 +1628,7 @@ I32 AddGlobal(FrontContext* front, String name, U32 type_id, B32 is_constant, Lo
     PROFILE_FUNCTION;
     Reporter* reporter = front->reporter;
 
-    MutexLockGuard(&front->mutex);
+    RWMutexLockGuard_Write(&front->definitions_mutex);
 
     // Check duplicated names
     {
@@ -1465,14 +1653,335 @@ I32 AddGlobal(FrontContext* front, String name, U32 type_id, B32 is_constant, Lo
 
 FunctionBody* AddBody(FrontContext* front, U32 header_index, IR ir)
 {
-    MutexLockGuard(&front->mutex);
-    FunctionBody* body = BArrayAdd(&front->functions);
+    RWMutexLockGuard_Write(&front->definitions_mutex);
+    FunctionBody* body = BArrayAdd(&front->_functions);
     body->function_header_index = header_index;
     body->ir = ir;
     
     LogType("Function Body: %S", header->name);
 
     return body;
+}
+
+internal_fn Type* ResolveGenericType(FrontContext* front, Type* type, Array<ResolveGenericEntry> resolve_generics)
+{
+    TypeSystem* tsys = front->tsys;
+
+    if (!TypeHasGenerics(front, type)) return type;
+
+    if (type->kind == VKind_Reference) {
+        Type* subtype = ResolveGenericType(front, TypeGetNext(tsys, type), resolve_generics);
+        return TypeFromReference(tsys, subtype);
+    }
+
+    if (type->kind == VKind_Array) {
+        Type* subtype = ResolveGenericType(front, TypeGetNext(tsys, type), resolve_generics);
+        return TypeFromArray(tsys, subtype, 1);
+    }
+
+    if (type->kind == VKind_Struct)
+    {
+        StructDefinition* unresolved_def = StructFromIndex(front, type->definition_index);
+
+        if (unresolved_def->generic_index < 0) {
+            InvalidCodepath();
+            return nil_type;
+        }
+
+        StructDefinition* base_def = StructFromIndex(front, unresolved_def->generic_index);
+        
+        if (base_def->generic_names.count == 0 || unresolved_def->generic_types.count != base_def->generic_names.count) {
+            InvalidCodepath();
+            return nil_type;
+        }
+
+        Array<ResolveGenericEntry> forward_generics = ArrayAlloc<ResolveGenericEntry>(context.arena, base_def->generic_names.count);
+
+        foreach(i, forward_generics.count) {
+            forward_generics[i].name = base_def->generic_names[i];
+            forward_generics[i].type_id = ResolveGenericType(front, TypeGet(unresolved_def->generic_types[i]), resolve_generics)->id;
+        }
+
+        StructDefinition* new_def = ResolveStructWithGenerics(front, base_def, forward_generics);
+        if (new_def == NULL) return nil_type;
+
+        return TypeFromStruct(tsys, new_def->index);
+    }
+
+    if (type->kind == VKind_Generic) {
+        type = TypeGet(FindGenericType(type->name, resolve_generics).type_id);
+        return type;
+    }
+
+    InvalidCodepath();
+    return type;
+}
+
+internal_fn Array<ObjectDefinition> ResolveGenericObjects(Arena* arena, FrontContext* front, Array<ObjectDefinition> src, Array<ResolveGenericEntry> table)
+{
+    TypeSystem* tsys = front->tsys;
+    Array<ObjectDefinition> dst = ArrayCopyRecursive<ObjectDefinition>(arena, src, ObjectDefinitionCopy);
+
+    for (U32 i = 0; i < dst.count; i++)
+    {
+        Type* type = TypeGet(dst[i].type_id);
+        dst[i].type_id = ResolveGenericType(front, type, table)->id;
+    }
+
+    return dst;
+}
+
+FunctionHeader* ResolveFunctionHeaderWithGenerics(FrontContext* front, GenericFunctionHeader* unresolved, Array<ResolveGenericEntry> resolve_generics)
+{
+    if (LOG_FLOW_ENABLED) {
+        StringBuilder builder = string_builder_make(context.arena);
+        appendf(&builder, "Resolving Generic Header(%S): ", unresolved->name);
+        foreach(i, resolve_generics.count) {
+            append(&builder, resolve_generics[i].name);
+            if (i < resolve_generics.count - 1) append(&builder, ", ");
+        }
+        LogFlow("%S", string_from_builder(context.arena, &builder));
+    }
+
+    
+    RWMutexLockGuard_Write(&front->definitions_mutex);
+
+    // Check for already defined header
+    {
+        foreach_BArray(it, &front->_function_headers) {
+            FunctionHeader* fn = it.value;
+            if (fn->generic_index == unresolved->index)
+            {
+                if (fn->resolve_generics.count != resolve_generics.count) {
+                    InvalidCodepath();
+                    continue;
+                }
+
+                B32 match = true;
+                foreach(i, fn->resolve_generics.count) {
+                    match &= fn->resolve_generics[i].type_id == resolve_generics[i].type_id;
+                }
+
+                if (match) {
+                    return fn;
+                }
+            }
+        }
+    }
+
+    FrontDefinition* unresolved_def = FrontDefinitionFromIndex(front, DefinitionType_GenericFunctionHeader, unresolved->index);
+
+    U32 index = front->_function_headers.count;
+    FunctionHeader* fn = BArrayAdd(&front->_function_headers);
+
+    fn->parameters = ResolveGenericObjects(front->arena, front, unresolved->parameters, resolve_generics);
+    fn->returns = ResolveGenericObjects(front->arena, front, unresolved->returns, resolve_generics);
+    
+    fn->name = unresolved->name;
+    fn->location = unresolved->location;
+    fn->body_location = unresolved->body_location;
+    fn->index = index;
+    fn->generic_index = unresolved->index;
+    fn->resolve_generics = ArrayCopyRecursive(front->arena, resolve_generics, ResolveGenericEntryCopy);
+
+    
+    FrontDefinition* def = BArrayAdd(&front->definitions);
+    def->type = DefinitionType_FunctionHeader;
+    def->name = fn->name;
+    def->location = fn->location;
+    def->index = index;
+    def->is_global = unresolved_def->is_global;
+    
+    LogType("Resolve Generic Function %S", def->name);
+    return fn;
+}
+
+StructDefinition* ResolveStructWithGenerics(FrontContext* front, StructDefinition* unresolved, Array<ResolveGenericEntry> resolve_generics)
+{
+    TypeSystem* tsys = front->tsys;
+
+    Assert(unresolved->generic_index < 0);
+    Assert(resolve_generics.count == unresolved->generic_names.count);
+    Assert(unresolved->generic_types.count == 0);
+
+    String type_name = {};
+    {
+        StringBuilder builder = string_builder_make(context.arena);
+        append(&builder, unresolved->name);
+        append(&builder, "[");
+        foreach(i, resolve_generics.count) {
+            append(&builder, TypeFromID(front->tsys, resolve_generics[i].type_id)->name);
+            if (i < resolve_generics.count - 1)
+                append(&builder, ",");
+        }
+        append(&builder, "]");
+
+        type_name = string_from_builder(context.arena, &builder);
+    }
+
+    LogFlow("Resolving Generic Struct: %S", type_name);
+
+    RWMutexLockGuard_Write(&front->definitions_mutex);
+
+    // Check for already defined header
+    {
+        Type* type = TypeFromName(front->tsys, type_name);
+        if (type->kind == VKind_Struct) {
+            return StructFromIndex(front, type->definition_index);
+        }
+    }
+
+    FrontDefinition* unresolved_def = FrontDefinitionFromIndex(front, DefinitionType_Struct, unresolved->index);
+
+    U32 index = front->_structs.count;
+    StructDefinition* s = BArrayAdd(&front->_structs);
+    s->name = StrCopy(front->arena, type_name);
+    s->location = unresolved->location;
+    s->generic_names = unresolved->generic_names;
+    s->index = index;
+    s->names = unresolved->names;
+    s->generic_index = unresolved->index;
+    
+    s->types = ArrayAlloc<U32>(front->arena, unresolved->types.count);
+    foreach(i, s->types.count) {
+        Type* type = ResolveGenericType(front, TypeFromID(front->tsys, unresolved->types[i]), resolve_generics);
+        s->types[i] = type->id;
+    }
+    
+    s->has_generics = false;
+    s->generic_types = ArrayAlloc<U32>(front->arena, resolve_generics.count);
+    foreach(i, resolve_generics.count) {
+        Type* type = TypeGet(resolve_generics[i].type_id);
+        s->generic_types[i] = type->id;
+        s->has_generics |= TypeHasGenerics(front, type);
+    }
+    
+    TypeAddStruct(front->tsys, s->name, index);
+    
+    FrontDefinition* def = BArrayAdd(&front->definitions);
+    def->type = DefinitionType_Struct;
+    def->name = s->name;
+    def->location = s->location;
+    def->index = index;
+    def->is_global = unresolved_def->is_global;
+    
+    LogType("Resolved Generic Struct %S", def->name);
+    return s;
+}
+
+internal_fn B32 AddResolveGeneric(BArray<ResolveGenericEntry>* table, String name, Type* type)
+{
+    foreach_BArray(it, table) {
+        if (it.value->name == name) {
+            return it.value->type_id == type->id;
+        }
+    }
+
+    ResolveGenericEntry entry = {};
+    entry.name = name;
+    entry.type_id = type->id;
+
+    BArrayAdd(table, entry);
+    return true;
+}
+
+internal_fn B32 AddResolveGenerics(FrontContext* front, BArray<ResolveGenericEntry>* table, Type* generic_type, Type* type, U32 param_index, Location location)
+{
+    Reporter* reporter = front->reporter;
+    TypeSystem* tsys = front->tsys;
+
+    while (1)
+    {
+        if (generic_type->kind == VKind_Generic)
+        {
+            if (!AddResolveGeneric(table, generic_type->name, type)) {
+                ReportErrorFront(location, "Invalid argument resolve for generic '%S'", generic_type->name);
+                return false;
+            }
+
+            return true;
+        }
+
+        if (generic_type->kind == VKind_Struct && type->kind == VKind_Struct)
+        {
+            StructDefinition* generic_def = StructFromIndex(front, generic_type->definition_index);
+            StructDefinition* def = StructFromIndex(front, type->definition_index);
+
+            I32 base_struct_index = generic_def->generic_index;
+            if (base_struct_index < 0) base_struct_index = generic_def->index;
+
+            B32 valid_struct = !def->has_generics;
+            valid_struct &= base_struct_index == def->generic_index;
+
+            if (valid_struct)
+            {
+                Assert(generic_def->generic_names.count == def->generic_types.count);
+
+                foreach(i, def->generic_types.count)
+                {
+                    Type* generic_subtype = TypeFromGeneric(tsys, generic_def->generic_names[i]);
+                    if (i < generic_def->generic_types.count) {
+                        generic_subtype = TypeGet(generic_def->generic_types[i]);
+                    }
+
+                    Type* subtype = TypeGet(def->generic_types[i]);
+
+                    if (!AddResolveGenerics(front, table, generic_subtype, subtype, param_index, location)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        type = TypeGetNext(tsys, type);
+        generic_type = TypeGetNext(tsys, generic_type);
+
+        if (type == nil_type || generic_type == nil_type)
+        {
+            ReportErrorFront(location, "Can't resolve generic for parameter %u", param_index + 1);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+Array<ResolveGenericEntry> GuessResolveGenericsFromArguments(Arena* arena, IR_Context* ir, GenericFunctionHeader* fn, Array<Value> args, Location location)
+{
+    FrontContext* front = ir->front;
+    TypeSystem* tsys = front->tsys;
+    Reporter* reporter = front->reporter;
+
+    Assert(fn->parameters.count == args.count);
+
+    BArray<ResolveGenericEntry> table = BArrayMake<ResolveGenericEntry>(context.arena, 8);
+
+    for (U32 i = 0; i < fn->parameters.count; i++)
+    {
+        Type* generic_type = TypeGet(fn->parameters[i].type_id);
+        Type* type = TypeGet(args[i].type_id);
+
+        if (!TypeHasGenerics(ir->front, generic_type)) continue;
+
+        if (!AddResolveGenerics(front, &table, generic_type, type, i, location)) {
+            return {};
+        }
+    }
+
+    return ArrayFromBArray(arena, table);
+}
+
+FunctionHeader* ResolveFunctionHeaderGenericsFromArguments(IR_Context* ir, GenericFunctionHeader* unresolved_fn, Array<Value> args, Location location)
+{
+    FrontContext* front = ir->front;
+    Reporter* reporter = front->reporter;
+
+    Array<ResolveGenericEntry> forward_generics = GuessResolveGenericsFromArguments(context.arena, ir, unresolved_fn, args, location);
+    if (reporter->exit_requested) return NULL;
+
+    return ResolveFunctionHeaderWithGenerics(front, unresolved_fn, forward_generics);
 }
 
 FrontScript* FrontAddScript(FrontContext* front, String path)
@@ -1488,7 +1997,7 @@ FrontScript* FrontAddScript(FrontContext* front, String path)
         return NULL;
     }
     
-    MutexLockGuard(&front->mutex);
+    RWMutexLockGuard_Write(&front->definitions_mutex);
     
     // Check for duplicated
     foreach_BArray(it, &front->scripts) {
@@ -1519,7 +2028,7 @@ FrontScript* FrontAddCoreScript(FrontContext* front)
     PROFILE_FUNCTION;
     String text = YOV_CORE;
     
-    MutexLockGuard(&front->mutex);
+    RWMutexLockGuard_Write(&front->definitions_mutex);
     
     I32 script_id = front->scripts.count;
     
@@ -1586,6 +2095,16 @@ FrontDefinition* FrontDefinitionFromName(FrontContext* front, String name)
     return NULL;
 }
 
+FrontDefinition* FrontDefinitionFromIndex(FrontContext* front, DefinitionType type, U32 index)
+{
+    foreach_BArray(it, &front->definitions) {
+        if (it.value->type == type && it.value->index == index) {
+            return it.value;
+        }
+    }
+    return NULL;
+}
+
 I32 FrontGlobalIndexFromName(FrontContext* front, String name)
 {
     foreach_BArray(it, &front->global_objects) {
@@ -1601,12 +2120,52 @@ ObjectDefinition* FrontGlobalRegisterFromRegIndex(FrontContext* front, U32 regis
     return &front->global_objects[global_index];
 }
 
-FunctionHeader* FrontFunctionHeaderFromName(FrontContext* front, String name)
+GenericFunctionHeader* GenericFunctionHeaderFromIndex(FrontContext* front, U32 index)
 {
-    foreach_BArray(it, &front->function_headers) {
+    RWMutexLockGuard_Read(&front->definitions_mutex);
+    return &front->_generic_function_headers[index];
+}
+
+FunctionHeader* FunctionHeaderFromName(FrontContext* front, String name)
+{
+    RWMutexLockGuard_Read(&front->definitions_mutex);
+    foreach_BArray(it, &front->_function_headers) {
         if (it.value->name == name) return it.value;
     }
     return NULL;
+}
+
+FunctionHeader* FunctionHeaderFromIndex(FrontContext* front, U32 index)
+{
+    RWMutexLockGuard_Read(&front->definitions_mutex);
+    return &front->_function_headers[index];
+}
+
+StructDefinition* StructFromName(FrontContext* front, String name)
+{
+    RWMutexLockGuard_Read(&front->definitions_mutex);
+    foreach_BArray(it, &front->_structs) {
+        if (it.value->name == name) return it.value;
+    }
+    return NULL;
+}
+
+StructDefinition* StructFromIndex(FrontContext* front, U32 index)
+{
+    RWMutexLockGuard_Read(&front->definitions_mutex);
+    return &front->_structs[index];
+}
+
+EnumDefinition* EnumFromIndex(FrontContext* front, U32 index)
+{
+    RWMutexLockGuard_Read(&front->definitions_mutex);
+    return &front->_enums[index];
+}
+
+ArgDefinition* ArgFromIndex(FrontContext* front, U32 index)
+{
+    RWMutexLockGuard_Read(&front->definitions_mutex);
+    return &front->_args[index];
 }
 
 Parser* ParserFromLocation(FrontContext* front, Location location)
@@ -1653,7 +2212,7 @@ internal_fn String StrFromValue(Arena* arena, FrontContext* front, Value value, 
         if (type == void_type) return "null";
         if (type == type_type) return TypeGet(value.literal_type_id)->name;
         if (TypeIsEnum(type)) {
-            EnumDefinition* enum_def = &front->enums[type->definition_index];
+            EnumDefinition* enum_def = EnumFromIndex(front, type->definition_index);
             I32 index = (I32)value.literal_sint;
             if (index < 0 || index >= enum_def->names.count) return "?";
             return enum_def->names[index];
@@ -1763,7 +2322,7 @@ internal_fn TypeChild TypeGetChildAt(FrontContext* front, Type* type, U32 index,
     }
 
     if (type->kind == VKind_Struct) {
-        StructDefinition* def = &front->structs[type->definition_index];
+        StructDefinition* def = StructFromIndex(front, type->definition_index);
         if (index < def->types.count)
             return TypeChildMake(TypeGet(def->types[index]), def->names[index], index, false);
     }
@@ -1795,7 +2354,7 @@ internal_fn String StringFromUnitInfo(Arena* arena, FrontContext* front, Unit un
         
         case UnitKind_FunctionCall:
         {
-            FunctionHeader* header = &front->function_headers[unit.function_call.header_index];
+            FunctionHeader* header = FunctionHeaderFromIndex(front, unit.function_call.header_index);
 
             StringBuilder builder = string_builder_make(context.arena);
             

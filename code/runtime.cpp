@@ -68,10 +68,12 @@ internal_fn StructDefinition ReadStructDefinition(Arena* arena, Deserializer* s)
     U32 version = ReadVersionU32(s, 0, 0);
 
     StructDefinition dst = {};
-
     dst.name = ReadString(arena, s);
-    dst.names = ReadArrayArena<String>(arena, s, ReadString);
 
+    dst.generic_names = ReadArrayArena<String>(arena, s, ReadString);
+    dst.generic_types = ReadArray<U32>(arena, s, ReadU32);
+    dst.has_generics = ReadB8(s);
+    dst.names = ReadArrayArena<String>(arena, s, ReadString);
     dst.types = ReadArray<U32>(arena, s, ReadU32);
 
     Location location = ReadLocation(s);
@@ -111,6 +113,7 @@ internal_fn void CalculateStructMemoryLayout(Runtime* runtime, U32 index)
     TypeSystem* tsys = runtime->tsys;
 
     StructDefinition* def = &runtime->structs[index];
+    if (def->has_generics) return;
 
     U32 member_count = def->types.count;
 
@@ -734,10 +737,6 @@ U64 TypeGetSize(Runtime* runtime, Type* type)
         return sizeof(ObjectData_Array);
     }
 
-    if (type->kind == VKind_List) {
-        return sizeof(ObjectData_Array);
-    }
-
     InvalidCodepath();
     return 0;
 }
@@ -749,7 +748,7 @@ B32 TypeNeedsInternalRelease(Runtime* runtime, Type* type)
         return struct_def->needs_internal_release;
     }
     
-    return TypeIsArray(type) || TypeIsList(type) || type == string_type;
+    return TypeIsArray(type) || type == string_type;
 }
 
 TypeChild TypeGetMember(Runtime* runtime, Type* type, String member)
@@ -1033,7 +1032,7 @@ void RunIntrinsic(Runtime* runtime, I32 dst_index, IntrinsicFunction* intrinsic,
         params[i] = RefFromValue(runtime, RuntimeGetCurrentScope(runtime), parameters[i]);
     }
     
-    intrinsic(runtime, params, returns);
+    intrinsic(runtime, header, params, returns);
     
     foreach(i, returns.count) {
         Assert(is_valid(returns[i]));

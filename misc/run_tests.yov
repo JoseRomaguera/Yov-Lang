@@ -43,6 +43,7 @@ RunAllTests :: func
     RunTest("tests/expressions.yov", "", 0);
     RunTest("tests/references.yov", "", 0);
     RunTest("tests/any.yov", "", 0);
+    RunTest("tests/generics.yov", "", 0);
 }
 
 RunTest :: func (name: String, args: String, expected_code: Int)

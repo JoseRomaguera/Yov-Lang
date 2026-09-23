@@ -507,6 +507,7 @@ void LaneSyncPtr(LaneContext* lane, void** ptr, U32 index);
 RangeU32 LaneDistributeUniformWork(LaneContext* lane, U32 count);
 
 void LaneTaskStart(LaneContext* lane, U32 count);
+void LaneTaskSetTotal(LaneGroup* group, U32 count);
 void LaneTaskAdd(LaneGroup* group, U32 count);
 B32 LaneTaskFetch(LaneGroup* group, U32* index);
 
@@ -520,6 +521,21 @@ void MutexUnlock(Mutex* mutex);
 
 #define MutexLockGuard(mutex) MutexLock(mutex); defer(MutexUnlock(mutex))
 
+struct RWMutex
+{
+    volatile U32 writer_thread_id;
+    volatile U32 reader_count;
+    U32 write_recursion;
+};
+
+void RWMutexLock_Write(RWMutex* mutex);
+void RWMutexUnlock_Write(RWMutex* mutex);
+void RWMutexLock_Read(RWMutex* mutex);
+void RWMutexUnlock_Read(RWMutex* mutex);
+B32 RWMutexIsLocked(RWMutex* mutex);
+
+#define RWMutexLockGuard_Write(mutex) RWMutexLock_Write(mutex); defer(RWMutexUnlock_Write(mutex))
+#define RWMutexLockGuard_Read(mutex) RWMutexLock_Read(mutex); defer(RWMutexUnlock_Read(mutex))
 
 //- MATH
 
@@ -848,7 +864,7 @@ struct YovSettings {
 
 struct YovThreadContext {
     Arena* arena;
-    U32 thread_index;
+    U32 thread_id;
 };
 
 struct YovSystemInfo {
@@ -944,12 +960,12 @@ enum VKind {
     VKind_Nil,
     VKind_Void,
     VKind_Any,
+    VKind_Generic,
     VKind_Primitive,
     VKind_Struct,
     VKind_Enum,
     VKind_Reference,
     VKind_Array,
-    VKind_List,
 };
 
 struct Type;
@@ -1007,16 +1023,15 @@ Type* TypeAddEnum(TypeSystem* tsys, String name, U32 definition_index);
 #define TypeGet(_id) TypeFromID(tsys, _id)
 
 Type* TypeFromID(TypeSystem* tsys, U32 ID);
-Type* TypeFromName(TypeSystem* tsys, String name);
+Type* TypeFromName(TypeSystem* tsys, String name, B32 skip_generics = true);
 Type* TypeFromArray(TypeSystem* tsys, Type* element, U32 dimension);
-Type* TypeFromList(TypeSystem* tsys, Type* element, U32 dimension);
 Type* TypeFromReference(TypeSystem* tsys, Type* base_type);
+Type* TypeFromGeneric(TypeSystem* tsys, String name);
 Type* TypeFromPrimitive(PrimitiveType primitive);
 Type* TypeFromStruct(TypeSystem* tsys, U32 definition_index);
 Type* TypeFromEnum(TypeSystem* tsys, U32 definition_index);
 B32 TypeIsEnum(Type* type);
 B32 TypeIsArray(Type* type);
-B32 TypeIsList(Type* type);
 B32 TypeIsStruct(Type* type);
 B32 TypeIsReference(Type* type);
 B32 TypeIsAnyInt(Type* type);

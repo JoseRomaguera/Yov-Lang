@@ -64,27 +64,14 @@ Env          :: func(name: String) -> (value: String, result: Result);
 EnvPath      :: func(name: String) -> (value: String, result: Result);
 EnvPathArray :: func(name: String) -> (value: Array[String], result: Result);
 
-/*
-ArrayMakeEmpty :: func(count: UInt) -> Array[$T];
-ListMakeEmpty          :: func(count: UInt) -> List[$T];
-ListAppendBack         :: func(dst: Array[$T]&, src: Array[$T]);
-ListAppendFront        :: func(dst: Array[$T]&, src: Array[$T]);
-ListAppendElementBack  :: func(dst: Array[$T]&, src: $T);
-ListAppendElementFront :: func(dst: Array[$T]&, src: $T);
-ListRemove             :: func(dst: Array[$T]&, index: UInt);
-ListUnorderedRemove    :: func(dst: Array[$T]&, index: UInt);
-*/
 
-ArrayAppendBack         :: func(dst: Any, src: Any);
-// TODO: ArrayAppendFront        :: func(dst: Any, src: Any);
-ArrayAppendElementBack  :: func(dst: Any, src: Any);
-// TODO: ArrayAppendElementFront :: func(dst: Any, src: Any);
-ArrayRemove :: func(dst: Any, index: UInt);
-ArrayUnorderedRemove :: func(dst: Any, index: UInt);
-
-ArrayMakeEmpty :: func(base_type: Type, dimensions: Array[UInt]) -> Any;
-
-ListMakeEmpty :: func(base_type: Type, dimensions: Array[UInt]) -> Any;
+ArrayMake               :: func[T](count: UInt) -> Array[T];
+ArrayAppendBack         :: func[T](dst: Array[T]&, src: Array[T]);
+ArrayAppendFront        :: func[T](dst: Array[T]&, src: Array[T]);
+ArrayAppendElementBack  :: func[T](dst: Array[T]&, src: T);
+ArrayAppendElementFront :: func[T](dst: Array[T]&, src: T);
+ArrayRemove             :: func[T](dst: Array[T]&, index: UInt);
+ArrayUnorderedRemove    :: func[T](dst: Array[T]&, index: UInt);
 
 // Console
 

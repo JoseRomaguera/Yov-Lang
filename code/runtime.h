@@ -60,6 +60,9 @@ struct FunctionBody {
 
 struct StructDefinition {
     String name;
+    Array<String> generic_names;
+    Array<U32> generic_types;
+    B8 has_generics;
     Array<String> names;
     Array<U32> types;
     Array<U32> offsets;
@@ -119,7 +122,7 @@ struct Runtime {
     U64 started_time;
 };
 
-typedef void IntrinsicFunction(Runtime* runtime, Array<Reference> params, Array<Reference> returns);
+typedef void IntrinsicFunction(Runtime* runtime, FunctionHeader* header, Array<Reference> params, Array<Reference> returns);
 
 IntrinsicFunction* IntrinsicFromName(String identifier);
 

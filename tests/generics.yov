@@ -1,0 +1,148 @@
+script_description : String : "Unit tests for the generics system.";
+
+Vector :: struct[T] {
+    x: T;
+    y: T;
+}
+
+Pair :: struct[T, K] {
+    first: T;
+    second: K;
+}
+
+CustomStruct :: struct {
+    id: Int;
+}
+
+Add :: func[T](a: T, b: T) -> T {
+    return a + b;
+}
+
+CreatePair :: func[T, K](a: T, b: K) -> Pair[T, K] {
+    p: Pair[T, K];
+    p.first = a;
+    p.second = b;
+    return p;
+}
+
+WrapVector :: func[T](val: T) -> Vector[T] {
+    v: Vector[T];
+    v.x = val;
+    v.y = val;
+    return v;
+}
+
+ExtractFromComplex :: func[T, K](p: Pair[Vector[T], Vector[K]]) -> Pair[T, K] {
+    return CreatePair(p.first.x, p.second.y);
+}
+
+GetTypeName :: func[T]() -> String {
+    return T.name;
+}
+
+IsStringType :: func[T](val: T) -> Bool {
+    if val is String {
+        return true;
+    }
+    return false;
+}
+
+Main :: func
+{
+    PrintLn("Running Generic Tests...\n");
+
+    // Single parameter structs
+    v_int: Vector[Int];
+    v_int.x = 10;
+    v_int.y = 20;
+    Assert(v_int.x == 10);
+    Assert(v_int.y == 20);
+
+    v_str: Vector[String];
+    v_str.x = "Hello";
+    v_str.y = "World";
+    Assert(v_str.x == "Hello");
+    Assert(v_str.y == "World");
+
+    // Multiple parameter structs
+    p_mixed: Pair[Int, String];
+    p_mixed.first = 42;
+    p_mixed.second = "Answer";
+    Assert(p_mixed.first == 42);
+    Assert(p_mixed.second == "Answer");
+
+    p_custom: Pair[String, CustomStruct];
+    p_custom.first = "Entity";
+    p_custom.second = CustomStruct();
+    p_custom.second.id = 99;
+    Assert(p_custom.second.id == 99);
+
+    // Implicit instantiation
+    Assert(Add(15, 10) == 25);
+    Assert(Add(10.5, 2.0) == 12.5);
+    Assert(Add("A", "B") == "AB");
+
+    pair_auto := CreatePair(100, "Auto");
+    Assert(pair_auto.first == 100);
+    Assert(pair_auto.second == "Auto");
+    Assert(pair_auto is Pair[Int, String]);
+
+    // Explicit instantiation
+    Assert(Add[UInt](50, 50) == 100);
+    Assert(Add[Float](5.0, 5.0) == 10.0);
+
+    pair_explicit := CreatePair[Float, Int](3.14, 7);
+    Assert(pair_explicit.first == 3.14);
+    Assert(pair_explicit.second == 7);
+
+    // Type introspection
+    Assert(GetTypeName[Int]() == "Int");
+    Assert(GetTypeName[String]() == "String");
+    
+    Assert(Vector[Float].name == "Vector[Float]");
+    Assert(Pair[Int, String].name == "Pair[Int,String]");
+
+    // Operator 'is' context
+    Assert(IsStringType("String literal") == true);
+    Assert(IsStringType(1337) == false);
+    Assert(IsStringType(v_int) == false);
+
+    // Recursive / Nested generics (Data structures)
+    nested_vec: Vector[Vector[Int]];
+    nested_vec.x.x = 1;
+    nested_vec.x.y = 2;
+    nested_vec.y.x = 3;
+    nested_vec.y.y = 4;
+    Assert(nested_vec.x.x == 1);
+    Assert(nested_vec.y.y == 4);
+
+    complex_pair: Pair[Vector[Int], Vector[String]];
+    complex_pair.first.x = 10;
+    complex_pair.first.y = 20;
+    complex_pair.second.x = "Deep";
+    complex_pair.second.y = "Nesting";
+    Assert(complex_pair.first.x == 10);
+    Assert(complex_pair.second.y == "Nesting");
+
+    // Recursive / Nested generics (Function inference)
+    nested_call := WrapVector(WrapVector(5));
+    Assert(nested_call.x.x == 5);
+    Assert(nested_call.y.y == 5);
+
+    // Implicit call to a generic function using a complex generic struct as a parameter
+    complex_arg: Pair[Vector[Int], Vector[String]];
+    complex_arg.first.x = 777;
+    complex_arg.second.y = "Inferred";
+
+    // The compiler must unpack Pair[Vector[Int], Vector[String]] to infer T=Int and K=String
+    extracted_pair := ExtractFromComplex(complex_arg);
+    Assert(extracted_pair.first == 777);
+    Assert(extracted_pair.second == "Inferred");
+    Assert(extracted_pair is Pair[Int, String]);
+
+    // Recursive type introspection
+    Assert(Vector[Vector[Int]].name == "Vector[Vector[Int]]");
+    Assert(Pair[Vector[Int], Vector[String]].name == "Pair[Vector[Int],Vector[String]]");
+
+    PrintLn("All generic tests passed.");
+}

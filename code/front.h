@@ -130,7 +130,8 @@ struct FrontScript {
 
 enum DefinitionType {
     DefinitionType_Unknown,
-    DefinitionType_Function,
+    DefinitionType_FunctionHeader,
+    DefinitionType_GenericFunctionHeader,
     DefinitionType_Struct,
     DefinitionType_Enum,
     DefinitionType_Global,
@@ -139,14 +140,32 @@ enum DefinitionType {
 
 String StringFromDefinitionType(DefinitionType type);
 
-struct FunctionHeader {
+struct ResolveGenericEntry {
+    String name;
+    U32 type_id;
+};
+
+ResolveGenericEntry ResolveGenericEntryCopy(Arena* arena, ResolveGenericEntry src);
+ResolveGenericEntry FindGenericType(String name, Array<ResolveGenericEntry> table);
+
+struct FunctionHeaderBase {
     String name;
     Location location;
-    Location body_location;
     U32 index;
+
+    Location body_location;
 
     Array<ObjectDefinition> parameters;
     Array<ObjectDefinition> returns;
+};
+
+struct GenericFunctionHeader : FunctionHeaderBase {
+    Array<String> generics;
+};
+
+struct FunctionHeader : FunctionHeaderBase {
+    Array<ResolveGenericEntry> resolve_generics;
+    I32 generic_index;
 };
 
 struct FunctionBody {
@@ -172,8 +191,14 @@ struct StructDefinition {
     Location location;
     U32 index;
     
+    Array<String> generic_names;
+    Array<U32> generic_types;
+    B32 has_generics;
+
     Array<String> names;
     Array<U32> types;
+
+    I32 generic_index;
 };
 
 struct EnumDefinition {
@@ -280,6 +305,8 @@ struct IR_Context {
     BArray<IR_Definition> definitions;
     BArray<IR_LoopingScope> looping_scopes;
     I32 scope;
+
+    Array<ResolveGenericEntry> resolve_generics;
 };
 
 struct ExpresionContext {
@@ -305,13 +332,36 @@ struct ObjectDefinitionResult {
     B32 success;
 };
 
-ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, Reporter* reporter, TypeSystem* tsys, B32 require_single, RegisterKind register_kind);
-ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, Parser* parser, IR_Context* ir, B32 require_single, RegisterKind register_kind);
-ObjectDefinitionResult ReadObjectDefinitionList(Arena* arena, Parser* parser, Reporter* reporter, TypeSystem* tsys, RegisterKind register_kind);
-ObjectDefinitionResult ReadObjectDefinitionListWithIr(Arena* arena, Parser* parser, IR_Context* ir, RegisterKind register_kind);
+ObjectDefinitionResult ReadObjectDefinition(Arena* arena, Parser* parser, FrontContext* front, B32 require_single, Array<ResolveGenericEntry> resolve_generics, RegisterKind register_kind);
+ObjectDefinitionResult ReadObjectDefinitionWithIr(Arena* arena, IR_Context* ir, Parser* parser, B32 require_single, RegisterKind register_kind);
+ObjectDefinitionResult ReadObjectDefinitionList(Arena* arena, Parser* parser, FrontContext* front, Array<ResolveGenericEntry> resolve_generics, RegisterKind register_kind);
 
 IR_Group ReadExpressionList(Arena* arena, IR_Context* ir, Type* type, Array<Type*> expected_types, Parser* parser);
-Type* ReadObjectType(Parser* parser, Reporter* reporter, TypeSystem* tsys);
+
+Array<String> ReadGenerics(Arena* arena, Parser* parser, Reporter* reporter);
+Type* ReadObjectType(IR_Context* ir, Parser* parser);
+Array<Type*> ReadObjectTypeList(IR_Context* ir, Parser* parser);
+
+enum SymbolKind {
+    SymbolKind_None,
+    SymbolKind_Value,
+    SymbolKind_FunctionHeader,
+    SymbolKind_GenericFunctionHeader,
+    SymbolKind_Type,
+};
+
+struct Symbol {
+    SymbolKind kind;
+    String name;
+    
+    Value value;
+    FunctionHeader* function_header;
+    GenericFunctionHeader* generic_function_header;
+    Type* type;
+};
+
+Symbol SymbolFromName(IR_Context* ir, String name);
+Symbol ReadAndResolveSymbol(IR_Context* ir, Parser* parser);
 
 Value ValueFromIrObject(IR_Object* object);
 
@@ -333,8 +383,6 @@ IR_Group IRFromSymbol(IR_Context* ir, String identifier, Location location);
 IR_Group IRFromFunctionCall(IR_Context* ir, FunctionHeader* fn, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromFunctionCallName(IR_Context* ir, String name, Array<Value> parameters, ExpresionContext context, Location location);
 IR_Group IRFromDefaultInitializer(IR_Context* ir, Type* type, Location location);
-IR_Group IRFromEmptyArray(IR_Context* ir, Type* base_type, Array<Value> dimensions, Location location);
-IR_Group IRFromEmptyList(IR_Context* ir, Type* base_type, Array<Value> dimensions, Location location);
 IR_Group IRFromStore(IR_Context* ir, Value dst, Value src, Location location);
 IR_Group IRFromCopy(IR_Context* ir, Value dst, Value src, Location location);
 IR_Group IRFromAssignment(IR_Context* ir, B32 expects_lvalue, Value dst, Value src, OperatorKind op, Location location);
@@ -352,28 +400,12 @@ IR_Group IRFromFlowModifier(IR_Context* ir, B32 is_break, Location location);
 IR_Group IRFromReturn(IR_Context* ir, IR_Group expression, Location location);
 
 IR MakeIR(Arena* arena, Array<Register> local_registers, IR_Group group, FrontScript* script);
-IR_Context* IrContextAlloc(FrontContext* front);
+IR_Context* IrContextAlloc(FrontContext* front, Array<ResolveGenericEntry> resolve_generics);
 Array<Type*> ReturnsFromRegisters(Arena* arena, TypeSystem* tsys, Array<Register> registers);
 
 IR IrFromValue(Arena* arena, Value value);
 
 B32 IRValidateReturnPath(Array<Unit> units);
-
-enum SymbolKind {
-    SymbolKind_None,
-    SymbolKind_Object,
-    SymbolKind_FunctionHeader,
-    SymbolKind_Type,
-};
-
-struct Symbol {
-    SymbolKind kind;
-    String name;
-    
-    IR_Object* object;
-    FunctionHeader* function_header;
-    Type* type;
-};
 
 IR_Object* IRFindObject(IR_Context* ir, String name, B32 parent_scopes);
 IR_Object* ir_find_object_from_value(IR_Context* ir, Value value);
@@ -383,8 +415,6 @@ IR_Object* ir_assume_object(IR_Context* ir, IR_Object* object, Type* type);
 
 IR_Definition* IRAddDefinition(IR_Context* ir, FrontDefinition* definition, I32 scope);
 IR_Definition* IRFindDefinition(IR_Context* ir, String name, B32 parent_scopes);
-
-Symbol IRFindSymbol(IR_Context* ir, String name);
 
 IR_LoopingScope* ir_looping_scope_push(IR_Context* ir, Location location);
 void ir_looping_scope_pop(IR_Context* ir);
@@ -411,17 +441,18 @@ struct FrontContext {
 
     String main_script_path;
     
-    Mutex mutex;
+    RWMutex definitions_mutex;
     BArray<FrontScript> scripts;
     BArray<FrontDefinition> definitions;
     BArray<ObjectDefinition> global_objects;
     
-    BArray<FunctionBody> functions;
-    BArray<FunctionHeader> function_headers;
-    BArray<StructDefinition> structs;
-    BArray<EnumDefinition> enums;
-    BArray<GlobalDefinition> globals;
-    BArray<ArgDefinition> args;
+    BArray<FunctionBody> _functions;
+    BArray<FunctionHeader> _function_headers;
+    BArray<GenericFunctionHeader> _generic_function_headers;
+    BArray<StructDefinition> _structs;
+    BArray<EnumDefinition> _enums;
+    BArray<GlobalDefinition> _globals;
+    BArray<ArgDefinition> _args;
 };
 
 struct FrontWriteContext {
@@ -441,10 +472,16 @@ void WriteArgDefinition(Serializer* s, ArgDefinition src);
 
 TypeChild TypeGetMember(FrontContext* front, Type* type, String member);
 TypeChild TypeGetChild(FrontContext* front, Type* type, String name);
+B32 TypeHasGenerics(FrontContext* front, Type* type);
 
-FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String name, B32 is_global, Location location);
+FrontDefinition* AddDefinition(FrontContext* front, DefinitionType type, String name, Array<String> generics, B32 is_global, Location location);
 I32 AddGlobal(FrontContext* front, String name, U32 type_id, B32 is_constant, Location location);
 FunctionBody* AddBody(FrontContext* front, U32 header_index, IR ir);
+
+FunctionHeader* ResolveFunctionHeaderWithGenerics(FrontContext* front, GenericFunctionHeader* unresolved, Array<ResolveGenericEntry> resolve_generics);
+StructDefinition* ResolveStructWithGenerics(FrontContext* front, StructDefinition* unresolved, Array<ResolveGenericEntry> resolve_generics);
+Array<ResolveGenericEntry> GuessResolveGenericsFromArguments(Arena* arena, IR_Context* ir, GenericFunctionHeader* fn, Array<Value> args, Location location);
+FunctionHeader* ResolveFunctionHeaderGenericsFromArguments(IR_Context* ir, GenericFunctionHeader* unresolved_fn, Array<Value> args, Location location);
 
 FrontScript* FrontAddScript(FrontContext* front, String path);
 FrontScript* FrontAddCoreScript(FrontContext* front);
@@ -452,9 +489,16 @@ FrontScript* FrontGetScript(FrontContext* front, I32 script_id);
 U32 LineFromLocation(Location location, FrontScript* script);
 
 FrontDefinition* FrontDefinitionFromName(FrontContext* front, String name);
+FrontDefinition* FrontDefinitionFromIndex(FrontContext* front, DefinitionType type, U32 index);
 I32 FrontGlobalIndexFromName(FrontContext* front, String name);
 ObjectDefinition* FrontGlobalRegisterFromRegIndex(FrontContext* front, U32 register_index);
-FunctionHeader* FrontFunctionHeaderFromName(FrontContext* front, String name);
+GenericFunctionHeader* GenericFunctionHeaderFromIndex(FrontContext* front, U32 index);
+FunctionHeader* FunctionHeaderFromName(FrontContext* front, String name);
+FunctionHeader* FunctionHeaderFromIndex(FrontContext* front, U32 index);
+StructDefinition* StructFromName(FrontContext* front, String name);
+StructDefinition* StructFromIndex(FrontContext* front, U32 index);
+EnumDefinition* EnumFromIndex(FrontContext* front, U32 index);
+ArgDefinition* ArgFromIndex(FrontContext* front, U32 index);
 
 Parser* ParserFromLocation(FrontContext* front, Location location);
 
@@ -525,7 +569,7 @@ void PrintIr(FrontContext* front, String name, IR ir);
 #define report_member_invalid_symbol(_code, _v) ReportErrorFront(_code, "'%S' does not have members to access", _v);
 #define report_function_not_found(_code, _v) ReportErrorFront(_code, "Function '%S' not found", _v);
 #define report_function_expecting_parameters(_code, _v, _c) ReportErrorFront(_code, "Function '%S' is expecting %u parameters", _v, _c);
-#define report_function_wrong_parameter_type(_code, _f, _t, _c) ReportErrorFront(_code, "Function '%S' is expecting a '%S' as a parameter %u", _f, _t, _c);
+#define report_function_wrong_parameter_type(_code, _f, _t, _c, _t2) ReportErrorFront(_code, "Function '%S' is expecting a '%S' as a parameter %u, not a '%S'", _f, _t, _c, _t2);
 #define report_function_expects_ref_as_parameter(_code, _f, _c) ReportErrorFront(_code, "Function '%S' is expecting a reference as a parameter %u", _f, _c);
 #define report_function_expects_noref_as_parameter(_code, _f, _c) ReportErrorFront(_code, "Function '%S' is not expecting a reference as a parameter %u", _f, _c);
 #define report_function_wrong_return_type(_code, _t) ReportErrorFront(_code, "Expected a '%S' as a return", _t);
